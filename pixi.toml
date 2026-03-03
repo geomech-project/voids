@@ -1,6 +1,6 @@
 [workspace]
 name = "voids"
-version = "0.1.0"
+version = "0.1.1"
 description = "Scientific Python package for pore network modeling (PNM)"
 channels = ["conda-forge"]
 platforms = ["linux-64", "osx-arm64", "win-64"]
@@ -24,6 +24,7 @@ test-cov = "pytest --cov=voids --cov-report=term-missing"
 spec-check = "pytest -q tests/test_schema_network.py"
 examples-singlephase = "python -m voids.workflows.run_singlephase"
 precommit = "pre-commit run --all-files"
+crosscheck-roundtrip = "pytest -q tests/test_crosscheck_roundtrip.py"
 
 [feature.dev.dependencies]
 pytest = ">=8.0"
