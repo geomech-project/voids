@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="resources/logo/Voids%20logo.png" alt="voids logo" width="280">
+</p>
+
 # voids
 
 `voids` is a scientific Python package for pore network modeling (PNM) aimed at
