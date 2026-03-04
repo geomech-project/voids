@@ -7,6 +7,8 @@ from voids.core.sample import SampleGeometry
 
 
 def test_from_porespy_minimal():
+    """Test minimal import from a PoreSpy-style mapping."""
+
     d = {
         "pore.coords": np.array([[0, 0], [1, 0]], dtype=float),
         "throat.conns": np.array([[0, 1]], dtype=int),

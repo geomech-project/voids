@@ -8,15 +8,18 @@ import numpy as np
 
 
 def set_seed(seed: int) -> None:
-    """Set random seed for reproducibility.
-    
-    Sets seeds for both the standard library's random module and NumPy's
-    random number generator.
-    
+    """Set deterministic seeds for the standard library and NumPy RNGs.
+
     Parameters
     ----------
-    seed : int
-        Seed value for random number generators.
+    seed :
+        Integer seed applied to :mod:`random` and :mod:`numpy.random`.
+
+    Notes
+    -----
+    The helper is intentionally narrow and does not configure any external or
+    accelerator-backed random-number generators.
     """
+
     random.seed(seed)
     np.random.seed(seed)

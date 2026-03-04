@@ -1,5 +1,13 @@
-from .porespy import from_porespy
-from .hdf5 import save_hdf5, load_hdf5
-from .openpnm import to_openpnm_dict
+from voids.io.porespy import ensure_cartesian_boundary_labels, from_porespy, scale_porespy_geometry
+from voids.io.hdf5 import save_hdf5, load_hdf5
+from voids.io.openpnm import to_openpnm_dict, to_openpnm_network
 
-__all__ = ["from_porespy", "save_hdf5", "load_hdf5", "to_openpnm_dict"]
+__all__ = [
+    "ensure_cartesian_boundary_labels",
+    "from_porespy",
+    "scale_porespy_geometry",
+    "save_hdf5",
+    "load_hdf5",
+    "to_openpnm_dict",
+    "to_openpnm_network",
+]

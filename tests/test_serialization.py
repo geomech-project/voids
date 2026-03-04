@@ -6,6 +6,8 @@ from voids.io.hdf5 import load_hdf5, save_hdf5
 
 
 def test_hdf5_roundtrip(tmp_path, line_network):
+    """Test HDF5 save/load roundtrip for a small network."""
+
     p = tmp_path / "net.h5"
     save_hdf5(line_network, p)
     net2 = load_hdf5(p)

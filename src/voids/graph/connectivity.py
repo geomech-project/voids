@@ -4,10 +4,24 @@ import numpy as np
 from scipy import sparse
 from scipy.sparse.csgraph import connected_components as _cc
 
-from ..core.network import Network
+from voids.core.network import Network
 
 
 def adjacency_matrix(net: Network) -> sparse.csr_matrix:
+    """Build the undirected pore adjacency matrix.
+
+    Parameters
+    ----------
+    net :
+        Network whose pore connectivity is to be represented.
+
+    Returns
+    -------
+    scipy.sparse.csr_matrix
+        Sparse symmetric matrix ``A`` with ``A[i, j] = 1`` when pores ``i`` and
+        ``j`` are connected by at least one throat.
+    """
+
     i = net.throat_conns[:, 0]
     j = net.throat_conns[:, 1]
     data = np.ones(net.Nt, dtype=float)
@@ -16,12 +30,45 @@ def adjacency_matrix(net: Network) -> sparse.csr_matrix:
 
 
 def connected_components(net: Network) -> tuple[int, np.ndarray]:
+    """Compute connected components of the pore graph.
+
+    Parameters
+    ----------
+    net :
+        Network whose pore graph is analyzed.
+
+    Returns
+    -------
+    int
+        Number of connected components.
+    numpy.ndarray
+        Integer component labels with shape ``(Np,)``.
+    """
+
     A = adjacency_matrix(net)
     n, labels = _cc(A, directed=False, return_labels=True)
     return int(n), labels.astype(np.int64)
 
 
 def _axis_boundary_labels(axis: str) -> tuple[str, str]:
+    """Return canonical inlet and outlet label names for one axis.
+
+    Parameters
+    ----------
+    axis :
+        Axis identifier.
+
+    Returns
+    -------
+    tuple[str, str]
+        Pair ``(inlet_label, outlet_label)``.
+
+    Raises
+    ------
+    ValueError
+        If the axis is not one of ``"x"``, ``"y"``, or ``"z"``.
+    """
+
     amap = {
         "x": ("inlet_xmin", "outlet_xmax"),
         "y": ("inlet_ymin", "outlet_ymax"),
@@ -33,6 +80,29 @@ def _axis_boundary_labels(axis: str) -> tuple[str, str]:
 
 
 def spanning_component_ids(net: Network, axis: str, labels: np.ndarray | None = None) -> np.ndarray:
+    """Return component identifiers that span a given sample axis.
+
+    Parameters
+    ----------
+    net :
+        Network to analyze.
+    axis :
+        Axis whose inlet and outlet boundaries define the spanning criterion.
+    labels :
+        Optional precomputed connected-component labels.
+
+    Returns
+    -------
+    numpy.ndarray
+        Sorted array of component identifiers touching both the inlet and outlet
+        boundary sets for the requested axis.
+
+    Raises
+    ------
+    KeyError
+        If the required inlet or outlet labels are missing.
+    """
+
     if labels is None:
         _, labels = connected_components(net)
     inlet_name, outlet_name = _axis_boundary_labels(axis)
@@ -45,7 +115,27 @@ def spanning_component_ids(net: Network, axis: str, labels: np.ndarray | None = 
     return np.intersect1d(inlet_ids, outlet_ids)
 
 
-def spanning_component_mask(net: Network, axis: str, labels: np.ndarray | None = None) -> np.ndarray:
+def spanning_component_mask(
+    net: Network, axis: str, labels: np.ndarray | None = None
+) -> np.ndarray:
+    """Return a pore mask selecting axis-spanning connected components.
+
+    Parameters
+    ----------
+    net :
+        Network to analyze.
+    axis :
+        Axis whose boundary labels define the spanning criterion.
+    labels :
+        Optional precomputed connected-component labels.
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean array with shape ``(Np,)`` selecting pores that belong to any
+        spanning component.
+    """
+
     if labels is None:
         _, labels = connected_components(net)
     comp_ids = spanning_component_ids(net, axis=axis, labels=labels)

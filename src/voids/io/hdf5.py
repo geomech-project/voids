@@ -7,16 +7,45 @@ from typing import Any
 import h5py
 import numpy as np
 
-from ..core.network import Network
-from ..core.provenance import Provenance
-from ..core.sample import SampleGeometry
+from voids.core.network import Network
+from voids.core.provenance import Provenance
+from voids.core.sample import SampleGeometry
 
 
 def _write_json_attr(obj: h5py.Group, name: str, value: Any) -> None:
+    """Write a JSON-serializable value into an HDF5 attribute.
+
+    Parameters
+    ----------
+    obj :
+        HDF5 group or dataset receiving the attribute.
+    name :
+        Attribute name.
+    value :
+        JSON-serializable payload.
+    """
+
     obj.attrs[name] = json.dumps(value)
 
 
 def _read_json_attr(obj: h5py.Group, name: str, default: Any = None) -> Any:
+    """Read a JSON-serialized HDF5 attribute.
+
+    Parameters
+    ----------
+    obj :
+        HDF5 group or dataset containing the attribute.
+    name :
+        Attribute name.
+    default :
+        Value returned when the attribute is absent.
+
+    Returns
+    -------
+    Any
+        Decoded JSON payload or ``default`` when the attribute does not exist.
+    """
+
     if name not in obj.attrs:
         return default
     raw = obj.attrs[name]
@@ -26,6 +55,26 @@ def _read_json_attr(obj: h5py.Group, name: str, default: Any = None) -> Any:
 
 
 def save_hdf5(net: Network, path: str | Path) -> None:
+    """Serialize a network to the project HDF5 interchange format.
+
+    Parameters
+    ----------
+    net :
+        Network to store.
+    path :
+        Destination file path. Parent directories must already exist.
+
+    Notes
+    -----
+    The file layout is intentionally explicit:
+
+    - ``/meta`` stores schema and provenance metadata.
+    - ``/sample`` stores the sample geometry payload.
+    - ``/network/pore`` and ``/network/throat`` store arrays.
+    - ``/labels`` stores boolean pore and throat labels as ``uint8`` datasets.
+    - ``/`` attribute ``extra`` stores JSON-compatible auxiliary metadata.
+    """
+
     path = Path(path)
     with h5py.File(path, "w") as f:
         meta = f.create_group("meta")
@@ -57,6 +106,24 @@ def save_hdf5(net: Network, path: str | Path) -> None:
 
 
 def load_hdf5(path: str | Path) -> Network:
+    """Load a network from the project HDF5 interchange format.
+
+    Parameters
+    ----------
+    path :
+        Path to an HDF5 file produced by :func:`save_hdf5`.
+
+    Returns
+    -------
+    Network
+        Reconstructed network object.
+
+    Notes
+    -----
+    Boolean labels are stored on disk as ``uint8`` arrays for portability and are
+    converted back to ``bool`` arrays during import.
+    """
+
     path = Path(path)
     with h5py.File(path, "r") as f:
         schema_version = f["meta"]["schema_version"][()].decode("utf-8")
@@ -67,8 +134,16 @@ def load_hdf5(path: str | Path) -> Network:
         throat_conns = f["network"]["throat"]["conns"][()]
         pore = {k: ds[()] for k, ds in f["network"]["pore"].items() if k != "coords"}
         throat = {k: ds[()] for k, ds in f["network"]["throat"].items() if k != "conns"}
-        pore_labels = {k: ds[()].astype(bool) for k, ds in f["labels"]["pore"].items()} if "labels" in f else {}
-        throat_labels = {k: ds[()].astype(bool) for k, ds in f["labels"]["throat"].items()} if "labels" in f else {}
+        pore_labels = (
+            {k: ds[()].astype(bool) for k, ds in f["labels"]["pore"].items()}
+            if "labels" in f
+            else {}
+        )
+        throat_labels = (
+            {k: ds[()].astype(bool) for k, ds in f["labels"]["throat"].items()}
+            if "labels" in f
+            else {}
+        )
         extra = _read_json_attr(f, "extra", {})
 
     return Network(

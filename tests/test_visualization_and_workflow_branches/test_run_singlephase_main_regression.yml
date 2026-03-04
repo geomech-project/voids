@@ -1,0 +1,8 @@
+Kx: 0.5
+Q: 0.5
+mass_balance_error: 0.0
+p:
+- 1.0
+- 0.5
+- 0.0
+residual_norm: 0.0

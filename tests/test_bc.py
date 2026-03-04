@@ -9,6 +9,8 @@ from voids.physics.singlephase import PressureBC, _make_dirichlet_vector
 
 
 def test_apply_dirichlet_rowcol_simple():
+    """Test Dirichlet elimination on a two-node linear system."""
+
     A = sparse.csr_matrix(np.array([[2.0, -1.0], [-1.0, 2.0]]))
     b = np.array([0.0, 0.0])
     values = np.array([1.0, 0.0])
@@ -19,6 +21,8 @@ def test_apply_dirichlet_rowcol_simple():
 
 
 def test_bc_overlap_raises(line_network):
+    """Test that overlapping inlet and outlet labels are rejected."""
+
     line_network.pore_labels["same"] = np.array([True, False, True])
     with pytest.raises(ValueError, match="overlap"):
         _make_dirichlet_vector(line_network, PressureBC("same", "same", 1.0, 0.0))

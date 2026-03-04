@@ -4,11 +4,48 @@ import numpy as np
 from scipy import sparse
 
 
-def apply_dirichlet_rowcol(A: sparse.csr_matrix, b: np.ndarray, values: np.ndarray, mask: np.ndarray) -> tuple[sparse.csr_matrix, np.ndarray]:
-    """Apply Dirichlet BC by row/column modification and diagonal=1.
+def apply_dirichlet_rowcol(
+    A: sparse.csr_matrix, b: np.ndarray, values: np.ndarray, mask: np.ndarray
+) -> tuple[sparse.csr_matrix, np.ndarray]:
+    """Apply Dirichlet conditions by row and column elimination.
 
-    `values` is the full-length vector of target values; only entries where `mask` is True are applied.
+    Parameters
+    ----------
+    A :
+        System matrix with shape ``(N, N)``.
+    b :
+        Right-hand-side vector with shape ``(N,)``.
+    values :
+        Full-length vector of prescribed values. Only entries selected by
+        ``mask`` are enforced.
+    mask :
+        Boolean array selecting the Dirichlet degrees of freedom.
+
+    Returns
+    -------
+    scipy.sparse.csr_matrix
+        Modified system matrix in CSR format.
+    numpy.ndarray
+        Modified right-hand-side vector.
+
+    Raises
+    ------
+    ValueError
+        If ``values``, ``mask``, and ``b`` do not have the same shape.
+
+    Notes
+    -----
+    For each constrained degree of freedom ``k``, the routine enforces
+
+    ``A[k, :] = 0``
+    ``A[:, k] = 0``
+    ``A[k, k] = 1``
+    ``b[k] = values[k]``
+
+    after first subtracting the eliminated column contribution from the
+    unconstrained rows of ``b``.
     """
+
     A = A.tolil(copy=True)
     b2 = np.asarray(b, dtype=float).copy()
     values = np.asarray(values, dtype=float)
@@ -19,7 +56,6 @@ def apply_dirichlet_rowcol(A: sparse.csr_matrix, b: np.ndarray, values: np.ndarr
     if idx.size == 0:
         return A.tocsr(), b2
 
-    # Column elimination contribution on RHS before zeroing column
     A_csr = A.tocsr()
     b2 = b2 - A_csr[:, idx] @ values[idx]
 

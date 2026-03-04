@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "voids"
-version = "0.1.1"
+version = "0.1.3"
 description = "Scientific Python package for pore network modeling (PNM)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,15 +32,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-interop = [
-  "porespy>=2.4",
-  "openpnm>=3.4",
-  "scikit-image>=0.22",
-  "networkx>=3.2",
-]
 dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
+  "pytest-regressions>=2.8",
   "ruff>=0.6",
   "mypy>=1.10",
   "pre-commit>=3.7",
@@ -48,14 +43,14 @@ dev = [
   "jupyterlab>=4.0",
   "matplotlib>=3.8",
 ]
-torch = [
-  "torch>=2.3",
-  "torch-geometric>=2.5",
+viz = [
+  "pyvista>=0.43",
 ]
-jax = [
-  "jax>=0.4.30",
-  "jaxlib>=0.4.30",
-  "jaxopt>=0.8",
+test = [
+  "porespy>=2.4",
+  "openpnm>=3.6,<3.7",
+  "scikit-image>=0.22",
+  "networkx>=3.2",
 ]
 
 [project.urls]
@@ -71,7 +66,7 @@ packages = ["src/voids"]
 package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
-# look under src/ for any packages matching "mypackage*"
+# look under src/ for any packages matching "voids*"
 where  = ["src"]
 include = ["voids*"]
 

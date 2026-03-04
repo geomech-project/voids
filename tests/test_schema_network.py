@@ -9,10 +9,14 @@ from voids.core.validation import validate_network
 
 
 def test_validate_network_ok(line_network):
+    """Test that the canonical line network passes validation."""
+
     validate_network(line_network)
 
 
 def test_validate_network_bad_self_loop():
+    """Test rejection of a self-loop throat."""
+
     net = Network(
         throat_conns=np.array([[0, 0]]),
         pore_coords=np.array([[0, 0, 0.0]]),
@@ -23,6 +27,8 @@ def test_validate_network_bad_self_loop():
 
 
 def test_validate_network_bad_label_shape(line_network):
+    """Test rejection of incorrectly shaped pore-label arrays."""
+
     line_network.pore_labels["bad"] = np.array([True, False])
     with pytest.raises(ValueError, match="wrong shape"):
         validate_network(line_network)

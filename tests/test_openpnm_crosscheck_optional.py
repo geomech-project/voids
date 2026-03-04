@@ -8,6 +8,8 @@ from voids.physics.singlephase import FluidSinglePhase, PressureBC
 
 
 def test_openpnm_crosscheck_api_available_or_clean_import_error(line_network: Network) -> None:
+    """Test that the OpenPNM crosscheck either runs or fails with a clean import error."""
+
     try:
         crosscheck_singlephase_with_openpnm(
             line_network,
@@ -16,7 +18,7 @@ def test_openpnm_crosscheck_api_available_or_clean_import_error(line_network: Ne
             axis="x",
         )
     except ImportError:
-        # Expected in core/dev environments without optional interop deps.
+        # Expected outside the full test environment with optional OpenPNM deps.
         return
     except NotImplementedError:
         pytest.skip("OpenPNM cross-check adapter placeholder present; enable when adapter is wired")

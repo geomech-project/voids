@@ -6,6 +6,8 @@ from voids.physics.singlephase import FluidSinglePhase, PressureBC, solve
 
 
 def test_singlephase_line_network_solution(line_network):
+    """Test the analytic single-phase solution on the line network."""
+
     r = solve(
         line_network,
         fluid=FluidSinglePhase(viscosity=1.0),

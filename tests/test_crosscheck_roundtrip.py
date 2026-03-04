@@ -6,6 +6,8 @@ from voids.physics.singlephase import FluidSinglePhase, PressureBC
 
 
 def test_singlephase_roundtrip_openpnm_dict_crosscheck(line_network: Network) -> None:
+    """Test that the OpenPNM-style dict roundtrip preserves single-phase results."""
+
     s = crosscheck_singlephase_roundtrip_openpnm_dict(
         line_network,
         fluid=FluidSinglePhase(viscosity=1.0),

@@ -11,12 +11,16 @@ from voids.geom.hydraulic import (
 
 
 def test_available_models_contains_expected_names() -> None:
+    """Test the public list of available conductance model names."""
+
     models = available_conductance_models()
     assert "generic_poiseuille" in models
     assert "valvatne_blunt_baseline" in models
 
 
 def test_valvatne_baseline_uses_conduit_lengths_and_pore_geometry(line_network: Network) -> None:
+    """Test conduit-based Valvatne-style conductance assembly on circular-like geometry."""
+
     net = line_network.copy()
     # Remove precomputed conductance to force geometric path.
     net.throat.pop("hydraulic_conductance", None)
@@ -39,6 +43,8 @@ def test_valvatne_baseline_uses_conduit_lengths_and_pore_geometry(line_network: 
 
 
 def test_valvatne_baseline_falls_back_to_generic_when_shape_missing(line_network: Network) -> None:
+    """Test fallback to generic Poiseuille conductance when shape data are missing."""
+
     net = line_network.copy()
     net.throat.pop("hydraulic_conductance", None)
     net.throat["diameter_inscribed"] = np.array([1.0, 1.0])
