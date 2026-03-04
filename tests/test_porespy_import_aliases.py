@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from voids.core.sample import SampleGeometry
-from voids.io.porespy import from_porespy
+from voids.io.porespy import ensure_cartesian_boundary_labels, from_porespy, scale_porespy_geometry
 
 
 def test_from_porespy_maps_openpnm_aliases_and_derives_fields() -> None:
@@ -36,3 +36,22 @@ def test_from_porespy_maps_openpnm_aliases_and_derives_fields() -> None:
     assert np.allclose(net.pore["area"], [np.pi, np.pi])
     assert net.pore_labels["inlet_xmin"].sum() == 1
     assert net.pore_labels["outlet_xmax"].sum() == 1
+
+
+def test_scale_porespy_geometry_and_infer_boundaries() -> None:
+    d = {
+        "pore.coords": np.array([[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]], dtype=float),
+        "throat.conns": np.array([[0, 1]], dtype=int),
+        "pore.region_volume": np.array([10.0, 12.0]),
+        "throat.cross_sectional_area": np.array([3.0]),
+        "throat.total_length": np.array([2.0]),
+    }
+    scaled = scale_porespy_geometry(d, voxel_size=2.0)
+    labeled = ensure_cartesian_boundary_labels(scaled, axes=("x",))
+
+    assert np.allclose(scaled["pore.coords"], [[0.0, 0.0, 0.0], [8.0, 0.0, 0.0]])
+    assert np.allclose(scaled["pore.volume"], [80.0, 96.0])
+    assert np.allclose(scaled["throat.volume"], [48.0])
+    assert labeled["pore.inlet_xmin"].tolist() == [True, False]
+    assert labeled["pore.outlet_xmax"].tolist() == [False, True]
+    assert labeled["pore.boundary"].tolist() == [True, True]
