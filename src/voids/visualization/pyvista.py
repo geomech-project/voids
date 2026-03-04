@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -210,6 +211,13 @@ def plot_network_pyvista(
 
     This allows pore-defined pressure fields to color both pores and throats in a
     consistent network visualization.
+
+    When tube rendering is requested (via ``render_tubes``, ``tube_radius``, or
+    automatically detected variable throat sizes) but the PyVista tube filter is
+    unavailable or raises an exception, rendering falls back to line geometry with
+    ``render_lines_as_tubes=True`` so that a tube-like appearance is preserved.
+    Variable throat radii **cannot** be accurately represented in this fallback mode;
+    a :class:`UserWarning` is emitted to notify callers.
     """
 
     pv = _require_pyvista()
@@ -266,8 +274,18 @@ def plot_network_pyvista(
                 kwargs["radius"] = float(tube_radius)
             try:
                 line_mesh = poly.tube(**kwargs)
-            except Exception:
+            except Exception as exc:
                 line_mesh = poly
+                msg = (
+                    f"PyVista tube filter failed ({type(exc).__name__}: {exc}); "
+                    "falling back to line rendering with render_lines_as_tubes=True."
+                )
+                if use_variable_throat_sizes:
+                    msg += (
+                        " Variable throat radii cannot be represented accurately "
+                        "without the tube filter."
+                    )
+                warnings.warn(msg, stacklevel=2)
         line_kwargs: dict[str, Any] = {
             "scalars": line_scalars_name,
             "show_scalar_bar": (line_scalars_name is not None),
@@ -275,7 +293,8 @@ def plot_network_pyvista(
         }
         if line_mesh is poly:
             line_kwargs["line_width"] = line_width_value
-            line_kwargs["render_lines_as_tubes"] = not render_tubes_effective
+            # Use line-tube approximation when tubes were requested but unavailable.
+            line_kwargs["render_lines_as_tubes"] = render_tubes_effective
         pl.add_mesh(line_mesh, **line_kwargs)
 
     if show_points and net.Np > 0:

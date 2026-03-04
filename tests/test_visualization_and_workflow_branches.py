@@ -202,14 +202,15 @@ def test_plot_network_pyvista_falls_back_from_tubes_and_saves_screenshot(
     monkeypatch.setattr("voids.visualization.pyvista._require_pyvista", lambda: _FakePV)
 
     screenshot = tmp_path / "mesh.png"
-    plotter, poly = plot_network_pyvista(
-        line_network,
-        point_scalars=np.array([1.0, 0.5, 0.0]),
-        render_tubes=True,
-        tube_radius=0.2,
-        off_screen=True,
-        screenshot=str(screenshot),
-    )
+    with pytest.warns(UserWarning, match="tube filter failed.*RuntimeError"):
+        plotter, poly = plot_network_pyvista(
+            line_network,
+            point_scalars=np.array([1.0, 0.5, 0.0]),
+            render_tubes=True,
+            tube_radius=0.2,
+            off_screen=True,
+            screenshot=str(screenshot),
+        )
 
     assert isinstance(poly, _FakePolyData)
     assert plotter.off_screen is True
@@ -217,8 +218,28 @@ def test_plot_network_pyvista_falls_back_from_tubes_and_saves_screenshot(
     assert plotter.axes_added is True
     assert plotter.show_calls == [False]
     assert plotter.screenshots == [str(screenshot)]
-    assert plotter.meshes[0][1]["scalars"] == "pore.scalar"
+    line_mesh_kwargs = plotter.meshes[0][1]
+    assert line_mesh_kwargs["scalars"] == "pore.scalar"
+    # When tube filter fails, render_lines_as_tubes must be True (line-tube approximation).
+    assert line_mesh_kwargs["render_lines_as_tubes"] is True
     assert plotter.meshes[1][1]["render_points_as_spheres"] is True
+
+
+def test_plot_network_pyvista_falls_back_from_variable_throat_tubes(
+    monkeypatch, line_network
+) -> None:
+    """Test that fallback for variable throat sizes warns about accuracy loss."""
+
+    monkeypatch.setattr("voids.visualization.pyvista._require_pyvista", lambda: _FakePV)
+    line_network.throat["diameter_equivalent"] = np.array([0.5, 1.5])
+
+    # tube_should_raise=True by default; variable throat sizes trigger tube rendering.
+    with pytest.warns(UserWarning, match="RuntimeError.*Variable throat radii"):
+        plotter, _ = plot_network_pyvista(line_network)
+
+    line_mesh_kwargs = plotter.meshes[0][1]
+    # Fallback must use render_lines_as_tubes=True to approximate tube appearance.
+    assert line_mesh_kwargs["render_lines_as_tubes"] is True
 
 
 def test_plotly_auto_sizes_markers_and_throats_from_characteristic_diameters(line_network) -> None:
