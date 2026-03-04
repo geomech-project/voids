@@ -202,7 +202,7 @@ def test_plot_network_pyvista_falls_back_from_tubes_and_saves_screenshot(
     monkeypatch.setattr("voids.visualization.pyvista._require_pyvista", lambda: _FakePV)
 
     screenshot = tmp_path / "mesh.png"
-    with pytest.warns(UserWarning, match="tube filter failed"):
+    with pytest.warns(UserWarning, match="tube filter failed.*RuntimeError"):
         plotter, poly = plot_network_pyvista(
             line_network,
             point_scalars=np.array([1.0, 0.5, 0.0]),
@@ -234,7 +234,7 @@ def test_plot_network_pyvista_falls_back_from_variable_throat_tubes(
     line_network.throat["diameter_equivalent"] = np.array([0.5, 1.5])
 
     # tube_should_raise=True by default; variable throat sizes trigger tube rendering.
-    with pytest.warns(UserWarning, match="Variable throat radii"):
+    with pytest.warns(UserWarning, match="RuntimeError.*Variable throat radii"):
         plotter, _ = plot_network_pyvista(line_network)
 
     line_mesh_kwargs = plotter.meshes[0][1]

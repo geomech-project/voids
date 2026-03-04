@@ -274,11 +274,11 @@ def plot_network_pyvista(
                 kwargs["radius"] = float(tube_radius)
             try:
                 line_mesh = poly.tube(**kwargs)
-            except Exception:
+            except Exception as exc:
                 line_mesh = poly
                 msg = (
-                    "PyVista tube filter failed; falling back to line rendering with "
-                    "render_lines_as_tubes=True."
+                    f"PyVista tube filter failed ({type(exc).__name__}: {exc}); "
+                    "falling back to line rendering with render_lines_as_tubes=True."
                 )
                 if use_variable_throat_sizes:
                     msg += (
