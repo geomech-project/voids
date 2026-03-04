@@ -29,7 +29,14 @@ def _replace_toml_section_version(text: str, *, section: str, new_version: str) 
     in_section = False
 
     for idx, line in enumerate(lines):
-        stripped = line.strip()
+        if line.endswith("\r\n"):
+            body, line_ending = line[:-2], "\r\n"
+        elif line.endswith("\n") or line.endswith("\r"):
+            body, line_ending = line[:-1], line[-1]
+        else:
+            body, line_ending = line, ""
+
+        stripped = body.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
             in_section = stripped == f"[{section}]"
             continue
@@ -37,12 +44,12 @@ def _replace_toml_section_version(text: str, *, section: str, new_version: str) 
         if not in_section:
             continue
 
-        match = re.match(r'(\s*version\s*=\s*")([^"]+)(".*)$', line)
+        match = re.match(r'(\s*version\s*=\s*")([^"]+)(".*)$', body)
         if match is None:
             continue
 
         current_version = match.group(2)
-        lines[idx] = f"{match.group(1)}{new_version}{match.group(3)}"
+        lines[idx] = f"{match.group(1)}{new_version}{match.group(3)}{line_ending}"
         return "".join(lines), current_version
 
     raise RuntimeError(f"Could not find a version entry in TOML section [{section}]")
