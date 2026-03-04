@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 
 from voids.core.network import Network
+from voids.visualization._sizing import resolve_size_values
 
 
 def _require_pyvista():
@@ -144,12 +145,15 @@ def plot_network_pyvista(
     *,
     point_scalars: str | np.ndarray | None = None,
     cell_scalars: str | np.ndarray | None = None,
+    point_sizes: str | np.ndarray | bool | None = None,
+    throat_sizes: str | np.ndarray | bool | None = None,
     show_points: bool = True,
     show_lines: bool = True,
-    line_width: float = 3.0,
-    point_size: float = 9.0,
+    line_width: float | None = None,
+    point_size: float | None = None,
     render_tubes: bool = False,
     tube_radius: float | None = None,
+    size_scale: float = 1.0,
     off_screen: bool = False,
     screenshot: str | None = None,
     show_axes: bool = True,
@@ -164,16 +168,23 @@ def plot_network_pyvista(
         Network to render.
     point_scalars, cell_scalars :
         Pore/throat scalar field name or explicit array.
+    point_sizes, throat_sizes :
+        Pore/throat characteristic size field name, explicit size array, ``None`` for
+        automatic size-field detection, or ``False`` to disable size-driven rendering.
+        Automatically detected size fields follow the priority
+        ``diameter_equivalent -> diameter_inscribed -> radius_inscribed -> area``.
     show_points, show_lines :
         Toggle pore and throat rendering.
     line_width :
-        Width used for line rendering.
+        Width used for line rendering when throat sizes are not rendered with tubes.
     point_size :
-        Marker size used for pores.
+        Marker size used for pores when size-driven sphere rendering is disabled.
     render_tubes :
         If ``True``, convert throats from lines to tubes.
     tube_radius :
         Optional tube radius when ``render_tubes`` is enabled.
+    size_scale :
+        Multiplicative factor applied to point diameters and throat radii in world units.
     off_screen :
         If ``True``, create an off-screen plotter for headless rendering.
     screenshot :
@@ -217,35 +228,83 @@ def plot_network_pyvista(
     point_scalars_name = "pore.scalar" if "pore.scalar" in poly.point_data else None
     if line_scalars_name is None and point_scalars_name is not None:
         line_scalars_name = point_scalars_name
+    point_size_values, _ = resolve_size_values(
+        point_sizes, store=net.pore, expected_shape=(net.Np,), prefix="pore"
+    )
+    throat_size_values, _ = resolve_size_values(
+        throat_sizes, store=net.throat, expected_shape=(net.Nt,), prefix="throat"
+    )
+    use_variable_point_sizes = point_size_values is not None and (
+        point_sizes is not None or point_size is None
+    )
+    use_variable_throat_sizes = throat_size_values is not None and (
+        throat_sizes is not None or line_width is None
+    )
+    point_size_value = float(point_size if point_size is not None else 9.0)
+    line_width_value = float(3.0 if line_width is None else line_width)
+    if use_variable_point_sizes:
+        poly.point_data["pore.render_diameter"] = float(size_scale) * np.asarray(
+            point_size_values, dtype=float
+        )
+    if use_variable_throat_sizes:
+        poly.cell_data["throat.render_radius"] = (
+            0.5 * float(size_scale) * np.asarray(throat_size_values, dtype=float)
+        )
 
     if show_lines and net.Nt > 0:
         line_mesh = poly
-        if render_tubes:
-            kwargs = {}
-            if tube_radius is not None:
+        render_tubes_effective = (
+            render_tubes or use_variable_throat_sizes or tube_radius is not None
+        )
+        if render_tubes_effective:
+            kwargs: dict[str, Any] = {}
+            if use_variable_throat_sizes:
+                kwargs["scalars"] = "throat.render_radius"
+                kwargs["absolute"] = True
+                kwargs["preference"] = "cell"
+            elif tube_radius is not None:
                 kwargs["radius"] = float(tube_radius)
             try:
                 line_mesh = poly.tube(**kwargs)
             except Exception:
                 line_mesh = poly
-        pl.add_mesh(
-            line_mesh,
-            scalars=line_scalars_name,
-            line_width=line_width,
-            render_lines_as_tubes=not render_tubes,
-            show_scalar_bar=(line_scalars_name is not None),
+        line_kwargs: dict[str, Any] = {
+            "scalars": line_scalars_name,
+            "show_scalar_bar": (line_scalars_name is not None),
             **add_mesh_kwargs,
-        )
+        }
+        if line_mesh is poly:
+            line_kwargs["line_width"] = line_width_value
+            line_kwargs["render_lines_as_tubes"] = not render_tubes_effective
+        pl.add_mesh(line_mesh, **line_kwargs)
 
     if show_points and net.Np > 0:
-        pl.add_mesh(
-            poly,
-            style="points",
-            point_size=point_size,
-            render_points_as_spheres=True,
-            scalars=point_scalars_name,
-            show_scalar_bar=(point_scalars_name is not None and not show_lines),
-        )
+        if use_variable_point_sizes:
+            point_mesh = pv.PolyData(np.asarray(net.pore_coords, dtype=float))
+            point_mesh.point_data["pore.render_diameter"] = poly.point_data["pore.render_diameter"]
+            if point_scalars_name is not None:
+                point_mesh.point_data[point_scalars_name] = poly.point_data[point_scalars_name]
+            sphere = pv.Sphere(radius=0.5)
+            point_mesh = point_mesh.glyph(
+                scale="pore.render_diameter",
+                orient=False,
+                factor=1.0,
+                geom=sphere,
+            )
+            pl.add_mesh(
+                point_mesh,
+                scalars=point_scalars_name,
+                show_scalar_bar=(point_scalars_name is not None and not show_lines),
+            )
+        else:
+            pl.add_mesh(
+                poly,
+                style="points",
+                point_size=point_size_value,
+                render_points_as_spheres=True,
+                scalars=point_scalars_name,
+                show_scalar_bar=(point_scalars_name is not None and not show_lines),
+            )
 
     if show_axes:
         pl.add_axes()

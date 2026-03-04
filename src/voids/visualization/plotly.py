@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 from voids.core.network import Network
+from voids.visualization._sizing import resolve_size_values, scale_sizes_to_pixels
 
 
 def _require_plotly():
@@ -145,9 +146,12 @@ def plot_network_plotly(
     *,
     point_scalars: str | np.ndarray | None = None,
     cell_scalars: str | np.ndarray | None = None,
+    point_sizes: str | np.ndarray | bool | None = None,
+    throat_sizes: str | np.ndarray | bool | None = None,
     point_size: float | None = None,
-    line_width: float = 2.0,
+    line_width: float | None = None,
     line_opacity: float = 0.4,
+    size_scale: float = 1.0,
     max_throats: int | None = 1000,
     title: str | None = None,
     show_colorbar: bool = True,
@@ -163,12 +167,23 @@ def plot_network_plotly(
         Pore field name or explicit pore-valued array with shape ``(Np,)``.
     cell_scalars :
         Throat field name or explicit throat-valued array with shape ``(Nt,)``.
+    point_sizes, throat_sizes :
+        Pore/throat characteristic size field name, explicit size array, ``None`` for
+        automatic size-field detection, or ``False`` to disable size-driven rendering.
+        Automatically detected size fields follow the priority
+        ``diameter_equivalent -> diameter_inscribed -> radius_inscribed -> area``.
     point_size :
-        Marker size for pores. If omitted, a size is chosen heuristically.
+        Constant marker size for pores when explicit size rendering is disabled. When
+        size-driven rendering is active, this acts as the reference marker size for
+        median-sized pores.
     line_width :
-        Plotly line width used for throats.
+        Constant line width for throats when explicit size rendering is disabled. When
+        size-driven rendering is active, this acts as the reference width for
+        median-sized throats.
     line_opacity :
         Opacity applied to throat lines.
+    size_scale :
+        Multiplicative factor applied to size-driven pore markers and throat widths.
     max_throats :
         Maximum number of throats to draw. Large networks are downsampled for responsiveness.
     title :
@@ -201,36 +216,82 @@ def plot_network_plotly(
     cell_values, cell_label = _resolve_scalars(
         cell_scalars, store=net.throat, expected_shape=(net.Nt,), prefix="throat"
     )
+    point_size_values, point_size_label = resolve_size_values(
+        point_sizes, store=net.pore, expected_shape=(net.Np,), prefix="pore"
+    )
+    throat_size_values, throat_size_label = resolve_size_values(
+        throat_sizes, store=net.throat, expected_shape=(net.Nt,), prefix="throat"
+    )
 
     coords = np.asarray(net.pore_coords, dtype=float)
     x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
     sampled = _sample_indices(net.Nt, max_throats)
     point_vmin, point_vmax = _scalar_bounds(point_values)
     cell_vmin, cell_vmax = _scalar_bounds(cell_values)
+    point_size_ref = float(
+        point_size if point_size is not None else (6.0 if net.Np <= 2000 else 4.0)
+    )
+    line_width_ref = float(2.0 if line_width is None else line_width)
+    use_variable_point_sizes = point_size_values is not None and (
+        point_sizes is not None or point_size is None
+    )
+    use_variable_throat_sizes = throat_size_values is not None and (
+        throat_sizes is not None or line_width is None
+    )
+
+    if use_variable_point_sizes:
+        marker_size: float | np.ndarray = scale_sizes_to_pixels(
+            point_size_values,
+            reference=point_size_ref,
+            scale=size_scale,
+            min_size=max(2.0, 0.5 * point_size_ref),
+            max_size=max(18.0, 4.0 * point_size_ref),
+        )
+    else:
+        marker_size = point_size_ref
+
+    if use_variable_throat_sizes:
+        sampled_line_widths = scale_sizes_to_pixels(
+            throat_size_values[sampled],
+            reference=line_width_ref,
+            scale=size_scale,
+            min_size=0.75,
+            max_size=max(10.0, 4.0 * line_width_ref),
+        )
+    else:
+        sampled_line_widths = np.full(sampled.shape, line_width_ref, dtype=float)
 
     if point_values is not None:
         marker: dict[str, Any] = {
-            "size": point_size if point_size is not None else (6.0 if net.Np <= 2000 else 4.0),
+            "size": marker_size,
             "color": point_values,
             "colorscale": "Viridis",
             "showscale": show_colorbar,
         }
+        if use_variable_point_sizes:
+            marker["sizemode"] = "diameter"
         if point_vmin is not None and point_vmax is not None:
             marker["cmin"] = point_vmin
             marker["cmax"] = point_vmax
         if show_colorbar:
             marker["colorbar"] = {"title": point_label or "pore scalar"}
-        pore_text = [
-            f"Pore {idx}<br>{point_label or 'value'}={point_values[idx]:.3e}"
-            for idx in range(net.Np)
-        ]
     else:
         marker = {
-            "size": point_size if point_size is not None else (6.0 if net.Np <= 2000 else 4.0),
+            "size": marker_size,
             "color": "royalblue",
             "showscale": False,
         }
-        pore_text = [f"Pore {idx}" for idx in range(net.Np)]
+        if use_variable_point_sizes:
+            marker["sizemode"] = "diameter"
+
+    pore_text = []
+    for idx in range(net.Np):
+        hover_lines = [f"Pore {idx}"]
+        if point_values is not None:
+            hover_lines.append(f"{point_label or 'value'}={point_values[idx]:.3e}")
+        if use_variable_point_sizes and point_size_label is not None:
+            hover_lines.append(f"{point_size_label}={point_size_values[idx]:.3e}")
+        pore_text.append("<br>".join(hover_lines))
 
     traces: list[Any] = [
         go.Scatter3d(
@@ -261,28 +322,28 @@ def plot_network_plotly(
 
     for local_idx, throat_idx in enumerate(sampled):
         i, j = net.throat_conns[throat_idx]
+        hover_lines = [f"Throat {int(throat_idx)}"]
         if throat_values is None:
             color = _rgb_with_opacity("rgb(100,100,100)", line_opacity)
-            hover = f"Throat {int(throat_idx)}"
         else:
             if color_vmin is not None and color_vmax is not None and color_vmax > color_vmin:
                 norm = float((throat_values[local_idx] - color_vmin) / (color_vmax - color_vmin))
             else:
                 norm = 0.5
             color = _rgb_with_opacity(sample_colorscale("Viridis", [norm])[0], line_opacity)
-            hover = (
-                f"Throat {int(throat_idx)}<br>{throat_label}={float(throat_values[local_idx]):.3e}"
-            )
+            hover_lines.append(f"{throat_label}={float(throat_values[local_idx]):.3e}")
+        if use_variable_throat_sizes and throat_size_label is not None:
+            hover_lines.append(f"{throat_size_label}={float(throat_size_values[throat_idx]):.3e}")
         traces.append(
             go.Scatter3d(
                 x=[x[i], x[j]],
                 y=[y[i], y[j]],
                 z=[z[i], z[j]],
                 mode="lines",
-                line={"color": color, "width": line_width},
+                line={"color": color, "width": float(sampled_line_widths[local_idx])},
                 name="Throats",
                 showlegend=False,
-                text=hover,
+                text="<br>".join(hover_lines),
                 hoverinfo="text",
             )
         )
