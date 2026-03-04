@@ -20,6 +20,8 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -92,7 +94,7 @@ jobs:
           diff_path = pathlib.Path("diff-cover.txt")
           if diff_path.exists():
               diff_text = diff_path.read_text(encoding="utf-8")
-          match = re.search(r"Diff Coverage:\s+([0-9.]+)%", diff_text)
+          match = re.search(r"(?m)^(?:Diff )?Coverage:\s+([0-9.]+)%$", diff_text)
           diff = match.group(1) if match else "n/a"
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
@@ -164,12 +166,12 @@ jobs:
             }
 
       - name: Upload coverage to Codecov
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
           fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ env.CODECOV_TOKEN }}
           verbose: true
 
       - name: Enforce diff coverage threshold
