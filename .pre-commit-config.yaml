@@ -45,10 +45,12 @@ repos:
       args: [--fix]
       files: ^notebooks/.*\.ipynb$
 
-- repo: https://github.com/mwouts/jupytext
-  rev: v1.17.2
+- repo: local
   hooks:
-    - id: jupytext
-      # Only runs on notebooks/* ipynb files
+    - id: jupytext-sync
+      name: jupytext-sync
+      entry: jupytext --sync
+      language: python
+      additional_dependencies:
+        - jupytext==1.17.2
       files: '^notebooks/.*\.(ipynb|py)$'
-      args: ['--sync']

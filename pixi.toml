@@ -58,6 +58,7 @@ ipython = ">=8.0"
 jupyterlab = ">=4.0"
 matplotlib = ">=3.8"
 plotly = ">=5.0"
+jupytext = ">=1.19.1,<2"
 
 [feature.dev.pypi-dependencies]
 porespy = ">=2.4"
