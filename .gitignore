@@ -216,3 +216,4 @@ refs/
 .vscode/
 notebooks/**/*.png
 tmp/
+outputs/
