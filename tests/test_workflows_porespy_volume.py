@@ -165,6 +165,20 @@ def test_preprocess_grayscale_cylindrical_volume_segments_dark_voids() -> None:
     assert not bright_binary[:, 1:3, 2:4].any()
 
 
+def test_progress_iter_tqdm_wrapping() -> None:
+    """Test that _progress_iter wraps with tqdm when show_progress is True."""
+
+    items = list(range(5))
+
+    # show_progress=False: original iterable returned unchanged
+    result = pv._progress_iter(items, show_progress=False)
+    assert result is items
+
+    # show_progress=True and tqdm available: iteration must yield correct values
+    wrapped = pv._progress_iter(items, show_progress=True, desc="test", total=5)
+    assert list(wrapped) == items
+
+
 def test_crop_and_preprocess_progress_hooks(monkeypatch) -> None:
     """Test progress-hook wiring for slice-wise cylindrical preprocessing."""
 
