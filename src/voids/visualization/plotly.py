@@ -244,11 +244,15 @@ def plot_network_plotly(
     line_width_ref = float(2.0 if line_width is None else line_width)
     use_variable_point_sizes = point_size_values is not None
     use_variable_throat_sizes = throat_size_values is not None
+    point_min_size: float | None
+    point_max_size: float | None
     if point_size_limits is None:
         point_min_size = max(2.0, 0.5 * point_size_ref)
         point_max_size = max(18.0, 4.0 * point_size_ref)
     else:
         point_min_size, point_max_size = point_size_limits
+    throat_min_size: float | None
+    throat_max_size: float | None
     if throat_size_limits is None:
         throat_min_size = 0.75
         throat_max_size = max(10.0, 4.0 * line_width_ref)
