@@ -232,12 +232,8 @@ def plot_network_plotly(
         point_size if point_size is not None else (6.0 if net.Np <= 2000 else 4.0)
     )
     line_width_ref = float(2.0 if line_width is None else line_width)
-    use_variable_point_sizes = point_size_values is not None and (
-        point_sizes is not None or point_size is None
-    )
-    use_variable_throat_sizes = throat_size_values is not None and (
-        throat_sizes is not None or line_width is None
-    )
+    use_variable_point_sizes = point_size_values is not None
+    use_variable_throat_sizes = throat_size_values is not None
 
     if use_variable_point_sizes:
         marker_size: float | np.ndarray = scale_sizes_to_pixels(

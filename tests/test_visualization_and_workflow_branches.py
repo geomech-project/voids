@@ -258,17 +258,37 @@ def test_plotly_auto_sizes_markers_and_throats_from_characteristic_diameters(lin
     assert "throat.diameter_equivalent=5.000e-01" in fig.data[1].text
 
 
-def test_plotly_explicit_constant_sizes_override_auto_size_fields(line_network) -> None:
-    """Test constant Plotly point and throat widths even when size fields exist."""
+def test_plotly_false_sizes_disable_auto_size_fields(line_network) -> None:
+    """Test that point_sizes=False/throat_sizes=False disables size-driven rendering."""
 
     line_network.pore["diameter_equivalent"] = np.array([1.0, 2.0, 4.0])
     line_network.throat["diameter_equivalent"] = np.array([0.5, 1.5])
 
-    fig = plot_network_plotly(line_network, point_size=10.0, line_width=4.0)
+    fig = plot_network_plotly(
+        line_network,
+        point_sizes=False,
+        throat_sizes=False,
+        point_size=10.0,
+        line_width=4.0,
+    )
 
     assert fig.data[0].marker.size == pytest.approx(10.0)
     assert fig.data[1].line.width == pytest.approx(4.0)
     assert fig.data[2].line.width == pytest.approx(4.0)
+
+
+def test_plotly_point_size_acts_as_reference_with_auto_size_fields(line_network) -> None:
+    """Test that point_size/line_width act as reference when auto size fields are present."""
+
+    line_network.pore["diameter_equivalent"] = np.array([1.0, 2.0, 4.0])
+    line_network.throat["diameter_equivalent"] = np.array([0.5, 1.5])
+
+    fig = plot_network_plotly(line_network, point_size=6.0, line_width=2.0)
+
+    # size-driven rendering should still be active; marker sizes must be an array
+    marker_sizes = np.asarray(fig.data[0].marker.size, dtype=float)
+    assert marker_sizes.ndim == 1
+    assert not np.all(marker_sizes == marker_sizes[0])
 
 
 def test_size_resolution_helpers_cover_auto_named_and_explicit_modes(monkeypatch) -> None:

@@ -242,12 +242,8 @@ def plot_network_pyvista(
     throat_size_values, _ = resolve_size_values(
         throat_sizes, store=net.throat, expected_shape=(net.Nt,), prefix="throat"
     )
-    use_variable_point_sizes = point_size_values is not None and (
-        point_sizes is not None or point_size is None
-    )
-    use_variable_throat_sizes = throat_size_values is not None and (
-        throat_sizes is not None or line_width is None
-    )
+    use_variable_point_sizes = point_size_values is not None
+    use_variable_throat_sizes = throat_size_values is not None
     point_size_value = float(point_size if point_size is not None else 9.0)
     line_width_value = float(3.0 if line_width is None else line_width)
     if use_variable_point_sizes:
