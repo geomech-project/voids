@@ -12,6 +12,7 @@ scipy = ">=1.11"
 h5py = ">=3.10"
 typing_extensions = ">=4.10"
 ipykernel = ">=7.2.0,<8"
+pandas = ">=3.0.1,<4"
 
 [pypi-dependencies]
 voids = { path = ".", editable = true }
