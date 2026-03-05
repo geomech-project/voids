@@ -141,6 +141,8 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
   - controlled baseline vs spherical/ellipsoidal vug study with porosity, `Kabs`, and network statistics
 - `09_mwe_lattice_based_vug_sensitivity`
   - lattice-based stochastic baselines with spherical/ellipsoidal vug insertion, `Kabs`/porosity sensitivity, and `K/K0` distributions
+- `10_mwe_lattice_based_vug_sensitivity_2d`
+  - simplified 2D lattice counterpart with circular/elliptical vugs, multi-baseline sensitivity, and `K/K0` frequency distributions
 
 Example data under `examples/data/` includes a deterministic manufactured void image and
 generated artifacts from the extraction/mesh notebooks.
