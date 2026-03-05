@@ -47,8 +47,6 @@ from voids.workflows import (
 
 examples_data = data_path()
 
-
-
 # %%
 raw_path = examples_data / "syn_vugs" / "synthetic_vugs.tif"
 raw = imread(raw_path).astype(float)
@@ -87,8 +85,6 @@ print(f"Void phase assumption = {pre.void_phase}")
 print(f"Void fraction after binarization = {float(im.mean()):.4f}")
 print("Axis lengths:", axis_lengths)
 print("Longest axis for flow analysis:", flow_axis)
-
-
 
 # %% [markdown]
 # ## Raw, cropped, and binarized views
@@ -147,8 +143,6 @@ axes[1, 1].grid(alpha=0.3, linestyle=":")
 plt.tight_layout()
 plt.show()
 
-
-
 # %%
 extract = extract_spanning_porespy_network(
     im,
@@ -165,8 +159,6 @@ extract = extract_spanning_porespy_network(
 
 print("PoreSpy version:", extract.porespy_version)
 print("Extracted keys sample:", list(extract.network_dict.keys())[:10])
-
-
 
 # %%
 net_dict = extract.network_dict
@@ -189,8 +181,6 @@ print(
 )
 net
 
-
-
 # %%
 print("phi_image(void fraction) =", float(im.mean()))
 print("phi_abs(pruned region volumes / bulk) =", absolute_porosity(net))
@@ -198,8 +188,6 @@ print(
     f"phi_eff_{flow_axis}(pruned region volumes / bulk) =",
     effective_porosity(net, axis=flow_axis),
 )
-
-
 
 # %%
 # Single-phase solve on the pruned spanning network.
@@ -220,8 +208,6 @@ res = solve(
 print("Q =", res.total_flow_rate)
 print(f"K{flow_axis} (length unit = voxel) =", res.permeability[flow_axis])
 print("mbe =", res.mass_balance_error)
-
-
 
 # %%
 out_dir = examples_data / "syn_vugs"
@@ -244,8 +230,6 @@ print("Saved:", out_h5_full)
 print("Saved:", out_h5)
 print("Saved:", out_npz)
 print("Saved:", out_seg)
-
-
 
 # %% [markdown]
 # ## Network Statistics
@@ -318,8 +302,6 @@ print(f"Mean throat size: {throat_size_vox.mean():.2f} voxel")
 print(f"Median throat size: {np.median(throat_size_vox):.2f} voxel")
 print(f"Mean coordination number: {coordination.mean():.2f}")
 print(f"Max coordination number: {coordination.max()}")
-
-
 
 # %% [markdown]
 # ## Pruning Comparison
@@ -518,8 +500,6 @@ print(
 print(
     f"Effective porosity ({flow_axis}): full={100.0 * phi_eff_full:.3f}%, pruned={100.0 * phi_eff_pruned:.3f}%"
 )
-
-
 
 # %% [markdown]
 # ## Interactive network visualization
