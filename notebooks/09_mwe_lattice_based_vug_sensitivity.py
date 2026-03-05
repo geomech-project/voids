@@ -50,7 +50,6 @@ from voids.physics.singlephase import (
 )
 from voids.visualization import plot_network_plotly
 
-
 CIRCULAR_SHAPE_FACTOR = 1.0 / (4.0 * np.pi)
 
 
@@ -121,12 +120,10 @@ def equivalent_radius(radii_xyz: tuple[float, float, float]) -> float:
     rx, ry, rz = radii_xyz
     return float((rx * ry * rz) ** (1.0 / 3.0))
 
-
 def _format_radius_token(value: float) -> str:
     """Return stable filename-safe radius token."""
 
     return f"{value:.2f}".replace(".", "p")
-
 
 def _ellipsoid_mask(
     coords: np.ndarray,
@@ -143,7 +140,6 @@ def _ellipsoid_mask(
     dy = (coords[:, 1] - center[1]) / ry
     dz = (coords[:, 2] - center[2]) / rz
     return (dx * dx + dy * dy + dz * dz) <= 1.0
-
 
 def update_network_geometry_from_radii(
     net: Network,
@@ -198,7 +194,6 @@ def update_network_geometry_from_radii(
     net.throat["pore2_length"] = p2_length
     net.throat["volume"] = throat_volume
 
-
 def generate_baseline_network(*, baseline_id: int, seed: int) -> Network:
     """Create one stochastic lattice baseline realization."""
 
@@ -231,7 +226,6 @@ def generate_baseline_network(*, baseline_id: int, seed: int) -> Network:
     net.extra["baseline_id"] = int(baseline_id)
     net.extra["baseline_seed"] = int(seed)
     return net
-
 
 def insert_vug_superpore(
     net: Network,
@@ -389,7 +383,6 @@ def insert_vug_superpore(
         "equivalent_radius_m": float(r_eq),
     }
     return net_vug, metadata
-
 
 def save_network_png_matplotlib(
     *,

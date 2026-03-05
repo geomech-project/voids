@@ -47,7 +47,6 @@ from voids.physics.singlephase import (
 )
 from voids.visualization import plot_network_plotly
 
-
 CIRCULAR_SHAPE_FACTOR = 1.0 / (4.0 * np.pi)
 
 
@@ -117,12 +116,10 @@ def equivalent_radius_2d(radii_xy: tuple[float, float]) -> float:
     rx, ry = radii_xy
     return float(np.sqrt(rx * ry))
 
-
 def _format_radius_token(value: float) -> str:
     """Return stable filename-safe token for radius values."""
 
     return f"{value:.2f}".replace(".", "p")
-
 
 def sample_depth(net: Network) -> float:
     """Infer slab thickness for a 2D mesh network."""
@@ -133,7 +130,6 @@ def sample_depth(net: Network) -> float:
     ly = float(net.sample.length_for_axis("y"))
     bulk = float(net.sample.resolved_bulk_volume())
     return float(bulk / max(lx * ly, 1.0e-30))
-
 
 def _ellipse_mask_2d(
     coords: np.ndarray,
@@ -150,7 +146,6 @@ def _ellipse_mask_2d(
     dx = (coords[:, 0] - cx) / rx
     dy = (coords[:, 1] - cy) / ry
     return (dx * dx + dy * dy) <= 1.0
-
 
 def update_network_geometry_2d(
     net: Network,
@@ -207,7 +202,6 @@ def update_network_geometry_2d(
     net.throat["pore2_length"] = p2_length
     net.throat["volume"] = throat_volume
 
-
 def generate_baseline_network(*, baseline_id: int, seed: int) -> Network:
     """Build one stochastic 2D baseline network realization."""
 
@@ -242,7 +236,6 @@ def generate_baseline_network(*, baseline_id: int, seed: int) -> Network:
     net.extra["baseline_id"] = int(baseline_id)
     net.extra["baseline_seed"] = int(seed)
     return net
-
 
 def insert_vug_superpore_2d(
     net: Network,
@@ -405,7 +398,6 @@ def insert_vug_superpore_2d(
         "center_xy": center_xy,
     }
     return net_vug, metadata
-
 
 def save_network_png_matplotlib_2d(
     *,
