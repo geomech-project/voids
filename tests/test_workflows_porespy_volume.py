@@ -165,6 +165,33 @@ def test_preprocess_grayscale_cylindrical_volume_segments_dark_voids() -> None:
     assert not bright_binary[:, 1:3, 2:4].any()
 
 
+def test_crop_and_preprocess_progress_hooks(monkeypatch) -> None:
+    """Test progress-hook wiring for slice-wise cylindrical preprocessing."""
+
+    raw = np.zeros((3, 6, 8), dtype=float)
+    raw[:, 1:5, 1:7] = 10.0
+    raw[:, 2:4, 3:5] = 2.0
+
+    progress_calls: list[tuple[bool, str | None, int | None]] = []
+
+    def fake_progress_iter(iterable, *, show_progress, desc=None, total=None):
+        progress_calls.append((bool(show_progress), desc, total))
+        return iterable
+
+    monkeypatch.setattr(pv, "_progress_iter", fake_progress_iter)
+    seg = preprocess_grayscale_cylindrical_volume(
+        raw,
+        threshold_method="otsu",
+        void_phase="dark",
+        show_progress=True,
+        progress_desc="unit-test-progress",
+    )
+
+    assert seg.binary.shape == (3, 4, 6)
+    assert progress_calls
+    assert progress_calls[0] == (True, "unit-test-progress", 3)
+
+
 def test_snow2_network_dict_normalizes_all_supported_porespy_return_styles() -> None:
     """Test the internal snow2 result normalization across supported return shapes."""
 

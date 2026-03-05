@@ -13,6 +13,31 @@ from voids.graph import spanning_subnetwork
 from voids.io import ensure_cartesian_boundary_labels, from_porespy, scale_porespy_geometry
 
 
+def _progress_iter(
+    iterable,
+    *,
+    show_progress: bool,
+    desc: str | None = None,
+    total: int | None = None,
+):
+    """Wrap an iterable with ``tqdm`` when available and requested."""
+
+    if not show_progress:
+        return iterable
+    try:
+        from tqdm.auto import tqdm
+
+        return tqdm(
+            iterable,
+            desc=desc,
+            total=total,
+            dynamic_ncols=True,
+            leave=False,
+        )
+    except Exception:  # pragma: no cover - optional dependency
+        return iterable
+
+
 def _require_skimage():
     """Import scikit-image lazily for optional grayscale preprocessing."""
 
@@ -183,6 +208,8 @@ def crop_nonzero_cylindrical_volume(
     raw: np.ndarray,
     *,
     background_value: float = 0.0,
+    show_progress: bool = False,
+    progress_desc: str | None = None,
 ) -> VolumeCropResult:
     """Crop a grayscale cylindrical sample to a common inscribed rectangle.
 
@@ -193,6 +220,11 @@ def crop_nonzero_cylindrical_volume(
     background_value :
         Voxels strictly larger than this value are treated as specimen support
         before hole filling.
+    show_progress :
+        If ``True``, show a ``tqdm`` progress bar while filling holes slice-wise.
+        When ``tqdm`` is unavailable, iteration proceeds silently.
+    progress_desc :
+        Optional progress-bar description string.
 
     Returns
     -------
@@ -212,7 +244,13 @@ def crop_nonzero_cylindrical_volume(
         raise ValueError("raw must be a 3D grayscale volume")
 
     specimen_mask = np.zeros_like(arr, dtype=bool)
-    for i in range(arr.shape[0]):
+    iterator = _progress_iter(
+        range(arr.shape[0]),
+        show_progress=show_progress,
+        desc=progress_desc or "Filling support mask slices",
+        total=int(arr.shape[0]),
+    )
+    for i in iterator:
         specimen_mask[i] = ndi.binary_fill_holes(arr[i] > background_value)
 
     common_mask = specimen_mask.all(axis=0)
@@ -285,10 +323,17 @@ def preprocess_grayscale_cylindrical_volume(
     threshold: float | None = None,
     threshold_method: str = "otsu",
     void_phase: str = "dark",
+    show_progress: bool = False,
+    progress_desc: str | None = None,
 ) -> GrayscaleSegmentationResult:
     """Crop and binarize a grayscale cylindrical sample volume."""
 
-    crop = crop_nonzero_cylindrical_volume(raw, background_value=background_value)
+    crop = crop_nonzero_cylindrical_volume(
+        raw,
+        background_value=background_value,
+        show_progress=show_progress,
+        progress_desc=progress_desc,
+    )
     binary, used_threshold = binarize_grayscale_volume(
         crop.cropped,
         threshold=threshold,
