@@ -52,5 +52,5 @@ repos:
       entry: jupytext --sync
       language: python
       additional_dependencies:
-        - jupytext==1.17.2
+        - jupytext>=1.19.1,<2
       files: '^notebooks/.*\.(ipynb|py)$'
