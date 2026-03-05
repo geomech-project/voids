@@ -12,7 +12,6 @@ scipy = ">=1.11"
 h5py = ">=3.10"
 typing_extensions = ">=4.10"
 ipykernel = ">=7.2.0,<8"
-pandas = ">=3.0.1,<4"
 tqdm = ">=4.67.3,<5"
 
 [pypi-dependencies]
@@ -59,6 +58,7 @@ jupyterlab = ">=4.0"
 matplotlib = ">=3.8"
 plotly = ">=5.0"
 jupytext = ">=1.19.1,<2"
+pandas = ">=3.0.1,<4"
 
 [feature.dev.pypi-dependencies]
 porespy = ">=2.4"
