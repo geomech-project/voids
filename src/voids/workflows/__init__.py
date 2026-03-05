@@ -9,6 +9,17 @@ from voids.workflows.porespy_volume import (
     largest_true_rectangle,
     preprocess_grayscale_cylindrical_volume,
 )
+from voids.workflows.vug_templates import (
+    build_image_vug_radii_2d,
+    build_image_vug_radii_3d,
+    build_lattice_vug_templates_2d,
+    build_lattice_vug_templates_3d,
+    equivalent_radius_2d,
+    equivalent_radius_3d,
+    format_radius_token,
+    match_ellipse_to_circle,
+    match_ellipsoid_to_sphere,
+)
 
 __all__ = [
     "VolumeCropResult",
@@ -20,4 +31,13 @@ __all__ = [
     "binarize_grayscale_volume",
     "preprocess_grayscale_cylindrical_volume",
     "extract_spanning_porespy_network",
+    "format_radius_token",
+    "equivalent_radius_2d",
+    "equivalent_radius_3d",
+    "match_ellipse_to_circle",
+    "match_ellipsoid_to_sphere",
+    "build_image_vug_radii_2d",
+    "build_image_vug_radii_3d",
+    "build_lattice_vug_templates_2d",
+    "build_lattice_vug_templates_3d",
 ]
