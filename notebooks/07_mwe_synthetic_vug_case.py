@@ -17,6 +17,8 @@
 # Companion Data for Digital Porous Media Tutorials [Dataset]. Digital Porous Media Portal.
 # https://doi.org/10.17612/2k9b-1h71
 #
+#
+#
 
 # %%
 import matplotlib.pyplot as plt
@@ -45,6 +47,8 @@ from voids.workflows import (
 
 examples_data = data_path()
 
+
+
 # %%
 raw_path = examples_data / "syn_vugs" / "synthetic_vugs.tif"
 raw = imread(raw_path).astype(float)
@@ -55,6 +59,8 @@ pre = preprocess_grayscale_cylindrical_volume(
     background_value=0.0,
     threshold_method="otsu",
     void_phase="dark",
+    show_progress=True,
+    progress_desc="MWE07: filling cylindrical support slices",
 )
 
 crop_y0, crop_y1, crop_x0, crop_x1 = pre.crop.crop_bounds_yx
@@ -82,10 +88,14 @@ print(f"Void fraction after binarization = {float(im.mean()):.4f}")
 print("Axis lengths:", axis_lengths)
 print("Longest axis for flow analysis:", flow_axis)
 
+
+
 # %% [markdown]
 # ## Raw, cropped, and binarized views
 #
 # The first panel shows the middle raw slice with the largest common rectangle overlaid. The remaining panels show the cropped grayscale slice, the binary void/solid segmentation, and the grayscale histogram used to choose the threshold.
+#
+#
 #
 #
 
@@ -137,6 +147,8 @@ axes[1, 1].grid(alpha=0.3, linestyle=":")
 plt.tight_layout()
 plt.show()
 
+
+
 # %%
 extract = extract_spanning_porespy_network(
     im,
@@ -153,6 +165,8 @@ extract = extract_spanning_porespy_network(
 
 print("PoreSpy version:", extract.porespy_version)
 print("Extracted keys sample:", list(extract.network_dict.keys())[:10])
+
+
 
 # %%
 net_dict = extract.network_dict
@@ -175,6 +189,8 @@ print(
 )
 net
 
+
+
 # %%
 print("phi_image(void fraction) =", float(im.mean()))
 print("phi_abs(pruned region volumes / bulk) =", absolute_porosity(net))
@@ -182,6 +198,8 @@ print(
     f"phi_eff_{flow_axis}(pruned region volumes / bulk) =",
     effective_porosity(net, axis=flow_axis),
 )
+
+
 
 # %%
 # Single-phase solve on the pruned spanning network.
@@ -202,6 +220,8 @@ res = solve(
 print("Q =", res.total_flow_rate)
 print(f"K{flow_axis} (length unit = voxel) =", res.permeability[flow_axis])
 print("mbe =", res.mass_balance_error)
+
+
 
 # %%
 out_dir = examples_data / "syn_vugs"
@@ -225,10 +245,14 @@ print("Saved:", out_h5)
 print("Saved:", out_npz)
 print("Saved:", out_seg)
 
+
+
 # %% [markdown]
 # ## Network Statistics
 #
 # Inspect standard pore-network diagnostics on the pruned longest-axis spanning network obtained from the cropped and thresholded vug volume.
+#
+#
 #
 #
 
@@ -295,10 +319,14 @@ print(f"Median throat size: {np.median(throat_size_vox):.2f} voxel")
 print(f"Mean coordination number: {coordination.mean():.2f}")
 print(f"Max coordination number: {coordination.max()}")
 
+
+
 # %% [markdown]
 # ## Pruning Comparison
 #
 # Compare the full extracted network (`net_full`) against the longest-axis spanning pruned network (`net`) to quantify what pruning removed and which transport-relevant statistics were preserved.
+#
+#
 #
 #
 
@@ -491,10 +519,14 @@ print(
     f"Effective porosity ({flow_axis}): full={100.0 * phi_eff_full:.3f}%, pruned={100.0 * phi_eff_pruned:.3f}%"
 )
 
+
+
 # %% [markdown]
 # ## Interactive network visualization
 #
 # Visualize the extracted pore network with pores colored by pressure using Plotly for full 3D interactivity. The marker and throat sizes now follow the available characteristic-size fields automatically.
+#
+#
 #
 #
 
