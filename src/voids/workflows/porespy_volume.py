@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from scipy import ndimage as ndi
@@ -130,7 +130,7 @@ def infer_sample_axes(
         for other in others:
             area *= axis_counts[other]
         axis_areas[ax] = area
-    flow_axis = max(axis_lengths, key=axis_lengths.get)
+    flow_axis = max(axis_lengths, key=lambda ax: axis_lengths[ax])
     return axis_counts, axis_lengths, axis_areas, flow_axis
 
 
@@ -378,7 +378,7 @@ def extract_spanning_porespy_network(
 
     sample = SampleGeometry(
         voxel_size=float(voxel_size),
-        bulk_shape_voxels=tuple(int(n) for n in arr.shape),
+        bulk_shape_voxels=cast("tuple[int, int, int]", tuple(int(n) for n in arr.shape)),
         lengths=axis_lengths,
         cross_sections=axis_areas,
         units={"length": length_unit, "pressure": pressure_unit},

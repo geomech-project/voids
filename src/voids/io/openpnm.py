@@ -61,7 +61,7 @@ def to_openpnm_network(
     copy_properties: bool = True,
     copy_labels: bool = True,
     include_extra: bool = False,
-):
+) -> Any:
     """Convert a :class:`Network` into an OpenPNM network object.
 
     Parameters

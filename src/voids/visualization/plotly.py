@@ -156,7 +156,7 @@ def plot_network_plotly(
     title: str | None = None,
     show_colorbar: bool = True,
     layout_kwargs: dict[str, Any] | None = None,
-):
+) -> Any:
     """Create an interactive Plotly visualization of a pore-throat network.
 
     Parameters
@@ -247,6 +247,7 @@ def plot_network_plotly(
         marker_size = point_size_ref
 
     if use_variable_throat_sizes:
+        assert throat_size_values is not None
         sampled_line_widths = scale_sizes_to_pixels(
             throat_size_values[sampled],
             reference=line_width_ref,
@@ -286,6 +287,7 @@ def plot_network_plotly(
         if point_values is not None:
             hover_lines.append(f"{point_label or 'value'}={point_values[idx]:.3e}")
         if use_variable_point_sizes and point_size_label is not None:
+            assert point_size_values is not None
             hover_lines.append(f"{point_size_label}={point_size_values[idx]:.3e}")
         pore_text.append("<br>".join(hover_lines))
 
@@ -329,6 +331,7 @@ def plot_network_plotly(
             color = _rgb_with_opacity(sample_colorscale("Viridis", [norm])[0], line_opacity)
             hover_lines.append(f"{throat_label}={float(throat_values[local_idx]):.3e}")
         if use_variable_throat_sizes and throat_size_label is not None:
+            assert throat_size_values is not None
             hover_lines.append(f"{throat_size_label}={float(throat_size_values[throat_idx]):.3e}")
         traces.append(
             go.Scatter3d(

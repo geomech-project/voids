@@ -71,7 +71,7 @@ def network_to_pyvista_polydata(
     point_scalars: str | np.ndarray | None = None,
     cell_scalars: str | np.ndarray | None = None,
     include_all_numeric_fields: bool = False,
-):
+) -> Any:
     """Convert a network to ``pyvista.PolyData``.
 
     Parameters
@@ -160,7 +160,7 @@ def plot_network_pyvista(
     show_axes: bool = True,
     notebook: bool | None = None,
     **add_mesh_kwargs: Any,
-):
+) -> tuple[Any, Any]:
     """Render a pore network with PyVista.
 
     Parameters

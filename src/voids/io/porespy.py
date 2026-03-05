@@ -366,6 +366,8 @@ def from_porespy(
             if reserved == "coords":
                 pore_coords = np.asarray(arr, dtype=float)
                 continue
+            if canonical is None:
+                continue
             if family == "pore":
                 pore_data[canonical] = np.asarray(arr)
             else:
