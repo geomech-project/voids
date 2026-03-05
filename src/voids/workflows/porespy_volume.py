@@ -333,8 +333,44 @@ def preprocess_grayscale_cylindrical_volume(
     show_progress: bool = False,
     progress_desc: str | None = None,
 ) -> GrayscaleSegmentationResult:
-    """Crop and binarize a grayscale cylindrical sample volume."""
+    """Crop and binarize a grayscale cylindrical sample volume.
 
+    Parameters
+    ----------
+    raw :
+        3D grayscale sample volume containing a cylindrical specimen.
+    background_value :
+        Intensity value corresponding to background (non-sample) voxels.
+        This value is used by :func:`crop_nonzero_cylindrical_volume` to
+        detect and crop out the cylindrical region of interest.
+    threshold :
+        Explicit grayscale threshold used to binarize the cropped volume.
+        When omitted, ``threshold_method`` is used to determine the
+        threshold automatically.
+    threshold_method :
+        Automatic thresholding method passed to
+        :func:`binarize_grayscale_volume`. Supported values are ``"otsu"``,
+        ``"li"``, ``"yen"``, ``"isodata"``, and ``"triangle"``.
+    void_phase :
+        Either ``"dark"`` or ``"bright"`` indicating which side of the
+        grayscale histogram is treated as void space in the binarized
+        image.
+    show_progress :
+        If ``True``, wrap long-running operations in a progress bar using
+        :mod:`tqdm` when it is available. If ``False`` (default), no
+        progress bar is shown. When ``tqdm`` is not installed, this option
+        is silently ignored and no progress bar is displayed.
+    progress_desc :
+        Optional label for the progress bar when ``show_progress`` is
+        ``True``. Ignored when ``show_progress`` is ``False`` or when
+        :mod:`tqdm` is not available.
+
+    Returns
+    -------
+    GrayscaleSegmentationResult
+        Object containing the cropped grayscale volume, the binarized
+        volume, the threshold that was used, and associated metadata.
+    """
     crop = crop_nonzero_cylindrical_volume(
         raw,
         background_value=background_value,
