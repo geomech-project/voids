@@ -4,6 +4,10 @@
 
 # voids
 
+[![Tests](https://github.com/ThermoPhase-FCSRG/voids/actions/workflows/tests.yml/badge.svg)](https://github.com/ThermoPhase-FCSRG/voids/actions/workflows/tests.yml)
+[![Coverage](https://codecov.io/gh/ThermoPhase-FCSRG/voids/branch/main/graph/badge.svg)](https://codecov.io/gh/ThermoPhase-FCSRG/voids)
+[![Supported OS](https://img.shields.io/badge/OS-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/ThermoPhase-FCSRG/voids/actions/workflows/tests.yml)
+
 `voids` is a scientific Python package for pore network modeling (PNM) aimed at
 research workflows where reproducibility, explicit assumptions, and validation matter.
 The current project emphasis is a clean canonical network model, interoperability with
