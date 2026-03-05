@@ -3,7 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from voids.geom import area_equivalent_diameter, characteristic_size
+from voids.geom import (
+    area_equivalent_diameter,
+    characteristic_size,
+    normalize_characteristic_size,
+)
 from voids.workflows import porespy_volume as pv
 from voids.workflows import (
     binarize_grayscale_volume,
@@ -49,6 +53,28 @@ def test_area_equivalent_diameter_and_characteristic_size_priority() -> None:
         characteristic_size({})
     with pytest.raises(ValueError, match="field 'diameter_equivalent' must have shape"):
         characteristic_size({"diameter_equivalent": np.ones(3)}, expected_shape=(2,))
+
+
+def test_normalize_characteristic_size_branches() -> None:
+    """Test all three branches of normalize_characteristic_size via voids.geom."""
+
+    # radius_inscribed branch: values should be doubled
+    radii = np.array([1.0, 2.0, 3.0])
+    result = normalize_characteristic_size(radii, field_name="radius_inscribed")
+    assert np.array_equal(result, np.array([2.0, 4.0, 6.0]))
+
+    # area branch: values should be converted to area-equivalent diameters
+    areas = np.array([np.pi, 4.0 * np.pi])
+    result = normalize_characteristic_size(areas, field_name="area")
+    assert np.allclose(result, np.array([2.0, 4.0]))
+
+    # passthrough branch: any other field_name returns values unchanged
+    diameters = np.array([5.0, 6.0])
+    result = normalize_characteristic_size(diameters, field_name="diameter_equivalent")
+    assert np.array_equal(result, diameters)
+
+    result = normalize_characteristic_size(diameters, field_name=None)
+    assert np.array_equal(result, diameters)
 
 
 def test_largest_true_rectangle_and_crop_fill_internal_holes() -> None:
