@@ -1,39 +1,14 @@
 from __future__ import annotations
 
 from math import ceil
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
+import plotly.graph_objects as go
+from plotly.colors import sample_colorscale
 
 from voids.core.network import Network
 from voids.visualization._sizing import resolve_size_values, scale_sizes_to_pixels
-
-if TYPE_CHECKING:
-    import plotly.graph_objects as go
-
-
-def _require_plotly():
-    """Import Plotly lazily.
-
-    Returns
-    -------
-    tuple
-        ``(plotly.graph_objects, plotly.colors.sample_colorscale)``.
-
-    Raises
-    ------
-    ImportError
-        If Plotly is not installed.
-    """
-
-    try:
-        import plotly.graph_objects as go
-        from plotly.colors import sample_colorscale
-    except Exception as exc:  # pragma: no cover - optional dependency
-        raise ImportError(
-            "Plotly is not installed. Use an environment with plotly available to create interactive figures."
-        ) from exc
-    return go, sample_colorscale
 
 
 def _resolve_scalars(
@@ -219,7 +194,6 @@ def plot_network_plotly(
     so that equal numerical values map to equal colors across pores and throats.
     """
 
-    go, sample_colorscale = _require_plotly()
     point_values, point_label = _resolve_scalars(
         point_scalars, store=net.pore, expected_shape=(net.Np,), prefix="pore"
     )

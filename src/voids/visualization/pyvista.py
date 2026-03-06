@@ -1,38 +1,13 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
+import pyvista as pv
 
 from voids.core.network import Network
 from voids.visualization._sizing import resolve_size_values
-
-if TYPE_CHECKING:
-    import pyvista as pv
-
-
-def _require_pyvista():
-    """Import PyVista lazily.
-
-    Returns
-    -------
-    module
-        Imported :mod:`pyvista` module.
-
-    Raises
-    ------
-    ImportError
-        If PyVista is not installed.
-    """
-
-    try:
-        import pyvista as pv
-    except Exception as exc:  # pragma: no cover - optional dependency
-        raise ImportError(
-            "PyVista is not installed. Use the 'default' or 'test' pixi environment or install pyvista."
-        ) from exc
-    return pv
 
 
 def _line_cells_from_conns(conns: np.ndarray) -> np.ndarray:
@@ -100,11 +75,9 @@ def network_to_pyvista_polydata(
         If an explicit scalar array has the wrong shape.
     """
 
-    _pv = _require_pyvista()
-
     points = np.asarray(net.pore_coords, dtype=float)
     line_cells = _line_cells_from_conns(net.throat_conns)
-    poly: pv.PolyData = _pv.PolyData(points, lines=line_cells)
+    poly: pv.PolyData = pv.PolyData(points, lines=line_cells)
 
     poly.point_data["pore.id"] = np.arange(net.Np, dtype=np.int64)
     poly.cell_data["throat.id"] = np.arange(net.Nt, dtype=np.int64)
@@ -223,7 +196,6 @@ def plot_network_pyvista(
     a :class:`UserWarning` is emitted to notify callers.
     """
 
-    pv = _require_pyvista()
     poly = network_to_pyvista_polydata(
         net,
         point_scalars=point_scalars,
