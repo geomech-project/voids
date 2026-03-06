@@ -166,7 +166,7 @@ def test_network_to_pyvista_polydata_supports_all_numeric_fields_and_validates_s
 ) -> None:
     """Test PolyData conversion, scalar attachment, and scalar validation."""
 
-    monkeypatch.setattr("voids.visualization.pyvista._require_pyvista", lambda: _FakePV)
+    monkeypatch.setattr("voids.visualization.pyvista.pv", _FakePV)
 
     poly = network_to_pyvista_polydata(
         line_network,
@@ -199,7 +199,7 @@ def test_plot_network_pyvista_falls_back_from_tubes_and_saves_screenshot(
 ) -> None:
     """Test PyVista plotting fallback from tubes and screenshot capture."""
 
-    monkeypatch.setattr("voids.visualization.pyvista._require_pyvista", lambda: _FakePV)
+    monkeypatch.setattr("voids.visualization.pyvista.pv", _FakePV)
 
     screenshot = tmp_path / "mesh.png"
     with pytest.warns(UserWarning, match="tube filter failed.*RuntimeError"):
@@ -230,7 +230,7 @@ def test_plot_network_pyvista_falls_back_from_variable_throat_tubes(
 ) -> None:
     """Test that fallback for variable throat sizes warns about accuracy loss."""
 
-    monkeypatch.setattr("voids.visualization.pyvista._require_pyvista", lambda: _FakePV)
+    monkeypatch.setattr("voids.visualization.pyvista.pv", _FakePV)
     line_network.throat["diameter_equivalent"] = np.array([0.5, 1.5])
 
     # tube_should_raise=True by default; variable throat sizes trigger tube rendering.
@@ -368,7 +368,7 @@ def test_plotly_auto_sized_markers_keep_diameter_mode_without_point_scalars(line
 def test_plot_network_pyvista_auto_sizes_points_and_throats(monkeypatch, line_network) -> None:
     """Test automatic PyVista sphere and tube sizing from characteristic diameters."""
 
-    monkeypatch.setattr("voids.visualization.pyvista._require_pyvista", lambda: _FakePV)
+    monkeypatch.setattr("voids.visualization.pyvista.pv", _FakePV)
     _FakePolyData.tube_should_raise = False
     line_network.pore["diameter_equivalent"] = np.array([1.0, 2.0, 4.0])
     line_network.throat["diameter_equivalent"] = np.array([0.5, 1.5])

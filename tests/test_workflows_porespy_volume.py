@@ -8,11 +8,12 @@ from voids.geom import (
     characteristic_size,
     normalize_characteristic_size,
 )
-from voids.workflows import porespy_volume as pv
+from voids.image import segmentation as iseg
+from voids.workflows import network_extraction as nex
 from voids.workflows import (
     binarize_grayscale_volume,
     crop_nonzero_cylindrical_volume,
-    extract_spanning_porespy_network,
+    extract_spanning_pore_network,
     infer_sample_axes,
     largest_true_rectangle,
     preprocess_grayscale_cylindrical_volume,
@@ -105,7 +106,7 @@ def test_largest_true_rectangle_and_crop_fill_internal_holes() -> None:
     assert crop.common_mask[1:5, 1:7].all()
 
 
-def test_workflow_preprocessing_validation_branches(monkeypatch) -> None:
+def test_workflow_preprocessing_validation_branches() -> None:
     """Test public preprocessing validation branches and unsupported inputs."""
 
     with pytest.raises(ValueError, match="voxel_size must be positive"):
@@ -133,11 +134,6 @@ def test_workflow_preprocessing_validation_branches(monkeypatch) -> None:
         binarize_grayscale_volume(np.ones((3, 4), dtype=float))
     with pytest.raises(ValueError, match="void_phase must be either 'dark' or 'bright'"):
         binarize_grayscale_volume(cropped, threshold=0.5, void_phase="invalid")
-    monkeypatch.setattr(
-        pv,
-        "_require_skimage",
-        lambda: {"otsu": lambda arr: 0.5},
-    )
     with pytest.raises(ValueError, match="Unsupported threshold method 'bad'"):
         binarize_grayscale_volume(cropped, method="bad")
 
@@ -171,11 +167,11 @@ def test_progress_iter_tqdm_wrapping() -> None:
     items = list(range(5))
 
     # show_progress=False: original iterable returned unchanged
-    result = pv._progress_iter(items, show_progress=False)
+    result = iseg._progress_iter(items, show_progress=False)
     assert result is items
 
     # show_progress=True and tqdm available: iteration must yield correct values
-    wrapped = pv._progress_iter(items, show_progress=True, desc="test", total=5)
+    wrapped = iseg._progress_iter(items, show_progress=True, desc="test", total=5)
     assert list(wrapped) == items
 
 
@@ -192,7 +188,7 @@ def test_crop_and_preprocess_progress_hooks(monkeypatch) -> None:
         progress_calls.append((bool(show_progress), desc, total))
         return iterable
 
-    monkeypatch.setattr(pv, "_progress_iter", fake_progress_iter)
+    monkeypatch.setattr(iseg, "_progress_iter", fake_progress_iter)
     seg = preprocess_grayscale_cylindrical_volume(
         raw,
         threshold_method="otsu",
@@ -239,14 +235,14 @@ def test_snow2_network_dict_normalizes_all_supported_porespy_return_styles() -> 
 
     phases = np.ones((2, 2), dtype=int)
 
-    from_attr = pv._snow2_network_dict(
+    from_attr = nex._snow2_network_dict(
         phases,
         porespy_module=_FakePoreSpy(_WithNetwork()),
         snow2_kwargs={"sigma": 0.75},
     )
     assert set(from_attr) == {"pore.coords", "throat.conns"}
 
-    from_network_key = pv._snow2_network_dict(
+    from_network_key = nex._snow2_network_dict(
         phases,
         porespy_module=_FakePoreSpy(
             {
@@ -260,7 +256,7 @@ def test_snow2_network_dict_normalizes_all_supported_porespy_return_styles() -> 
     )
     assert set(from_network_key) == {"pore.coords", "throat.conns"}
 
-    direct_dict = pv._snow2_network_dict(
+    direct_dict = nex._snow2_network_dict(
         phases,
         porespy_module=_FakePoreSpy(
             {"pore.coords": np.zeros((1, 3)), "throat.conns": np.zeros((0, 2), dtype=int)}
@@ -269,14 +265,14 @@ def test_snow2_network_dict_normalizes_all_supported_porespy_return_styles() -> 
     )
     assert set(direct_dict) == {"pore.coords", "throat.conns"}
 
-    from_regions_attr = pv._snow2_network_dict(
+    from_regions_attr = nex._snow2_network_dict(
         phases,
         porespy_module=_FakePoreSpy(_WithRegions()),
         snow2_kwargs={"sigma": 0.75},
     )
     assert set(from_regions_attr) == {"pore.coords", "throat.conns"}
 
-    from_regions_key = pv._snow2_network_dict(
+    from_regions_key = nex._snow2_network_dict(
         phases,
         porespy_module=_FakePoreSpy({"regions": "regions-object"}),
         snow2_kwargs={"sigma": 0.75},
@@ -284,15 +280,15 @@ def test_snow2_network_dict_normalizes_all_supported_porespy_return_styles() -> 
     assert set(from_regions_key) == {"pore.coords", "throat.conns"}
 
     with pytest.raises(RuntimeError, match="Could not find a network dict or regions"):
-        pv._snow2_network_dict(
+        nex._snow2_network_dict(
             phases,
             porespy_module=_FakePoreSpy({"unexpected": 1}),
             snow2_kwargs={"sigma": 0.75},
         )
 
 
-def test_infer_axes_and_extract_spanning_porespy_network() -> None:
-    """Test shared PoreSpy extraction workflow metadata and imported networks."""
+def test_infer_axes_and_extract_spanning_pore_network() -> None:
+    """Test extraction workflow metadata and imported networks."""
 
     _, axis_lengths, axis_areas, flow_axis = infer_sample_axes((12, 16, 16), voxel_size=1.0)
     assert flow_axis == "y"
@@ -303,7 +299,7 @@ def test_infer_axes_and_extract_spanning_porespy_network() -> None:
     im[:, 5:11, 5:11] = 1
     im[2:4, 1:3, 1:3] = 1
 
-    result = extract_spanning_porespy_network(
+    result = extract_spanning_pore_network(
         im,
         voxel_size=1.0,
         flow_axis="x",
@@ -312,7 +308,7 @@ def test_infer_axes_and_extract_spanning_porespy_network() -> None:
     )
 
     assert result.flow_axis == "x"
-    assert result.porespy_version is not None
+    assert result.backend_version is not None
     assert result.provenance.user_notes["case"] == "tiny"
     assert result.sample.units["length"] == "voxel"
     assert result.net_full.Np >= result.net.Np
@@ -322,14 +318,38 @@ def test_infer_axes_and_extract_spanning_porespy_network() -> None:
     assert result.throat_mask.shape == (result.net_full.Nt,)
 
 
-def test_extract_spanning_porespy_network_validates_image_rank_and_flow_axis(monkeypatch) -> None:
-    """Test public extraction validation before any real PoreSpy work starts."""
+def test_extract_spanning_pore_network_validates_image_rank_and_flow_axis() -> None:
+    """Test public extraction validation before backend extraction work starts."""
 
     with pytest.raises(ValueError, match="phases must be a 2D or 3D integer image"):
-        extract_spanning_porespy_network(np.ones((2,), dtype=int), voxel_size=1.0)
+        extract_spanning_pore_network(np.ones((2,), dtype=int), voxel_size=1.0)
 
-    monkeypatch.setattr(pv, "_require_porespy", lambda: object())
     with pytest.raises(ValueError, match="flow_axis 'q' is not compatible with shape"):
-        extract_spanning_porespy_network(
-            np.ones((4, 5, 6), dtype=int), voxel_size=1.0, flow_axis="q"
-        )
+        extract_spanning_pore_network(np.ones((4, 5, 6), dtype=int), voxel_size=1.0, flow_axis="q")
+
+
+def test_extract_spanning_pore_network_forwards_extraction_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_snow2(phases, *, snow2_kwargs):
+        captured["phases"] = phases
+        captured["kwargs"] = snow2_kwargs
+        return {
+            "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+            "throat.conns": np.array([[0, 1]], dtype=int),
+            "pore.xmin": np.array([True, False], dtype=bool),
+            "pore.xmax": np.array([False, True], dtype=bool),
+        }
+
+    monkeypatch.setattr(nex, "_snow2_network_dict", fake_snow2)
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        flow_axis="x",
+        extraction_kwargs={"sigma": 0.5},
+    )
+    assert result.net.Np >= 1
+    assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=int))
+    assert captured["kwargs"] == {"sigma": 0.5}
