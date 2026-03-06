@@ -297,7 +297,7 @@ def plot_network_pyvista(
             )
 
     if show_axes:
-        pl.add_axes()
+        pl.add_axes()  # type: ignore[call-arg]
 
     if screenshot is not None:
         pl.show(auto_close=False)
