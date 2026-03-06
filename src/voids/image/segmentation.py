@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TypeVar, cast
 
@@ -16,7 +16,7 @@ from skimage.filters import (
 
 _T = TypeVar("_T")
 
-_THRESHOLD_METHODS = {
+_THRESHOLD_METHODS: dict[str, Callable[..., float]] = {
     "otsu": threshold_otsu,
     "li": threshold_li,
     "yen": threshold_yen,
