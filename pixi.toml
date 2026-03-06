@@ -19,6 +19,7 @@ plotly = ">=5.0"
 [pypi-dependencies]
 voids = { path = ".", editable = true }
 porespy = ">=2.4"
+openpnm = ">=3.6,<3.7"
 pyvista = ">=0.43"
 
 [target.unix.activation.env]
@@ -69,9 +70,6 @@ trame = "3.*"
 
 [feature.test.dependencies]
 networkx = ">=3.2"
-
-[feature.test.pypi-dependencies]
-openpnm = ">=3.6,<3.7"
 
 [environments]
 default = { features = ["dev", "viz"], solve-group = "default" }
