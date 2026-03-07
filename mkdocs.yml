@@ -101,7 +101,7 @@ nav:
       - api/image.md
     - Visualization:
       - api/visualization.md
-    - Workflows:
-      - api/workflows.md
+    - Simulators:
+      - api/simulators.md
     - Benchmarks:
       - api/benchmarks.md

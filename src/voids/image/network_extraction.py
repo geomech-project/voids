@@ -10,7 +10,7 @@ from voids.core.network import Network
 from voids.core.provenance import Provenance
 from voids.core.sample import SampleGeometry
 from voids.graph import spanning_subnetwork
-from voids.io import ensure_cartesian_boundary_labels, from_porespy, scale_porespy_geometry
+from voids.io.porespy import ensure_cartesian_boundary_labels, from_porespy, scale_porespy_geometry
 
 
 @dataclass(slots=True)
@@ -175,7 +175,7 @@ def extract_spanning_pore_network(
     provenance_notes :
         Optional extra provenance metadata attached to the resulting network.
     strict :
-        Forwarded to :func:`voids.io.from_porespy`.
+        Forwarded to :func:`voids.io.porespy.from_porespy`.
 
     Returns
     -------

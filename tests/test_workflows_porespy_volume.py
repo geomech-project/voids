@@ -9,12 +9,14 @@ from voids.geom import (
     normalize_characteristic_size,
 )
 from voids.image import segmentation as iseg
-from voids.workflows import network_extraction as nex
-from voids.workflows import (
-    binarize_grayscale_volume,
-    crop_nonzero_cylindrical_volume,
+from voids.image import network_extraction as nex
+from voids.image import (
     extract_spanning_pore_network,
     infer_sample_axes,
+)
+from voids.image import (
+    binarize_grayscale_volume,
+    crop_nonzero_cylindrical_volume,
     largest_true_rectangle,
     preprocess_grayscale_cylindrical_volume,
 )

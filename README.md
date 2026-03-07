@@ -145,6 +145,8 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
   - lattice-based stochastic baselines with spherical/ellipsoidal vug insertion, `Kabs`/porosity sensitivity, and `K/K0` distributions
 - `11_mwe_lattice_based_vug_sensitivity_2d`
   - simplified 2D lattice counterpart with circular/elliptical vugs, multi-baseline sensitivity, and `K/K0` frequency distributions
+- `12_mwe_synthetic_volume_openpnm_benchmark`
+  - synthetic spanning volumes, synthetic grayscale segmentation, `snow2` extraction, and `Kabs` cross-checks between `voids` and OpenPNM
 
 Example data under `examples/data/` includes a deterministic manufactured void image and
 generated artifacts from the extraction/mesh notebooks.

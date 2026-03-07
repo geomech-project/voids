@@ -48,7 +48,7 @@ from voids.physics.singlephase import (
     solve,
 )
 from voids.visualization import plot_network_plotly
-from voids.workflows import (
+from voids.generators import (
     build_lattice_vug_templates_3d,
     insert_vug_superpore,
     update_network_geometry_from_radii,
@@ -148,6 +148,7 @@ def generate_baseline_network(*, baseline_id: int, seed: int) -> Network:
     net.extra["baseline_id"] = int(baseline_id)
     net.extra["baseline_seed"] = int(seed)
     return net
+
 
 def save_network_png_matplotlib(
     *,

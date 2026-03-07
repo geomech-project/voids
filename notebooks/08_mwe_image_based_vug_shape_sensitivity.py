@@ -50,17 +50,16 @@ from voids.physics.singlephase import (
     solve,
 )
 from voids.visualization import plot_network_plotly
-from voids.workflows import (
-    binarize_grayscale_volume,
+from voids.generators import (
     build_image_vug_radii_3d,
     equivalent_radius_3d,
-    extract_spanning_pore_network,
     generate_connected_matrix,
-    has_spanning_cluster,
     insert_ellipsoidal_vug,
     insert_spherical_vug,
     make_synthetic_grayscale,
 )
+from voids.image import binarize_grayscale_volume, has_spanning_cluster
+from voids.image import extract_spanning_pore_network
 
 
 def iter_progress(

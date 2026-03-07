@@ -1,4 +1,9 @@
 from voids.image.connectivity import has_spanning_cluster, has_spanning_cluster_2d
+from voids.image.network_extraction import (
+    NetworkExtractionResult,
+    extract_spanning_pore_network,
+    infer_sample_axes,
+)
 from voids.image.segmentation import (
     GrayscaleSegmentationResult,
     VolumeCropResult,
@@ -12,6 +17,9 @@ from voids.image.segmentation import (
 __all__ = [
     "has_spanning_cluster",
     "has_spanning_cluster_2d",
+    "NetworkExtractionResult",
+    "extract_spanning_pore_network",
+    "infer_sample_axes",
     "VolumeCropResult",
     "GrayscaleSegmentationResult",
     "largest_true_rectangle",

@@ -45,7 +45,7 @@ from voids.physics.singlephase import (
     solve,
 )
 from voids.visualization import plot_network_plotly
-from voids.workflows import (
+from voids.generators import (
     build_lattice_vug_templates_2d,
     insert_vug_superpore_2d,
     update_network_geometry_2d,
@@ -110,6 +110,7 @@ print("spacing [m]:", SPACING_M, "| thickness [m]:", THICKNESS_M)
 print("flow axis:", FLOW_AXIS)
 print("baseline realizations:", N_BASELINES)
 print("equivalent radius levels:", EQUIV_RADII_SPACING)
+
 
 def generate_baseline_network(*, baseline_id: int, seed: int) -> Network:
     """Build one stochastic 2D baseline network realization."""
@@ -418,8 +419,7 @@ for baseline_id in iter_progress(
                 point_size_limits=PLOTLY_SIZE_LIMITS,
                 throat_size_limits=PLOTLY_SIZE_LIMITS,
                 title=(
-                    f"B{baseline_id} | {tpl['case']} | "
-                    f"K{FLOW_AXIS}={k:.3e} m2 | K/K0={k / k0:.3f}"
+                    f"B{baseline_id} | {tpl['case']} | K{FLOW_AXIS}={k:.3e} m2 | K/K0={k / k0:.3f}"
                 ),
                 layout_kwargs=PLOTLY_LAYOUT,
             )

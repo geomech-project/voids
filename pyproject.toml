@@ -29,6 +29,7 @@ dependencies = [
   "scipy>=1.11",
   "scikit-image>=0.22",
   "porespy>=2.4",
+  "openpnm>=3.6,<3.7",
   "h5py>=3.10",
   "plotly>=5.0",
   "pyvista>=0.43",
@@ -51,7 +52,6 @@ viz = [
   "pyvista>=0.43",
 ]
 test = [
-  "openpnm>=3.6,<3.7",
   "networkx>=3.2",
 ]
 docs = [

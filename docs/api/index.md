@@ -17,7 +17,7 @@
 | [`voids.generators`](generators.md) | Synthetic and mesh-based network generators |
 | [`voids.image`](image.md) | Image processing and connectivity helpers |
 | [`voids.visualization`](visualization.md) | Plotly and PyVista network rendering |
-| [`voids.workflows`](workflows.md) | High-level workflow entry points |
+| [`voids.simulators`](simulators.md) | Ready-to-run simulation entry points |
 | [`voids.benchmarks`](benchmarks.md) | Cross-check and validation utilities |
 
 ---

@@ -14,3 +14,9 @@ mesh-based pore networks for controlled experiments and validation.
 ## Porous Image Generators
 
 ::: voids.generators.porous_image
+
+---
+
+## Vug Templates
+
+::: voids.generators.vug_templates

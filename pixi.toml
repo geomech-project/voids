@@ -19,6 +19,7 @@ plotly = ">=5.0"
 [pypi-dependencies]
 voids = { path = ".", editable = true }
 porespy = ">=2.4"
+openpnm = ">=3.6,<3.7"
 pyvista = ">=0.43"
 
 [target.unix.activation.env]
@@ -42,7 +43,7 @@ typecheck = "mypy"
 test = "pytest -q"
 test-cov = "pytest --cov=voids --cov-report=term-missing"
 spec-check = "pytest -q tests/test_schema_network.py"
-examples-singlephase = "python -m voids.workflows.run_singlephase"
+examples-singlephase = "python -m voids.simulators.run_singlephase"
 precommit = "pre-commit run --all-files"
 crosscheck-roundtrip = "pytest -q tests/test_crosscheck_roundtrip.py"
 notebooks-smoke = "python -c 'from pathlib import Path; n=sorted(Path(\"notebooks\").glob(\"*.ipynb\")); print(len(n), [p.name for p in n])'"
@@ -71,9 +72,6 @@ trame = "3.*"
 
 [feature.test.dependencies]
 networkx = ">=3.2"
-
-[feature.test.pypi-dependencies]
-openpnm = ">=3.6,<3.7"
 
 [feature.docs.pypi-dependencies]
 mkdocs = ">=1.5,<2.0"
