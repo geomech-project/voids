@@ -20,6 +20,17 @@ from voids.generators.porous_image import (
     make_synthetic_grayscale,
     make_synthetic_grayscale_2d,
 )
+from voids.generators.vug_templates import (
+    build_image_vug_radii_2d,
+    build_image_vug_radii_3d,
+    build_lattice_vug_templates_2d,
+    build_lattice_vug_templates_3d,
+    equivalent_radius_2d,
+    equivalent_radius_3d,
+    format_radius_token,
+    match_ellipse_to_circle,
+    match_ellipsoid_to_sphere,
+)
 
 __all__ = [
     "generate_spanning_blobs_matrix",
@@ -40,4 +51,13 @@ __all__ = [
     "insert_vug_superpore",
     "insert_vug_superpore_2d",
     "insert_vug_superpore_3d",
+    "build_image_vug_radii_2d",
+    "build_image_vug_radii_3d",
+    "build_lattice_vug_templates_2d",
+    "build_lattice_vug_templates_3d",
+    "equivalent_radius_2d",
+    "equivalent_radius_3d",
+    "format_radius_token",
+    "match_ellipse_to_circle",
+    "match_ellipsoid_to_sphere",
 ]

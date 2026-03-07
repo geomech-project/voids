@@ -11,7 +11,7 @@ from voids.benchmarks.crosscheck import (
 )
 from voids.physics.petrophysics import absolute_porosity, effective_porosity
 from voids.physics.singlephase import FluidSinglePhase, PressureBC, SinglePhaseOptions
-from voids.workflows.network_extraction import (
+from voids.image.network_extraction import (
     NetworkExtractionResult,
     extract_spanning_pore_network,
 )
@@ -148,7 +148,7 @@ def benchmark_segmented_volume_with_openpnm(
     provenance_notes :
         Optional metadata attached to the extracted network provenance.
     strict :
-        Forwarded to :func:`voids.workflows.extract_spanning_pore_network`.
+        Forwarded to :func:`voids.image.extract_spanning_pore_network`.
 
     Returns
     -------

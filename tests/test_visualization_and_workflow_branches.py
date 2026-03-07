@@ -14,7 +14,7 @@ from voids.visualization.pyvista import (
     network_to_pyvista_polydata,
     plot_network_pyvista,
 )
-from voids.workflows.run_singlephase import main
+from voids.simulators.run_singlephase import main
 
 
 def test_plotly_validates_scalar_inputs_and_sampling(line_network) -> None:

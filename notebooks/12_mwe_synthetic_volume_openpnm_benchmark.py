@@ -21,11 +21,11 @@ import pandas as pd
 
 from voids.benchmarks import benchmark_segmented_volume_with_openpnm
 from voids.physics.singlephase import FluidSinglePhase, SinglePhaseOptions
-from voids.workflows import (
-    binarize_grayscale_volume,
+from voids.generators import (
     generate_spanning_blobs_matrix,
     make_synthetic_grayscale,
 )
+from voids.image import binarize_grayscale_volume
 
 # %%
 flow_axis = "x"

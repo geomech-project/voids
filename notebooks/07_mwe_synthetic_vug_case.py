@@ -39,11 +39,8 @@ from voids.physics.singlephase import (
     solve,
 )
 from voids.visualization import plot_network_plotly
-from voids.workflows import (
-    extract_spanning_pore_network,
-    infer_sample_axes,
-    preprocess_grayscale_cylindrical_volume,
-)
+from voids.image import preprocess_grayscale_cylindrical_volume
+from voids.image import extract_spanning_pore_network, infer_sample_axes
 
 examples_data = data_path()
 

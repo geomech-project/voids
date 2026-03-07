@@ -50,17 +50,16 @@ from voids.physics.singlephase import (
     solve,
 )
 from voids.visualization import plot_network_plotly
-from voids.workflows import (
-    binarize_2d_with_voids,
+from voids.generators import (
     build_image_vug_radii_2d,
     equivalent_radius_2d,
-    extract_spanning_pore_network,
     generate_spanning_matrix_2d,
-    has_spanning_cluster_2d,
     insert_circular_vug_2d,
     insert_elliptical_vug_2d,
     make_synthetic_grayscale_2d,
 )
+from voids.image import binarize_2d_with_voids, has_spanning_cluster_2d
+from voids.image import extract_spanning_pore_network
 
 
 # %%
@@ -158,8 +157,7 @@ elif MATRIX_GENERATOR_MODE == "single":
     MATRIX_GENERATORS = [MATRIX_GENERATOR_SINGLE]
 else:
     raise ValueError(
-        "MATRIX_GENERATOR_MODE must be 'compare' or 'single', got: "
-        f"{MATRIX_GENERATOR_MODE}"
+        f"MATRIX_GENERATOR_MODE must be 'compare' or 'single', got: {MATRIX_GENERATOR_MODE}"
     )
 
 MATRIX_GENERATORS = [str(g).strip().lower() for g in MATRIX_GENERATORS]
