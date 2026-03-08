@@ -1,9 +1,11 @@
 # Examples and Notebooks
 
 The `notebooks/` directory contains paired Jupyter notebooks and `py:percent` scripts
-that demonstrate all major `voids` workflows.
-Each notebook is both a tutorial and a regression artifact: running it to completion
-checks that the code path is still functional.
+covering the main `voids` workflows, from the smallest synthetic example to image-
+based sensitivity studies and OpenPNM benchmarks.
+
+Each notebook is both a tutorial and a regression artifact: if it no longer runs,
+some documented scientific workflow has drifted.
 
 ---
 
@@ -19,6 +21,28 @@ jupyter lab                  # open JupyterLab
 The notebooks rely on environment variables set by Pixi activation
 (`VOIDS_PROJECT_ROOT`, `VOIDS_DATA_PATH`, etc.), so they should be launched from
 within a Pixi-managed shell.
+
+In practice:
+
+- use `default` for most notebooks
+- use `test` when a notebook depends on OpenPNM cross-checks
+- expect the image-based notebooks to be materially heavier than the minimal demos
+
+---
+
+## Choosing A Notebook
+
+| Notebook | Best use |
+|---|---|
+| `01_mwe_singlephase_porosity_perm` | Learn the minimal solver API |
+| `02_mwe_openpnm_crosscheck_optional` | Verify consistency against OpenPNM |
+| `03_mwe_pyvista_visualization` | Inspect networks visually in 3-D |
+| `04_mwe_manufactured_porespy_extraction` | Start from a controlled synthetic void image |
+| `05_mwe_cartesian_mesh_network` | Generate mesh-like reference networks |
+| `06_mwe_real_porespy_extraction` | Run a realistic extracted-image workflow |
+| `07_mwe_synthetic_vug_case` | Study pruning and disconnected clusters |
+| `08` to `11` vug notebooks | Run controlled geometry-sensitivity studies |
+| `12_mwe_synthetic_volume_openpnm_benchmark` | Benchmark extracted-volume transport against OpenPNM |
 
 ---
 
@@ -132,3 +156,16 @@ realisations.
 
 Simplified 2D lattice counterpart with circular and elliptical vugs, multi-baseline
 sensitivity study, and `K/K0` frequency distributions.
+
+---
+
+### 12 — Synthetic Volume OpenPNM Benchmark
+
+**`12_mwe_synthetic_volume_openpnm_benchmark`**
+
+Builds synthetic spanning volumes, derives a synthetic grayscale segmentation,
+extracts a network with PoreSpy, and compares resulting `Kabs` predictions between
+`voids` and OpenPNM.
+
+This notebook is the closest thing in the current tree to an end-to-end extraction
+and solver-comparison benchmark.

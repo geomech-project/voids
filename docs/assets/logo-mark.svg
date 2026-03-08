@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 220" role="img" aria-labelledby="title">
+  <title>voids logo mark</title>
+  <defs>
+    <radialGradient id="badge" cx="50%" cy="42%" r="62%">
+      <stop offset="0%" stop-color="#232327"/>
+      <stop offset="100%" stop-color="#17181b"/>
+    </radialGradient>
+  </defs>
+  <circle cx="110" cy="110" r="102" fill="url(#badge)" stroke="#26282d" stroke-width="8"/>
+  <path
+    d="M61 55h26l23 84 23-84h26l-35 110H96L61 55Z"
+    fill="#f2f2f2"
+  />
+</svg>

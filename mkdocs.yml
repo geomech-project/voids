@@ -4,10 +4,11 @@ site_url: https://geomech-project.github.io/voids/
 repo_url: https://github.com/geomech-project/voids
 repo_name: geomech-project/voids
 edit_uri: edit/main/docs/
+strict: true
 
 theme:
   name: material
-  logo: assets/logo.png
+  logo: assets/logo-mark.svg
   favicon: assets/logo.png
   palette:
     - media: "(prefers-color-scheme: light)"
@@ -79,6 +80,7 @@ extra:
 nav:
   - Home: index.md
   - Getting Started: getting_started.md
+  - Scientific Workflow: workflow.md
   - Examples: examples.md
   - Theoretical Background: background.md
   - API Reference:

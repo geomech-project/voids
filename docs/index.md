@@ -34,6 +34,18 @@ from segmented images to simulation results involves many implicit choices:
 
 ---
 
+## Recommended Reading Path
+
+If you are new to the project, the shortest useful path is:
+
+1. [Getting Started](getting_started.md) for installation and the minimal solve
+2. [Scientific Workflow](workflow.md) for image-based or imported-network studies
+3. [Theoretical Background](background.md) for governing equations and assumptions
+4. [Examples](examples.md) for notebook-scale workflows
+5. [API Reference](api/index.md) for callable details
+
+---
+
 ## Goals
 
 - Provide a rigorous internal representation of pore-throat networks
@@ -41,6 +53,18 @@ from segmented images to simulation results involves many implicit choices:
 - Support import and normalization of extracted networks from external tools
 - Expose well-scoped physics modules with diagnostics and regression tests
 - Build confidence on single-phase transport first, then expand toward richer models
+
+---
+
+## What `voids` Is And Is Not
+
+`voids` is designed for explicit, scriptable scientific workflows.
+It is not a GUI application, and it is not intended to replace upstream segmentation
+or extraction tooling such as PoreSpy.
+
+That division of responsibility is deliberate: segmentation assumptions and network
+construction assumptions should remain visible in the provenance trail instead of
+being hidden behind a single opaque entry point.
 
 ---
 
@@ -87,6 +111,10 @@ print("mass_balance_error =", result.mass_balance_error)
 
 See [Getting Started](getting_started.md) for installation and a full walkthrough.
 
+For imported or extracted networks, the more realistic next step is
+[Scientific Workflow](workflow.md), which shows how to attach units, geometry, and
+provenance before solving.
+
 ---
 
 ## Status
@@ -94,3 +122,17 @@ See [Getting Started](getting_started.md) for installation and a full walkthroug
 `voids` is pre-alpha. The codebase is already useful for controlled PNM experiments,
 solver validation, and interoperability studies, but it should not be described as a
 complete pore-network simulation platform yet.
+
+---
+
+## Institutional Support
+
+`voids` receives institutional support from the
+[Laboratório Nacional de Computação Científica (LNCC)](https://www.gov.br/lncc/pt-br),
+a research unit of the Ministério da Ciência, Tecnologia e Inovação (MCTI), Brazil.
+
+<p align="center">
+  <a href="https://www.gov.br/lncc/pt-br">
+    <img src="assets/lncc-mcti.svg" alt="LNCC (MCTI) logo" style="max-width: 820px; width: 100%;">
+  </a>
+</p>

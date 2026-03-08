@@ -1,6 +1,7 @@
 # Getting Started
 
-This page covers installation, environment setup, and a minimal end-to-end workflow.
+This page covers installation, environment setup, and the smallest end-to-end
+workflow that exercises the current single-phase solver.
 
 ---
 
@@ -31,6 +32,14 @@ Pixi activation sets the following environment variables used by notebooks:
 | `VOIDS_EXAMPLES_PATH` | `examples/` directory |
 | `VOIDS_DATA_PATH` | `examples/data/` directory |
 
+After installation, the fastest sanity check is:
+
+```bash
+pixi run examples-singlephase
+```
+
+That command exercises the packaged demo workflow and prints a compact JSON summary.
+
 ### Editable pip install
 
 If you prefer a plain Python environment (Python ≥ 3.11):
@@ -52,7 +61,7 @@ python -m pip install -e ".[viz]"
 python -m pip install -e ".[test]"
 
 # All extras
-python -m pip install -e ".[dev,viz,test]"
+python -m pip install -e ".[dev,viz,test,docs]"
 ```
 
 ---
@@ -83,6 +92,15 @@ print("permeability x        =", result.permeability["x"])
 print("mass_balance_error    =", result.mass_balance_error)
 ```
 
+Assumptions to keep in mind:
+
+- the default demo network is synthetic and intentionally simple
+- `viscosity=1.0` is dimensionless unless you also define consistent physical units
+- permeability is only meaningful when the attached `SampleGeometry` is physically meaningful
+
+For extracted or imported networks, continue with
+[Scientific Workflow](workflow.md) rather than copying the synthetic example verbatim.
+
 ---
 
 ## Development Commands
@@ -98,22 +116,29 @@ Useful Pixi tasks for development:
 | `pixi run precommit` | Run all pre-commit hooks |
 | `pixi run notebooks-smoke` | List all paired notebooks |
 | `pixi run examples-singlephase` | Run the single-phase workflow entry point |
+| `pixi run docs-build` | Build the documentation in the docs environment |
+| `pixi run docs-serve` | Serve the documentation locally with live reload |
 
 ---
 
 ## Building the Docs Locally
 
-To build and preview this documentation locally using the dedicated Pixi environment:
+To build and preview this documentation locally:
 
 ```bash
 # Build the docs
-pixi run -e docs docs-build
+pixi run docs-build
 
 # Serve locally with live reload
-pixi run -e docs docs-serve
+pixi run docs-serve
 ```
 
-Then open <http://127.0.0.1:8000> in your browser.
+If you prefer, `pixi run -e docs docs-build` and `pixi run -e docs docs-serve`
+also work, but the explicit `-e docs` is redundant because the tasks already enter
+the docs environment.
+
+With the current MkDocs configuration, the local preview is served at
+<http://127.0.0.1:8000/voids/>.
 
 Alternatively, install the docs extra via pip and use `mkdocs` directly:
 
