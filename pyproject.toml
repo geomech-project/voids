@@ -54,6 +54,9 @@ viz = [
 test = [
   "networkx>=3.2",
 ]
+lbm = [
+  "xlb>=0.3,<0.4",
+]
 docs = [
   "mkdocs>=1.5,<2.0",
   "mkdocs-material>=9.5",

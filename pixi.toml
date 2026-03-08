@@ -41,6 +41,7 @@ lint = "ruff check src tests"
 format-check = "ruff format --check src tests"
 typecheck = "mypy"
 test = "pytest -q"
+test-lbm = "pytest -q tests/test_benchmark_xlb.py"
 test-cov = "pytest --cov=voids --cov-report=term-missing"
 spec-check = "pytest -q tests/test_schema_network.py"
 examples-singlephase = "python -m voids.simulators.run_singlephase"
@@ -73,6 +74,9 @@ trame = "3.*"
 [feature.test.dependencies]
 networkx = ">=3.2"
 
+[feature.lbm.pypi-dependencies]
+xlb = ">=0.3,<0.4"
+
 [feature.docs.pypi-dependencies]
 mkdocs = ">=1.5,<2.0"
 mkdocs-material = ">=9.5"
@@ -87,4 +91,5 @@ NO_MKDOCS_2_WARNING = "1"
 [environments]
 default = { features = ["dev", "viz"], solve-group = "default" }
 test = { features = ["dev", "viz", "test"], solve-group = "default" }
+lbm = { features = ["dev", "test", "lbm"], solve-group = "lbm" }
 docs = { features = ["docs"], solve-group = "docs" }

@@ -83,6 +83,9 @@ nav:
   - Concepts and Conventions: concepts.md
   - Scientific Workflow: workflow.md
   - Examples: examples.md
+  - Verification:
+    - Overview: verification/index.md
+    - XLB Direct-Image Permeability Benchmark: verification/xlb.md
   - Theoretical Background: background.md
   - API Reference:
     - Overview: api/index.md
