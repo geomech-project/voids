@@ -23,6 +23,8 @@ jobs:
 
       - name: Install Pixi
         uses: prefix-dev/setup-pixi@v0
+        with:
+          environments: default
 
       - name: Fetch PR base branch
         shell: bash

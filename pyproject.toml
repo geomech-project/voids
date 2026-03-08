@@ -54,6 +54,11 @@ viz = [
 test = [
   "networkx>=3.2",
 ]
+docs = [
+  "mkdocs>=1.5,<2.0",
+  "mkdocs-material>=9.5",
+  "mkdocstrings[python]>=0.25",
+]
 
 [project.urls]
 Homepage = "https://github.com/volpatto/voids"

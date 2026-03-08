@@ -21,6 +21,8 @@ jobs:
 
       - name: Install Pixi
         uses: prefix-dev/setup-pixi@v0
+        with:
+          environments: default
 
       - name: Run mypy
         shell: bash

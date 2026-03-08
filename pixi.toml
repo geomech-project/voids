@@ -50,6 +50,8 @@ notebooks-smoke = "python -c 'from pathlib import Path; n=sorted(Path(\"notebook
 register-kernels = "pixi run -e default python -m ipykernel install --user --name voids-default --display-name 'voids (default)' && pixi run -e test python -m ipykernel install --user --name voids-test --display-name 'voids (test)'"
 unregister-kernels = "python -m jupyter kernelspec uninstall -f voids-default voids-test"
 bump-version = "python scripts/bump_version.py"
+docs-build = "pixi run -e docs mkdocs build"
+docs-serve = "pixi run -e docs mkdocs serve"
 
 [feature.dev.dependencies]
 pytest = ">=8.0"
@@ -71,6 +73,12 @@ trame = "3.*"
 [feature.test.dependencies]
 networkx = ">=3.2"
 
+[feature.docs.pypi-dependencies]
+mkdocs = ">=1.5,<2.0"
+mkdocs-material = ">=9.5"
+mkdocstrings = {version = ">=0.25", extras = ["python"]}
+
 [environments]
 default = { features = ["dev", "viz"], solve-group = "default" }
 test = { features = ["dev", "viz", "test"], solve-group = "default" }
+docs = { features = ["docs"], solve-group = "docs" }
