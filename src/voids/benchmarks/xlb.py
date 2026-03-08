@@ -301,10 +301,13 @@ def solve_binary_volume_with_xlb(
 
     inlet_mask = np.zeros_like(aligned_void, dtype=bool)
     outlet_mask = np.zeros_like(aligned_void, dtype=bool)
-    # Pressure BCs are imposed on planar reservoir faces, with side-wall edges
-    # excluded because those cells belong to the sealed sample jacket.
-    inlet_mask[0, ...] = ~sealed_side_mask[0, ...]
-    outlet_mask[-1, ...] = ~sealed_side_mask[-1, ...]
+    # Pressure BCs are imposed on planar reservoir faces restricted to void voxels,
+    # with side-wall edges excluded because those cells belong to the sealed sample
+    # jacket.  Intersecting with ``aligned_void`` prevents solid voxels from being
+    # assigned a pressure BC, which would otherwise "open" them and corrupt the
+    # bounce-back assignment on line 319.
+    inlet_mask[0, ...] = aligned_void[0, ...] & ~sealed_side_mask[0, ...]
+    outlet_mask[-1, ...] = aligned_void[-1, ...] & ~sealed_side_mask[-1, ...]
     if not np.any(inlet_mask):
         raise ValueError(
             "The trimmed inlet plane has no interior void voxels for the requested flow axis"

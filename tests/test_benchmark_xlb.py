@@ -152,6 +152,8 @@ def test_import_xlb_success_with_stub_modules(monkeypatch: pytest.MonkeyPatch) -
     fake_jax = ModuleType("jax")
     fake_xlb = ModuleType("xlb")
     fake_xlb.__path__ = []
+    fake_xlb_operator = ModuleType("xlb.operator")
+    fake_xlb_operator.__path__ = []
     fake_compute_backend = ModuleType("xlb.compute_backend")
     fake_boundary_condition = ModuleType("xlb.operator.boundary_condition")
     fake_stepper = ModuleType("xlb.operator.stepper")
@@ -168,6 +170,7 @@ def test_import_xlb_success_with_stub_modules(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setitem(sys.modules, "jax", fake_jax)
     monkeypatch.setitem(sys.modules, "xlb", fake_xlb)
+    monkeypatch.setitem(sys.modules, "xlb.operator", fake_xlb_operator)
     monkeypatch.setitem(sys.modules, "xlb.compute_backend", fake_compute_backend)
     monkeypatch.setitem(sys.modules, "xlb.operator.boundary_condition", fake_boundary_condition)
     monkeypatch.setitem(sys.modules, "xlb.operator.stepper", fake_stepper)
