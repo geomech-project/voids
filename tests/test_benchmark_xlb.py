@@ -162,6 +162,167 @@ def test_xlb_helpers_cover_edge_cases() -> None:
     assert mapped_dp == pytest.approx(xlb_mod.DEFAULT_PRESSURE_DROP_LATTICE)
 
 
+def test_resolve_lattice_pressure_bc_accepts_all_supported_parameterizations() -> None:
+    """Resolve BCs from p_in+dp, p_out+dp, and legacy rho inputs."""
+
+    cs2 = xlb_mod.ISOTHERMAL_LATTICE_CS2
+
+    p_in_a, p_out_a = xlb_mod._resolve_lattice_pressure_bc(
+        XLBOptions(
+            pressure_inlet_lattice=0.4, pressure_outlet_lattice=None, pressure_drop_lattice=0.1
+        ),
+        cs2=cs2,
+    )
+    assert p_in_a == pytest.approx(0.4)
+    assert p_out_a == pytest.approx(0.3)
+
+    p_in_b, p_out_b = xlb_mod._resolve_lattice_pressure_bc(
+        XLBOptions(
+            pressure_inlet_lattice=None, pressure_outlet_lattice=0.2, pressure_drop_lattice=0.05
+        ),
+        cs2=cs2,
+    )
+    assert p_in_b == pytest.approx(0.25)
+    assert p_out_b == pytest.approx(0.2)
+
+    p_in_c, p_out_c = xlb_mod._resolve_lattice_pressure_bc(
+        XLBOptions(
+            pressure_inlet_lattice=None,
+            pressure_outlet_lattice=None,
+            pressure_drop_lattice=None,
+            rho_inlet=1.002,
+            rho_outlet=1.0,
+        ),
+        cs2=cs2,
+    )
+    assert p_in_c == pytest.approx(cs2 * 1.002)
+    assert p_out_c == pytest.approx(cs2 * 1.0)
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (
+            XLBOptions(
+                pressure_inlet_lattice=None,
+                pressure_outlet_lattice=None,
+                pressure_drop_lattice=None,
+                rho_inlet=None,
+                rho_outlet=None,
+            ),
+            "must define a positive lattice pressure drop",
+        ),
+        (
+            XLBOptions(
+                pressure_inlet_lattice=float("inf"),
+                pressure_outlet_lattice=0.2,
+                pressure_drop_lattice=None,
+            ),
+            "must be finite",
+        ),
+        (
+            XLBOptions(
+                pressure_inlet_lattice=0.1, pressure_outlet_lattice=-0.1, pressure_drop_lattice=None
+            ),
+            "must be positive",
+        ),
+    ],
+)
+def test_resolve_lattice_pressure_bc_rejects_invalid_configurations(
+    options: XLBOptions,
+    message: str,
+) -> None:
+    """Reject missing, non-finite, and non-positive pressure BCs."""
+
+    with pytest.raises(ValueError, match=message):
+        xlb_mod._resolve_lattice_pressure_bc(options, cs2=xlb_mod.ISOTHERMAL_LATTICE_CS2)
+
+
+@pytest.mark.parametrize(
+    ("delta_p", "voxel_size", "lattice_viscosity", "fluid", "message"),
+    [
+        (
+            0.0,
+            1.0e-6,
+            0.1,
+            FluidSinglePhase(viscosity=1.0e-3, density=1.0e3),
+            "Physical pressure drop must be positive",
+        ),
+        (
+            1.0,
+            0.0,
+            0.1,
+            FluidSinglePhase(viscosity=1.0e-3, density=1.0e3),
+            "voxel_size must be positive",
+        ),
+        (
+            1.0,
+            1.0e-6,
+            0.0,
+            FluidSinglePhase(viscosity=1.0e-3, density=1.0e3),
+            "lattice_viscosity must be positive",
+        ),
+        (
+            1.0,
+            1.0e-6,
+            0.1,
+            FluidSinglePhase(viscosity=0.0, density=1.0e3),
+            "Fluid viscosity must be positive",
+        ),
+        (
+            1.0,
+            1.0e-6,
+            0.1,
+            FluidSinglePhase(viscosity=1.0e-3, density=None),
+            "Fluid density must be positive",
+        ),
+        (
+            1.0,
+            1.0e-6,
+            0.1,
+            FluidSinglePhase(viscosity=1.0e-3, density=0.0),
+            "Fluid density must be positive",
+        ),
+    ],
+)
+def test_physical_pressure_drop_to_lattice_rejects_invalid_inputs(
+    delta_p: float,
+    voxel_size: float,
+    lattice_viscosity: float,
+    fluid: FluidSinglePhase,
+    message: str,
+) -> None:
+    """Validate scientific input constraints for pressure-drop mapping."""
+
+    with pytest.raises(ValueError, match=message):
+        xlb_mod._physical_pressure_drop_to_lattice(
+            delta_p,
+            voxel_size=voxel_size,
+            lattice_viscosity=lattice_viscosity,
+            fluid=fluid,
+        )
+
+
+def test_couple_xlb_options_to_physical_pressure_drop_rejects_large_density_jump() -> None:
+    """Guard against mapping to an excessively compressible lattice pressure drop."""
+
+    options = XLBOptions(
+        pressure_inlet_lattice=None,
+        pressure_outlet_lattice=xlb_mod.ISOTHERMAL_LATTICE_CS2,
+        pressure_drop_lattice=1.0e-6,
+        lattice_viscosity=0.1,
+    )
+    fluid = FluidSinglePhase(viscosity=1.0e-3, density=1.0e3)
+
+    with pytest.raises(ValueError, match="lattice density jump"):
+        xlb_mod._couple_xlb_options_to_physical_pressure_drop(
+            options,
+            delta_p_physical=1.0e9,
+            voxel_size=1.0e-6,
+            fluid=fluid,
+        )
+
+
 def test_xlb_options_steady_stokes_defaults() -> None:
     """Test the conservative preset used for steady creeping-flow studies."""
 
