@@ -178,11 +178,16 @@ and solver-comparison benchmark.
 
 **`13_mwe_synthetic_volume_xlb_benchmark`**
 
-Builds five synthetic segmented spanning volumes, solves them directly with XLB
+Builds fifteen synthetic segmented spanning volumes, solves them directly with XLB
 on the binary image, extracts pore networks with `snow2`, and compares resulting
 `Kabs` predictions between XLB and `voids`.
 
 This is the notebook to use when the scientific question is whether the extracted
 PNM workflow tracks a higher-fidelity voxel-scale reference closely enough.
+It also documents the actual LBM formulation used by the current XLB adapter and
+includes the shared pressure-drop mapping used to couple PNM and XLB, explains
+why the preferred high-level input is `delta_p` rather than an absolute
+pressure level, and includes a full 15-case steady Stokes-limit rerun alongside the standard
+benchmark-mode comparison.
 The corresponding narrative report is documented in
 [Verification / XLB Direct-Image Permeability Benchmark](verification/xlb.md).

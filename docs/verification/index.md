@@ -18,6 +18,9 @@ the code evolves.
 Current studies:
 
 - [XLB direct-image permeability benchmark](xlb.md)
+  This report includes the implemented LBM formulation, the permeability
+  mapping used in `voids`, the shared pressure-drop coupling used between PNM
+  and XLB, and a steady Stokes-limit interpretation of the same XLB operator.
 
 The corresponding reproducible notebook artifact is:
 
