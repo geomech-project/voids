@@ -145,6 +145,43 @@ def test_xlb_helpers_cover_edge_cases() -> None:
     profile = xlb_mod._superficial_velocity_profile(axial, void_mask)
     assert profile.tolist() == pytest.approx([1.25, 0.0])
 
+    p_in, p_out = xlb_mod._resolve_lattice_pressure_bc(
+        XLBOptions(),
+        cs2=xlb_mod.ISOTHERMAL_LATTICE_CS2,
+    )
+    assert p_out == pytest.approx(xlb_mod.ISOTHERMAL_LATTICE_CS2)
+    assert p_in - p_out == pytest.approx(xlb_mod.DEFAULT_PRESSURE_DROP_LATTICE)
+
+    fluid = FluidSinglePhase(viscosity=1.0e-3, density=1.0e3)
+    mapped_dp = xlb_mod._physical_pressure_drop_to_lattice(
+        25.0 / 3.0,
+        voxel_size=2.0e-6,
+        lattice_viscosity=0.1,
+        fluid=fluid,
+    )
+    assert mapped_dp == pytest.approx(xlb_mod.DEFAULT_PRESSURE_DROP_LATTICE)
+
+
+def test_xlb_options_steady_stokes_defaults() -> None:
+    """Test the conservative preset used for steady creeping-flow studies."""
+
+    options = XLBOptions.steady_stokes_defaults(check_interval=80)
+
+    assert options.formulation == "steady_stokes_limit"
+    assert options.lattice_viscosity == pytest.approx(0.10)
+    assert options.pressure_inlet_lattice is None
+    assert options.pressure_outlet_lattice is None
+    assert options.pressure_drop_lattice == pytest.approx(
+        xlb_mod.DEFAULT_STOKES_PRESSURE_DROP_LATTICE
+    )
+    assert options.rho_inlet is None
+    assert options.rho_outlet is None
+    assert options.inlet_outlet_buffer_cells == 6
+    assert options.max_steps == 4000
+    assert options.min_steps == 800
+    assert options.check_interval == 80
+    assert options.steady_rtol == pytest.approx(5.0e-4)
+
 
 def test_import_xlb_success_with_stub_modules(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test optional XLB import wiring without the real dependency."""
@@ -226,14 +263,26 @@ def test_benchmark_segmented_volume_with_xlb_rejects_invalid_rank() -> None:
     ("options", "message"),
     [
         (XLBOptions(backend="warp"), "supports only backend='jax'"),
+        (
+            XLBOptions(formulation="unknown"),
+            "formulation must be 'incompressible_navier_stokes' or 'steady_stokes_limit'",
+        ),
         (XLBOptions(max_steps=0), "max_steps must be positive"),
         (XLBOptions(min_steps=-1), "min_steps must be non-negative"),
         (XLBOptions(check_interval=0), "check_interval must be positive"),
         (XLBOptions(steady_rtol=0.0), "steady_rtol must be positive"),
         (XLBOptions(lattice_viscosity=0.0), "lattice_viscosity must be positive"),
         (
-            XLBOptions(rho_inlet=1.0, rho_outlet=1.0),
-            "rho_inlet must be greater than rho_outlet",
+            XLBOptions(
+                pressure_inlet_lattice=1.0,
+                pressure_outlet_lattice=1.0,
+                pressure_drop_lattice=None,
+            ),
+            "inlet lattice pressure must be greater than the outlet lattice pressure",
+        ),
+        (
+            XLBOptions(pressure_outlet_lattice=None, reference_density_lattice=0.0),
+            "reference_density_lattice must be positive",
         ),
         (
             XLBOptions(inlet_outlet_buffer_cells=-1),
@@ -339,6 +388,30 @@ def test_xlb_direct_solver_rejects_unknown_precision_policy(
         )
 
 
+def test_xlb_direct_solver_warns_on_large_stokes_limit_density_drop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that the Stokes-limit preset surfaces questionable forcing levels."""
+
+    _, fake_api = _make_fake_xlb_api([0.2, 0.2])
+    monkeypatch.setattr(xlb_mod, "_import_xlb", lambda: fake_api)
+
+    with pytest.warns(RuntimeWarning, match="steady_stokes_limit is being used"):
+        result = solve_binary_volume_with_xlb(
+            np.ones((4, 5), dtype=int),
+            voxel_size=1.0,
+            options=XLBOptions(
+                formulation="steady_stokes_limit",
+                max_steps=2,
+                min_steps=1,
+                check_interval=1,
+                pressure_drop_lattice=2.0e-4,
+            ),
+        )
+
+    assert result.formulation == "steady_stokes_limit"
+
+
 def test_xlb_direct_solver_2d_no_buffer_flow_axis_y(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -359,8 +432,7 @@ def test_xlb_direct_solver_2d_no_buffer_flow_axis_y(
             steady_rtol=1.0e-12,
             inlet_outlet_buffer_cells=0,
             lattice_viscosity=0.1,
-            rho_inlet=1.001,
-            rho_outlet=1.0,
+            pressure_drop_lattice=xlb_mod.DEFAULT_PRESSURE_DROP_LATTICE,
         ),
     )
 
@@ -371,8 +443,16 @@ def test_xlb_direct_solver_2d_no_buffer_flow_axis_y(
     assert result.inlet_outlet_buffer_cells == 0
     assert result.converged is True
     assert result.n_steps == 2
+    assert result.formulation == "incompressible_navier_stokes"
+    assert result.velocity_set == "_FakeVelocitySet"
+    assert result.collision_model == "BGK"
+    assert result.streaming_scheme == "pull"
+    assert result.velocity_lattice.shape == (2, *phases.shape)
     assert result.axial_velocity_lattice.shape == phases.shape
     assert np.all(result.axial_velocity_lattice > 0.0)
+    assert result.max_speed_lattice == pytest.approx(0.2)
+    assert result.max_mach_lattice > 0.0
+    assert result.reynolds_voxel_max == pytest.approx(2.0)
     assert result.permeability > 0.0
     assert result.backend_version == "fake-xlb"
 
@@ -508,13 +588,16 @@ def test_segmented_volume_xlb_to_record_handles_missing_voids_permeability() -> 
         sample_lengths={"x": 4.0},
         sample_cross_sections={"x": 6.0},
         lattice_viscosity=0.1,
+        lattice_pressure_inlet=xlb_mod.ISOTHERMAL_LATTICE_CS2 * 1.001,
+        lattice_pressure_outlet=xlb_mod.ISOTHERMAL_LATTICE_CS2,
         lattice_density_inlet=1.001,
         lattice_density_outlet=1.0,
-        lattice_pressure_drop=1.0e-3,
+        lattice_pressure_drop=xlb_mod.ISOTHERMAL_LATTICE_CS2 * 1.0e-3,
         inlet_outlet_buffer_cells=2,
         omega=1.25,
         superficial_velocity_lattice=0.2,
         superficial_velocity_profile_lattice=np.array([0.2, 0.2]),
+        velocity_lattice=np.ones((2, 2, 2), dtype=float),
         axial_velocity_lattice=np.ones((2, 2), dtype=float),
         converged=True,
         n_steps=20,
@@ -522,10 +605,17 @@ def test_segmented_volume_xlb_to_record_handles_missing_voids_permeability() -> 
         permeability=3.0,
         backend="jax",
         backend_version="fake-xlb",
+        formulation="steady_stokes_limit",
+        velocity_set="D3Q19",
+        collision_model="BGK",
+        streaming_scheme="pull",
+        max_speed_lattice=0.02,
+        max_mach_lattice=0.03,
+        reynolds_voxel_max=0.2,
     )
     result = xlb_mod.SegmentedVolumeXLBResult(
         extract=extract,
-        fluid=FluidSinglePhase(viscosity=1.0),
+        fluid=FluidSinglePhase(viscosity=1.0, density=1.0e3),
         bc=SimpleNamespace(pin=2.0e5, pout=1.0e5),
         options=SimpleNamespace(conductance_model="stub", solver="direct"),
         xlb_options=XLBOptions(),
@@ -543,6 +633,18 @@ def test_segmented_volume_xlb_to_record_handles_missing_voids_permeability() -> 
     assert np.isnan(record["k_voids"])
     assert record["k_xlb"] == pytest.approx(3.0)
     assert record["xlb_buffer_cells"] == 2
+    assert record["xlb_formulation"] == "steady_stokes_limit"
+    assert record["xlb_velocity_set"] == "D3Q19"
+    assert record["xlb_collision_model"] == "BGK"
+    assert record["xlb_streaming_scheme"] == "pull"
+    assert record["p_inlet_physical"] == pytest.approx(2.0e5)
+    assert record["p_outlet_physical"] == pytest.approx(1.0e5)
+    assert record["dp_physical"] == pytest.approx(1.0e5)
+    assert record["xlb_p_inlet"] == pytest.approx(xlb_mod.ISOTHERMAL_LATTICE_CS2 * 1.001)
+    assert record["xlb_p_outlet"] == pytest.approx(xlb_mod.ISOTHERMAL_LATTICE_CS2)
+    assert record["xlb_u_max_lattice"] == pytest.approx(0.02)
+    assert record["xlb_mach_max"] == pytest.approx(0.03)
+    assert record["xlb_re_voxel_max"] == pytest.approx(0.2)
 
 
 def test_benchmark_segmented_volume_with_xlb_uses_defaults_and_records(
@@ -604,6 +706,10 @@ def test_benchmark_segmented_volume_with_xlb_uses_defaults_and_records(
             "flow_axis": flow_axis,
             "options": options,
         }
+        p_in, p_out = xlb_mod._resolve_lattice_pressure_bc(
+            options,
+            cs2=xlb_mod.ISOTHERMAL_LATTICE_CS2,
+        )
         return xlb_mod.XLBDirectSimulationResult(
             flow_axis="x",
             voxel_size=float(voxel_size),
@@ -611,13 +717,16 @@ def test_benchmark_segmented_volume_with_xlb_uses_defaults_and_records(
             sample_lengths={"x": 4.0},
             sample_cross_sections={"x": 30.0},
             lattice_viscosity=0.1,
-            lattice_density_inlet=1.001,
-            lattice_density_outlet=1.0,
-            lattice_pressure_drop=1.0e-3,
+            lattice_pressure_inlet=p_in,
+            lattice_pressure_outlet=p_out,
+            lattice_density_inlet=p_in / xlb_mod.ISOTHERMAL_LATTICE_CS2,
+            lattice_density_outlet=p_out / xlb_mod.ISOTHERMAL_LATTICE_CS2,
+            lattice_pressure_drop=p_in - p_out,
             inlet_outlet_buffer_cells=6,
             omega=1.25,
             superficial_velocity_lattice=0.2,
             superficial_velocity_profile_lattice=np.array([0.2, 0.2, 0.2]),
+            velocity_lattice=np.ones((3, 4, 5, 6), dtype=float),
             axial_velocity_lattice=np.ones((4, 5, 6), dtype=float),
             converged=True,
             n_steps=100,
@@ -625,6 +734,13 @@ def test_benchmark_segmented_volume_with_xlb_uses_defaults_and_records(
             permeability=5.0,
             backend="jax",
             backend_version="fake-xlb",
+            formulation="steady_stokes_limit",
+            velocity_set="D3Q19",
+            collision_model="BGK",
+            streaming_scheme="pull",
+            max_speed_lattice=0.02,
+            max_mach_lattice=0.03,
+            reynolds_voxel_max=0.2,
         )
 
     monkeypatch.setattr(xlb_mod, "extract_spanning_pore_network", _fake_extract)
@@ -635,7 +751,10 @@ def test_benchmark_segmented_volume_with_xlb_uses_defaults_and_records(
 
     result = benchmark_segmented_volume_with_xlb(
         phases,
-        voxel_size=2.5,
+        voxel_size=2.5e-6,
+        delta_p=25.0 / 3.0,
+        pout=101325.0,
+        fluid=FluidSinglePhase(viscosity=1.0e-3, density=1.0e3),
         extraction_kwargs={"sigma": 1.2},
         strict=False,
     )
@@ -643,7 +762,7 @@ def test_benchmark_segmented_volume_with_xlb_uses_defaults_and_records(
 
     extract_args = captured["extract_args"]
     assert np.array_equal(extract_args["phases"], phases)
-    assert extract_args["voxel_size"] == pytest.approx(2.5)
+    assert extract_args["voxel_size"] == pytest.approx(2.5e-6)
     assert extract_args["flow_axis"] is None
     assert extract_args["length_unit"] == "m"
     assert extract_args["pressure_unit"] == "Pa"
@@ -656,17 +775,31 @@ def test_benchmark_segmented_volume_with_xlb_uses_defaults_and_records(
     assert solve_args["axis"] == "x"
     assert solve_args["bc"].inlet_label == "inlet_xmin"
     assert solve_args["bc"].outlet_label == "outlet_xmax"
-    assert solve_args["bc"].pin == pytest.approx(2.0e5)
-    assert solve_args["bc"].pout == pytest.approx(1.0e5)
+    assert solve_args["bc"].pin == pytest.approx(101325.0 + 25.0 / 3.0)
+    assert solve_args["bc"].pout == pytest.approx(101325.0)
     assert solve_args["fluid"].viscosity == pytest.approx(1.0e-3)
+    assert solve_args["fluid"].density == pytest.approx(1.0e3)
     assert solve_args["options"].conductance_model == "valvatne_blunt_baseline"
     assert solve_args["options"].solver == "direct"
 
     xlb_args = captured["xlb_args"]
     assert np.array_equal(xlb_args["phases"], phases)
-    assert xlb_args["voxel_size"] == pytest.approx(2.5)
+    assert xlb_args["voxel_size"] == pytest.approx(2.5e-6)
     assert xlb_args["flow_axis"] == "x"
     assert isinstance(xlb_args["options"], xlb_mod.XLBOptions)
+    expected_dp_lattice = xlb_mod._physical_pressure_drop_to_lattice(
+        25.0 / 3.0,
+        voxel_size=2.5e-6,
+        lattice_viscosity=0.1,
+        fluid=FluidSinglePhase(viscosity=1.0e-3, density=1.0e3),
+    )
+    assert xlb_args["options"].pressure_drop_lattice is None
+    assert xlb_args["options"].pressure_outlet_lattice == pytest.approx(
+        xlb_mod.ISOTHERMAL_LATTICE_CS2
+    )
+    assert xlb_args["options"].pressure_inlet_lattice == pytest.approx(
+        xlb_mod.ISOTHERMAL_LATTICE_CS2 + expected_dp_lattice
+    )
 
     assert result.image_porosity == pytest.approx(1.0)
     assert result.absolute_porosity == pytest.approx(0.55)
@@ -678,6 +811,37 @@ def test_benchmark_segmented_volume_with_xlb_uses_defaults_and_records(
     assert record["voids_mass_balance_error"] == pytest.approx(0.125)
     assert record["extract_backend"] == "porespy"
     assert record["xlb_backend_version"] == "fake-xlb"
+    assert record["xlb_formulation"] == "steady_stokes_limit"
+    assert record["p_inlet_physical"] == pytest.approx(101325.0 + 25.0 / 3.0)
+    assert record["p_outlet_physical"] == pytest.approx(101325.0)
+    assert record["dp_physical"] == pytest.approx(25.0 / 3.0)
+    assert record["xlb_mach_max"] == pytest.approx(0.03)
+    assert record["xlb_re_voxel_max"] == pytest.approx(0.2)
+
+
+def test_benchmark_segmented_volume_with_xlb_requires_density_for_pressure_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The coupled PNM/XLB benchmark needs a physical density for pressure scaling."""
+
+    extract = SimpleNamespace(
+        flow_axis="x",
+        net=SimpleNamespace(
+            Np=4,
+            Nt=3,
+            pore_labels={"inlet_xmin": [True, False], "outlet_xmax": [False, True]},
+        ),
+        backend="porespy",
+        backend_version="1.0",
+    )
+    monkeypatch.setattr(xlb_mod, "extract_spanning_pore_network", lambda *args, **kwargs: extract)
+
+    with pytest.raises(ValueError, match="requires `fluid.density`"):
+        benchmark_segmented_volume_with_xlb(
+            np.ones((4, 5, 6), dtype=int),
+            voxel_size=2.0e-6,
+            fluid=FluidSinglePhase(viscosity=1.0e-3),
+        )
 
 
 def test_benchmark_segmented_volume_with_xlb_rejects_empty_extracted_network(
@@ -710,18 +874,16 @@ def test_benchmark_segmented_volume_with_xlb_returns_positive_permeabilities() -
         warnings.simplefilter("ignore", RuntimeWarning)
         result = benchmark_segmented_volume_with_xlb(
             phases,
-            voxel_size=1.0,
+            voxel_size=1.0e-6,
             flow_axis="x",
-            length_unit="voxel",
-            fluid=FluidSinglePhase(viscosity=1.0),
+            fluid=FluidSinglePhase(viscosity=1.0e-3, density=1.0e3),
+            delta_p=10.0,
             provenance_notes={"case": "tiny_xlb"},
             xlb_options=XLBOptions(
                 max_steps=120,
                 min_steps=60,
                 check_interval=20,
                 lattice_viscosity=0.1,
-                rho_inlet=1.001,
-                rho_outlet=1.0,
             ),
         )
     record = result.to_record()
@@ -737,6 +899,13 @@ def test_benchmark_segmented_volume_with_xlb_returns_positive_permeabilities() -
     assert record["k_xlb"] > 0.0
     assert record["xlb_steps"] > 0
     assert record["xlb_backend"] == "jax"
+    assert record["xlb_formulation"] == "incompressible_navier_stokes"
+    assert record["xlb_velocity_set"] == "D3Q19"
+    assert record["xlb_collision_model"] == "BGK"
+    assert record["xlb_streaming_scheme"] == "pull"
+    assert record["xlb_u_max_lattice"] > 0.0
+    assert record["xlb_mach_max"] > 0.0
+    assert record["xlb_re_voxel_max"] > 0.0
 
 
 def test_xlb_direct_solver_open_duct_returns_finite_positive_permeability() -> None:
@@ -758,8 +927,7 @@ def test_xlb_direct_solver_open_duct_returns_finite_positive_permeability() -> N
                 check_interval=20,
                 steady_rtol=1.0e-4,
                 lattice_viscosity=0.1,
-                rho_inlet=1.001,
-                rho_outlet=1.0,
+                pressure_drop_lattice=xlb_mod.DEFAULT_PRESSURE_DROP_LATTICE,
             ),
         )
 
