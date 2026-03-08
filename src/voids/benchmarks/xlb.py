@@ -305,7 +305,7 @@ def solve_binary_volume_with_xlb(
     # with side-wall edges excluded because those cells belong to the sealed sample
     # jacket.  Intersecting with ``aligned_void`` prevents solid voxels from being
     # assigned a pressure BC, which would otherwise "open" them and corrupt the
-    # bounce-back assignment on line 319.
+    # bounce-back mask assignment below.
     inlet_mask[0, ...] = aligned_void[0, ...] & ~sealed_side_mask[0, ...]
     outlet_mask[-1, ...] = aligned_void[-1, ...] & ~sealed_side_mask[-1, ...]
     if not np.any(inlet_mask):
