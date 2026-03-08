@@ -40,6 +40,8 @@ jobs:
         uses: prefix-dev/setup-pixi@v0
         with:
           environments: test
+
+      - name: Run tests with coverage (Ubuntu only)
         if: runner.os == 'Linux'
         shell: bash
         run: |

@@ -15,6 +15,7 @@
 | [`voids.linalg`](linalg.md) | Linear-algebra assembly, solvers, and diagnostics |
 | [`voids.io`](io.md) | HDF5, PoreSpy, and OpenPNM I/O |
 | [`voids.generators`](generators.md) | Synthetic and mesh-based network generators |
+| [`voids.examples`](examples.md) | Deterministic synthetic networks and images for testing/demos |
 | [`voids.image`](image.md) | Image processing and connectivity helpers |
 | [`voids.visualization`](visualization.md) | Plotly and PyVista network rendering |
 | [`voids.simulators`](simulators.md) | Ready-to-run simulation entry points |

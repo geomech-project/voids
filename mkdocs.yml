@@ -95,6 +95,8 @@ nav:
       - api/linalg.md
     - I/O:
       - api/io.md
+    - Examples:
+      - api/examples.md
     - Generators:
       - api/generators.md
     - Image Processing:
