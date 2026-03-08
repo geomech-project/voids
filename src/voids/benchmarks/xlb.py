@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 import warnings
 
 import numpy as np
@@ -170,7 +169,7 @@ class SegmentedVolumeXLBResult:
     permeability_abs_diff: float
     permeability_rel_diff: float
 
-    def to_record(self) -> dict[str, Any]:
+    def to_record(self) -> dict[str, float | int | str | bool | None]:
         """Return scalar diagnostics suitable for tabulation."""
 
         k_voids = float((self.voids_result.permeability or {}).get(self.extract.flow_axis, np.nan))
@@ -292,8 +291,8 @@ def solve_binary_volume_with_xlb(
 
     sealed_side_mask = np.zeros_like(aligned_void, dtype=bool)
     for side_axis in range(1, aligned_void.ndim):
-        lower = [slice(None)] * aligned_void.ndim
-        upper = [slice(None)] * aligned_void.ndim
+        lower: list[slice | int] = [slice(None)] * aligned_void.ndim
+        upper: list[slice | int] = [slice(None)] * aligned_void.ndim
         lower[side_axis] = 0
         upper[side_axis] = -1
         sealed_side_mask[tuple(lower)] = True
@@ -344,8 +343,8 @@ def solve_binary_volume_with_xlb(
     )
     f_0, f_1, bc_mask, missing_mask = stepper.prepare_fields()
 
-    omega = 1.0 / (3.0 * float(xlb_options.lattice_viscosity) + 0.5)
-    omega = np.asarray(omega, dtype=precision_policy.compute_precision.jax_dtype)
+    omega_float = 1.0 / (3.0 * float(xlb_options.lattice_viscosity) + 0.5)
+    omega = np.asarray(omega_float, dtype=precision_policy.compute_precision.jax_dtype)
 
     axial_velocity_aligned = np.zeros_like(aligned_void, dtype=float)
     superficial_profile = np.zeros(aligned_void.shape[0], dtype=float)
@@ -355,7 +354,9 @@ def solve_binary_volume_with_xlb(
     converged = False
     n_steps = 0
 
-    def _measure_current_state(f_current) -> tuple[np.ndarray, np.ndarray, float]:
+    # f_current is a JAX array; typed as `object` because `jaxlib` types are
+    # not available in the default mypy environment (jax is an optional dep).
+    def _measure_current_state(f_current: object) -> tuple[np.ndarray, np.ndarray, float]:
         jax.block_until_ready(f_current)
         _, u = stepper.macroscopic(f_current)
         axial_full = np.asarray(u[0], dtype=float)
@@ -442,7 +443,7 @@ def solve_binary_volume_with_xlb(
         lattice_density_outlet=float(xlb_options.rho_outlet),
         lattice_pressure_drop=float(lattice_pressure_drop),
         inlet_outlet_buffer_cells=buffer_cells,
-        omega=float(np.asarray(omega)),
+        omega=omega_float,
         superficial_velocity_lattice=float(superficial_velocity),
         superficial_velocity_profile_lattice=np.asarray(superficial_profile, dtype=float),
         axial_velocity_lattice=np.asarray(axial_velocity_original, dtype=float),
