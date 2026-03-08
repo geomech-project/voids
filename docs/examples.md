@@ -26,6 +26,7 @@ In practice:
 
 - use `default` for most notebooks
 - use `test` when a notebook depends on OpenPNM cross-checks
+- use `lbm` when a notebook depends on the optional XLB direct-image benchmark
 - expect the image-based notebooks to be materially heavier than the minimal demos
 
 ---
@@ -43,6 +44,7 @@ In practice:
 | `07_mwe_synthetic_vug_case` | Study pruning and disconnected clusters |
 | `08` to `11` vug notebooks | Run controlled geometry-sensitivity studies |
 | `12_mwe_synthetic_volume_openpnm_benchmark` | Benchmark extracted-volume transport against OpenPNM |
+| `13_mwe_synthetic_volume_xlb_benchmark` | Benchmark direct-image LBM transport against extracted-network PNM |
 
 ---
 
@@ -169,3 +171,16 @@ extracts a network with PoreSpy, and compares resulting `Kabs` predictions betwe
 
 This notebook is the closest thing in the current tree to an end-to-end extraction
 and solver-comparison benchmark.
+
+---
+
+### 13 — Synthetic Volume XLB Benchmark
+
+**`13_mwe_synthetic_volume_xlb_benchmark`**
+
+Builds synthetic segmented spanning volumes, solves them directly with XLB on the
+binary image, extracts pore networks with `snow2`, and compares resulting `Kabs`
+predictions between XLB and `voids`.
+
+This is the notebook to use when the scientific question is whether the extracted
+PNM workflow tracks a higher-fidelity voxel-scale reference closely enough.

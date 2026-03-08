@@ -43,6 +43,7 @@ The current `v0.1.x` implementation includes:
 - HDF5 serialization
 - optional Plotly and PyVista network visualization
 - interoperability cross-checks against OpenPNM
+- optional direct-image permeability benchmarking against XLB
 - synthetic and manufactured examples for regression and tutorials
 
 Important boundaries:
@@ -64,6 +65,7 @@ This repository is configured for Pixi and exposes three main environments:
 
 - `default`: development + plotting + PyVista
 - `test`: everything in `default` plus OpenPNM and test-only dependencies
+- `lbm`: development + test dependencies plus the optional XLB stack
 - `docs`: MkDocs, Material for MkDocs, and mkdocstrings
 
 ```bash
@@ -89,7 +91,7 @@ python -m pip install -e .
 Optional extras:
 
 ```bash
-python -m pip install -e ".[dev,viz,test,docs]"
+python -m pip install -e ".[dev,viz,test,docs,lbm]"
 ```
 
 Assumption to keep in mind: the notebooks are exercised primarily through the Pixi
@@ -151,6 +153,8 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
   - simplified 2D lattice counterpart with circular/elliptical vugs, multi-baseline sensitivity, and `K/K0` frequency distributions
 - `12_mwe_synthetic_volume_openpnm_benchmark`
   - synthetic spanning volumes, synthetic grayscale segmentation, `snow2` extraction, and `Kabs` cross-checks between `voids` and OpenPNM
+- `13_mwe_synthetic_volume_xlb_benchmark`
+  - synthetic segmented volumes, direct-image XLB solves, extracted-network `voids` solves, and `Kabs` comparison between voxel-scale LBM and PNM
 
 Example data under `examples/data/` includes a deterministic manufactured void image and
 generated artifacts from the extraction/mesh notebooks.
