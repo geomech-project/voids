@@ -93,6 +93,9 @@ def _resolve_lattice_pressure_bc(
 ) -> tuple[float, float]:
     """Resolve inlet and outlet lattice pressures from the configured options."""
 
+    consistency_rtol = 1.0e-9
+    consistency_atol = 1.0e-12
+
     p_in = options.pressure_inlet_lattice
     p_out = options.pressure_outlet_lattice
     dp = options.pressure_drop_lattice
@@ -133,6 +136,29 @@ def _resolve_lattice_pressure_bc(
             "The inlet lattice pressure must be greater than the outlet lattice pressure "
             "for positive pressure-driven flow"
         )
+
+    if dp is not None:
+        resolved_dp = p_in - p_out
+        if not np.isclose(resolved_dp, float(dp), rtol=consistency_rtol, atol=consistency_atol):
+            raise ValueError(
+                "Inconsistent lattice pressure BCs: `pressure_drop_lattice` must match "
+                "`pressure_inlet_lattice - pressure_outlet_lattice`."
+            )
+
+    if options.rho_inlet is not None:
+        p_in_from_rho = float(cs2) * float(options.rho_inlet)
+        if not np.isclose(p_in, p_in_from_rho, rtol=consistency_rtol, atol=consistency_atol):
+            raise ValueError(
+                "Inconsistent lattice BCs: `pressure_inlet_lattice` is not compatible with "
+                "`rho_inlet` via `p = cs2 * rho`."
+            )
+    if options.rho_outlet is not None:
+        p_out_from_rho = float(cs2) * float(options.rho_outlet)
+        if not np.isclose(p_out, p_out_from_rho, rtol=consistency_rtol, atol=consistency_atol):
+            raise ValueError(
+                "Inconsistent lattice BCs: `pressure_outlet_lattice` is not compatible with "
+                "`rho_outlet` via `p = cs2 * rho`."
+            )
     return p_in, p_out
 
 

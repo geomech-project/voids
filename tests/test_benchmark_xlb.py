@@ -238,6 +238,35 @@ def test_resolve_lattice_pressure_bc_rejects_invalid_configurations(
         xlb_mod._resolve_lattice_pressure_bc(options, cs2=xlb_mod.ISOTHERMAL_LATTICE_CS2)
 
 
+def test_resolve_lattice_pressure_bc_rejects_inconsistent_pressure_drop() -> None:
+    """Reject conflicting redundant pressure BC specifications."""
+
+    options = XLBOptions(
+        pressure_inlet_lattice=0.5,
+        pressure_outlet_lattice=0.3,
+        pressure_drop_lattice=0.15,
+    )
+
+    with pytest.raises(ValueError, match="pressure_drop_lattice"):
+        xlb_mod._resolve_lattice_pressure_bc(options, cs2=xlb_mod.ISOTHERMAL_LATTICE_CS2)
+
+
+def test_resolve_lattice_pressure_bc_rejects_inconsistent_density_pressure_pairs() -> None:
+    """Reject conflicting pressure and density BC specifications."""
+
+    cs2 = xlb_mod.ISOTHERMAL_LATTICE_CS2
+    options = XLBOptions(
+        pressure_inlet_lattice=0.5,
+        pressure_outlet_lattice=cs2,
+        pressure_drop_lattice=None,
+        rho_inlet=1.0,
+        rho_outlet=1.0,
+    )
+
+    with pytest.raises(ValueError, match="pressure_inlet_lattice"):
+        xlb_mod._resolve_lattice_pressure_bc(options, cs2=cs2)
+
+
 @pytest.mark.parametrize(
     ("delta_p", "voxel_size", "lattice_viscosity", "fluid", "message"),
     [
