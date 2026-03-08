@@ -8,10 +8,11 @@ This page covers installation, environment setup, and a minimal end-to-end workf
 
 ### Recommended: Pixi
 
-The repository is configured for [Pixi](https://pixi.sh) and exposes two environments:
+The repository is configured for [Pixi](https://pixi.sh) and exposes three environments:
 
 - **`default`**: development + plotting + PyVista
 - **`test`**: everything in `default` plus OpenPNM and test-only dependencies
+- **`docs`**: MkDocs, mkdocs-material, and mkdocstrings for building this documentation
 
 ```bash
 # Install all environments from the lock file
@@ -102,17 +103,21 @@ Useful Pixi tasks for development:
 
 ## Building the Docs Locally
 
-To build and preview this documentation locally:
+To build and preview this documentation locally using the dedicated Pixi environment:
 
 ```bash
-# Install docs dependencies
-pip install "mkdocs>=1.5,<2.0" "mkdocs-material>=9.5" "mkdocstrings[python]>=0.25"
-
-# Build
-mkdocs build
+# Build the docs
+pixi run -e docs docs-build
 
 # Serve locally with live reload
-mkdocs serve
+pixi run -e docs docs-serve
 ```
 
 Then open <http://127.0.0.1:8000> in your browser.
+
+Alternatively, install the docs extra via pip and use `mkdocs` directly:
+
+```bash
+pip install -e ".[docs]"
+mkdocs serve
+```
