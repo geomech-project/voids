@@ -221,3 +221,4 @@ outputs/
 # DRP RAW images (keep local, do not track)
 examples/data/drp-317/*.raw
 examples/data/drp-443/*.raw
+examples/data/drp-10/*.raw
