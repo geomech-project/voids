@@ -76,6 +76,40 @@ def test_valvatne_baseline_uses_conduit_lengths_and_pore_geometry(line_network: 
     assert np.allclose(gv, [1 / 3, 1 / 3])
 
 
+def test_valvatne_baseline_accepts_distinct_pore_and_throat_viscosities(
+    line_network: Network,
+) -> None:
+    """Conduit conductance can use different pore and throat viscosity fields."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["pore1_length"] = np.array([0.25, 0.25])
+    net.throat["core_length"] = np.array([0.50, 0.50])
+    net.throat["pore2_length"] = np.array([0.25, 0.25])
+    gref = 1.0 / (4.0 * np.pi)
+    net.throat["shape_factor"] = np.array([gref, gref])
+    net.pore["shape_factor"] = np.array([gref, gref, gref])
+    net.throat["area"] = np.sqrt(2.0 * net.throat["core_length"] / gref)
+    net.pore["area"] = np.sqrt(2.0 * 0.25 / gref) * np.ones(net.Np)
+
+    pore_viscosity = np.array([1.0, 2.0, 4.0])
+    throat_viscosity = np.array([3.0, 5.0])
+    g = valvatne_blunt_baseline_conductance(
+        net,
+        viscosity=None,
+        pore_viscosity=pore_viscosity,
+        throat_viscosity=throat_viscosity,
+    )
+
+    expected = np.array(
+        [
+            1.0 / (1.0 / 1.0 + 1.0 / (1.0 / 3.0) + 1.0 / (1.0 / 2.0)),
+            1.0 / (1.0 / (1.0 / 2.0) + 1.0 / (1.0 / 5.0) + 1.0 / (1.0 / 4.0)),
+        ]
+    )
+    assert np.allclose(g, expected)
+
+
 def test_valvatne_uses_area_and_diameter_to_recover_missing_shape_factor(
     line_network: Network,
 ) -> None:
