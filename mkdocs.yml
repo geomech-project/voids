@@ -96,11 +96,20 @@ nav:
       - OpenPNM Extracted-Network Cross-Check: verification/openpnm.md
       - External pnextract / pnflow Benchmark: verification/pnflow.md
       - XLB Direct-Image Permeability Benchmark: verification/xlb.md
+      - DRP-443 Fracture-Network Verification Overview: verification/drp443.md
+      - DRP-10 Estaillades Verification Overview: verification/drp10.md
     - Validation:
       - Experimental Validation Overview: validation/index.md
-      - DRP-443 Fracture-Network Validation Overview: validation/drp443.md
       - DRP-317 Sandstone Validation Overview: validation/drp317.md
+      - DRP-317 Parker Notebook Report: validation/drp317_parker.md
+      - DRP-317 Kirby Notebook Report: validation/drp317_kirby.md
+      - DRP-317 Bandera Brown Notebook Report: validation/drp317_bandera_brown.md
+      - DRP-317 Berea Sister Gray Notebook Report: validation/drp317_berea_sister_gray.md
+      - DRP-317 Berea Upper Gray Notebook Report: validation/drp317_berea_upper_gray.md
       - DRP-317 Berea Notebook Report: validation/drp317_berea.md
+      - DRP-317 Castlegate Notebook Report: validation/drp317_castlegate.md
+      - DRP-317 Buff Berea Notebook Report: validation/drp317_buff_berea.md
+      - DRP-317 Leopard Notebook Report: validation/drp317_leopard.md
       - DRP-317 Bentheimer Notebook Report: validation/drp317_bentheimer.md
       - DRP-317 Bandera Gray Notebook Report: validation/drp317_banderagray.md
   - Theoretical Background: background.md

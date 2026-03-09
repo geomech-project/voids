@@ -60,9 +60,9 @@ In practice:
 | `26_mwe_drp317_kirby_raw_porosity_perm` | Run the DRP-317 Kirby raw-volume workflow against the Table 1 experimental references |
 | `27_mwe_drp317_leopard_raw_porosity_perm` | Run the DRP-317 Leopard raw-volume workflow against the Table 1 experimental references |
 | `28_mwe_drp317_parker_raw_porosity_perm` | Run the DRP-317 Parker raw-volume workflow against the Table 1 experimental references |
-| `29_mwe_drp443_ifn_raw_porosity_perm` | Validate DRP-443 IFN fractured-media permeability against SPE 212849 Table 2 |
-| `30_mwe_drp443_dilatedifn_raw_porosity_perm` | Validate DRP-443 Dilated IFN fractured-media permeability against SPE 212849 Table 2 |
-| `31_mwe_drp10_estaillades_raw_porosity_perm` | Validate DRP-10 Estaillades v2 carbonate permeability against Muljadi et al. (2016) Table 2 |
+| `29_mwe_drp443_ifn_raw_porosity_perm` | Benchmark DRP-443 IFN fractured-media permeability against SPE 212849 Table 2 (LBM reference) |
+| `30_mwe_drp443_dilatedifn_raw_porosity_perm` | Benchmark DRP-443 Dilated IFN fractured-media permeability against SPE 212849 Table 2 (LBM reference) |
+| `31_mwe_drp10_estaillades_raw_porosity_perm` | Benchmark DRP-10 Estaillades v2 carbonate permeability against Muljadi et al. (2016) Table 2 (OpenFOAM reference) |
 
 ---
 
@@ -321,7 +321,7 @@ The paper-reference values used by all eleven DRP-317 notebooks are committed in
 **`29_mwe_drp443_ifn_raw_porosity_perm`**
 **`30_mwe_drp443_dilatedifn_raw_porosity_perm`**
 
-These notebooks validate `voids` on two DRP-443 induced-fracture-network
+These notebooks benchmark `voids` on two DRP-443 induced-fracture-network
 volumes (`IFN` and `DilatedIFN`) using paper-reference values from SPE
 212849 Table 2.
 
@@ -330,6 +330,21 @@ selection/subvolume analysis), matching your fractured-media requirement.
 
 The extracted paper-reference values used by these notebooks are committed in
 `examples/data/drp-443/drp443_reference_values.csv`.
+
+The corresponding report is documented in
+[Verification & Validation / Verification / DRP-443 Fracture-Network Verification Overview](verification/drp443.md).
+
+---
+
+### 31 - DRP-10 Estaillades v2
+
+**`31_mwe_drp10_estaillades_raw_porosity_perm`**
+
+This notebook benchmarks `voids` on the DRP-10 Estaillades v2 carbonate volume
+using porosity and permeability references from Muljadi et al. (2016).
+
+The corresponding report is documented in
+[Verification & Validation / Verification / DRP-10 Estaillades Verification Overview](verification/drp10.md).
 
 ---
 

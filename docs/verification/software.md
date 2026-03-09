@@ -31,10 +31,20 @@ Current studies:
   mapping used in `voids`, the shared pressure-drop coupling used between PNM
   and XLB, and a steady Stokes-limit interpretation of the same XLB operator.
 
-The three current studies answer different questions:
+- [DRP-443 fracture-network verification overview](drp443.md)
+  This report benchmarks DRP-443 against paper values reported from an LBM
+  workflow, so it is treated as numerical-reference verification.
+
+- [DRP-10 Estaillades verification overview](drp10.md)
+  This report benchmarks DRP-10 against paper values reported from an OpenFOAM
+  workflow, so it is treated as numerical-reference verification.
+
+The current studies answer different questions:
 
 | Reference | Geometry seen by reference | Main question | Expected agreement |
 |---|---|---|---|
 | OpenPNM | Same extracted network as `voids` | Are export/import, BC handling, and solver assembly consistent? | Machine precision |
 | `pnextract` + `pnflow` | Independently extracted pore network | How different is the current `voids` image-to-network workflow from an external PNM workflow? | Moderate mismatch is expected |
 | XLB | Original voxel image | How different is extracted-network PNM from a direct-image voxel-scale reference? | Larger morphology-dependent mismatch is expected |
+| DRP-443 paper reference | Published LBM simulation outputs | Does the current workflow reproduce paper-scale directional permeability trends on fractured-media volumes? | Moderate mismatch is expected |
+| DRP-10 paper reference | Published OpenFOAM simulation outputs | Does the current workflow reproduce paper porosity/permeability on the Estaillades volume? | Moderate mismatch is expected |

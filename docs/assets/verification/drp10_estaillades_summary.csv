@@ -1,0 +1,5 @@
+property,estimated,units,paper_reference,abs_error,rel_error_pct,reference_label
+Porosity (image full volume),10.818036000000001,%,10.8,0.018036000000000385,0.16700000000000356,Muljadi et al. (2016) Table 1
+Porosity (network absolute),10.9801128,%,10.8,0.18011279999999985,1.6677111111111096,Muljadi et al. (2016) Table 1
+Porosity (network effective),10.9801128,%,10.8,0.18011279999999985,1.6677111111111096,Muljadi et al. (2016) Table 1
+Absolute permeability Kx,188.5889488432004,mD,172.0,16.5889488432004,9.644737699535115,Muljadi et al. (2016) Table 2

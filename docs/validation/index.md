@@ -23,7 +23,6 @@ come from any part of the workflow, including:
 
 Current validation studies:
 
-- [DRP-443 fracture-network validation overview](drp443.md)
 - [DRP-317 sandstone validation overview](drp317.md)
 - [DRP-317 Parker notebook report](drp317_parker.md)
 - [DRP-317 Kirby notebook report](drp317_kirby.md)
@@ -46,12 +45,3 @@ The DRP-317 pages use these cited sources:
   Barbalho, H., Trevizan, W. A., Bonagamba, T. J., & Steiner, M. B. (2021).
   *High accuracy capillary network representation in digital rock reveals permeability scaling functions*.
   *Scientific Reports, 11*, 11370. <https://doi.org/10.1038/s41598-021-90090-0>
-
-The DRP-443 page uses:
-
-- Dataset: Digital Porous Media Portal, DRP-443.
-  <https://digitalporousmedia.org/published-datasets/drp.project.published.DRP-443>
-- Experimental reference paper: Song, W., Prodanovic, M., Santos, J. E., Yao, J.,
-  Zhang, K., & Yang, Y. (2022). *Upscaling of Transport Properties in Complex
-  Hydraulic Fracture Systems*. *SPE Journal*.
-  <https://doi.org/10.2118/212849-PA>
