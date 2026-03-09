@@ -360,7 +360,20 @@ def _override_area_from_shape_factor_and_radius(data: dict[str, np.ndarray]) -> 
             " overridden; found non-positive or non-finite values in shape_factor"
         )
     r = np.asarray(data["radius_inscribed"], dtype=float)
-    data["area"] = r * r / (4.0 * g)
+    with np.errstate(divide="raise", over="raise", invalid="raise"):
+        try:
+            area = r * r / (4.0 * g)
+        except FloatingPointError as exc:
+            raise ValueError(
+                "Failed to compute area from radius_inscribed and shape_factor:"
+                " non-finite result due to numerical overflow or invalid operation"
+            ) from exc
+    if not np.all(np.isfinite(area)) or not np.all(area > 0.0):
+        raise ValueError(
+            "Computed area must be positive and finite for all elements; found non-positive"
+            " or non-finite values in area derived from radius_inscribed and shape_factor"
+        )
+    data["area"] = area
     return True
 
 
