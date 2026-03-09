@@ -51,6 +51,7 @@ notebooks-smoke = "python -c 'from pathlib import Path; n=sorted(Path(\"notebook
 register-kernels = "pixi run -e default python -m ipykernel install --user --name voids-default --display-name 'voids (default)' && pixi run -e test python -m ipykernel install --user --name voids-test --display-name 'voids (test)'"
 unregister-kernels = "python -m jupyter kernelspec uninstall -f voids-default voids-test"
 bump-version = "python scripts/bump_version.py"
+sync-deps = "python scripts/sync_deps.py"
 docs-build = "pixi run -e docs mkdocs build"
 docs-serve = "pixi run -e docs mkdocs serve"
 
