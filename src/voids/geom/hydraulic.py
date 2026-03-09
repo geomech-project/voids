@@ -18,6 +18,43 @@ _TRIANGLE_COEFF_AG2: Final[float] = 3.0 / 5.0
 _SQUARE_COEFF_AG2: Final[float] = 0.5623
 
 
+def _broadcast_viscosity(viscosity: float | np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
+    """Broadcast a viscosity scalar or array to the requested shape."""
+
+    mu = np.asarray(viscosity, dtype=float)
+    if not np.all(np.isfinite(mu)):
+        raise ValueError("viscosity must contain only finite values")
+    if np.any(mu <= 0.0):
+        raise ValueError("viscosity must be positive")
+    try:
+        return np.broadcast_to(mu, shape).astype(float, copy=False)
+    except ValueError as exc:
+        raise ValueError(f"viscosity is not broadcastable to shape {shape}") from exc
+
+
+def _resolve_pore_throat_viscosities(
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    *,
+    pore_viscosity: float | np.ndarray | None = None,
+    throat_viscosity: float | np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Resolve pore-wise and throat-wise viscosity arrays."""
+
+    if pore_viscosity is None:
+        if viscosity is None:
+            raise ValueError("Need either viscosity or pore_viscosity")
+        pore_viscosity = viscosity
+    if throat_viscosity is None:
+        if viscosity is None:
+            raise ValueError("Need either viscosity or throat_viscosity")
+        throat_viscosity = viscosity
+    return (
+        _broadcast_viscosity(pore_viscosity, (net.Np,)),
+        _broadcast_viscosity(throat_viscosity, (net.Nt,)),
+    )
+
+
 def _require(net: Network, kind: str, names: tuple[str, ...]) -> None:
     """Require a set of pore or throat fields.
 
@@ -260,7 +297,7 @@ def _segment_conductance_from_agl(
     area: np.ndarray,
     shape_factor: np.ndarray,
     length: np.ndarray,
-    viscosity: float,
+    viscosity: float | np.ndarray,
     *,
     clip_shape_factor: bool = True,
 ) -> np.ndarray:
@@ -300,11 +337,10 @@ def _segment_conductance_from_agl(
     recovers Hagen-Poiseuille conductance.
     """
 
-    if viscosity <= 0:
-        raise ValueError("viscosity must be positive")
     a = np.asarray(area, dtype=float)
     gsf = np.asarray(shape_factor, dtype=float)
     L = np.asarray(length, dtype=float)
+    mu = _broadcast_viscosity(viscosity, a.shape)
     if np.any(a < 0):
         raise ValueError("area contains negative values")
     if np.any(L < 0):
@@ -315,7 +351,7 @@ def _segment_conductance_from_agl(
         gsf = np.clip(gsf, 1e-12, 1.0)
     out = np.full_like(a, np.inf, dtype=float)
     nz = L > 0
-    out[nz] = (_CIRCLE_COEFF_AG2 * gsf[nz] * a[nz] ** 2) / (viscosity * L[nz])
+    out[nz] = (_CIRCLE_COEFF_AG2 * gsf[nz] * a[nz] ** 2) / (mu[nz] * L[nz])
     return out
 
 
@@ -353,7 +389,7 @@ def _segment_conductance_valvatne_blunt(
     area: np.ndarray,
     shape_factor: np.ndarray,
     length: np.ndarray,
-    viscosity: float,
+    viscosity: float | np.ndarray,
     *,
     clip_shape_factor: bool = True,
 ) -> np.ndarray:
@@ -379,11 +415,10 @@ def _segment_conductance_valvatne_blunt(
         Hydraulic conductance array.
     """
 
-    if viscosity <= 0:
-        raise ValueError("viscosity must be positive")
     a = np.asarray(area, dtype=float)
     gsf = np.asarray(shape_factor, dtype=float)
     L = np.asarray(length, dtype=float)
+    mu = _broadcast_viscosity(viscosity, a.shape)
     if np.any(a < 0):
         raise ValueError("area contains negative values")
     if np.any(L < 0):
@@ -395,11 +430,16 @@ def _segment_conductance_valvatne_blunt(
     coeff = _conductance_coefficient_from_shape_factor(gsf)
     out = np.full_like(a, np.inf, dtype=float)
     nz = L > 0
-    out[nz] = (coeff[nz] * gsf[nz] * a[nz] ** 2) / (viscosity * L[nz])
+    out[nz] = (coeff[nz] * gsf[nz] * a[nz] ** 2) / (mu[nz] * L[nz])
     return out
 
 
-def generic_poiseuille_conductance(net: Network, viscosity: float) -> np.ndarray:
+def generic_poiseuille_conductance(
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    *,
+    throat_viscosity: float | np.ndarray | None = None,
+) -> np.ndarray:
     """Compute throat conductance using a circular Poiseuille approximation.
 
     Parameters
@@ -431,8 +471,10 @@ def generic_poiseuille_conductance(net: Network, viscosity: float) -> np.ndarray
     ``throat.area``.
     """
 
-    if viscosity <= 0:
-        raise ValueError("viscosity must be positive")
+    mu_t = _broadcast_viscosity(
+        throat_viscosity if throat_viscosity is not None else viscosity,
+        (net.Nt,),
+    )
     if "hydraulic_conductance" in net.throat:
         g = np.asarray(net.throat["hydraulic_conductance"], dtype=float)
         if (g < 0).any():
@@ -450,7 +492,7 @@ def generic_poiseuille_conductance(net: Network, viscosity: float) -> np.ndarray
             "Need throat.diameter_inscribed or throat.area (or precomputed hydraulic_conductance)"
         )
     r = 0.5 * d
-    return (np.pi * r**4) / (8.0 * viscosity * L)
+    return (np.pi * r**4) / (8.0 * mu_t * L)
 
 
 def _conduit_lengths_available(net: Network) -> bool:
@@ -497,7 +539,12 @@ def _harmonic_combine_segments(*segments: np.ndarray) -> np.ndarray:
     return out
 
 
-def _throat_only_shape_factor_conductance(net: Network, viscosity: float) -> np.ndarray:
+def _throat_only_shape_factor_conductance(
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    *,
+    throat_viscosity: float | np.ndarray | None = None,
+) -> np.ndarray:
     """Compute conductance using only throat geometry.
 
     Parameters
@@ -517,10 +564,17 @@ def _throat_only_shape_factor_conductance(net: Network, viscosity: float) -> np.
     L = np.asarray(net.throat["length"], dtype=float)
     A = _get_entity_area(net, "throat")
     G = _get_entity_shape_factor(net, "throat", area=A)
-    return _segment_conductance_valvatne_blunt(A, G, L, viscosity)
+    mu_t = throat_viscosity if throat_viscosity is not None else viscosity
+    return _segment_conductance_valvatne_blunt(A, G, L, mu_t)
 
 
-def _valvatne_conduit_baseline(net: Network, viscosity: float) -> np.ndarray:
+def _valvatne_conduit_baseline(
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    *,
+    pore_viscosity: float | np.ndarray | None = None,
+    throat_viscosity: float | np.ndarray | None = None,
+) -> np.ndarray:
     """Compute a conduit-based conductance baseline using pore and throat segments.
 
     Parameters
@@ -544,11 +598,17 @@ def _valvatne_conduit_baseline(net: Network, viscosity: float) -> np.ndarray:
 
     if not _conduit_lengths_available(net):
         raise KeyError("Missing conduit lengths (pore1_length, core_length, pore2_length)")
+    mu_p, mu_t = _resolve_pore_throat_viscosities(
+        net,
+        viscosity,
+        pore_viscosity=pore_viscosity,
+        throat_viscosity=throat_viscosity,
+    )
 
     At = _get_entity_area(net, "throat")
     Gt = _get_entity_shape_factor(net, "throat", area=At)
     Lt = np.asarray(net.throat["core_length"], dtype=float)
-    gt = _segment_conductance_valvatne_blunt(At, Gt, Lt, viscosity)
+    gt = _segment_conductance_valvatne_blunt(At, Gt, Lt, mu_t)
 
     conns = net.throat_conns
     p1_idx = conns[:, 0]
@@ -556,15 +616,26 @@ def _valvatne_conduit_baseline(net: Network, viscosity: float) -> np.ndarray:
     Ap = _get_entity_area(net, "pore")
     Gp = _get_entity_shape_factor(net, "pore", area=Ap)
     g1 = _segment_conductance_valvatne_blunt(
-        Ap[p1_idx], Gp[p1_idx], np.asarray(net.throat["pore1_length"], dtype=float), viscosity
+        Ap[p1_idx],
+        Gp[p1_idx],
+        np.asarray(net.throat["pore1_length"], dtype=float),
+        mu_p[p1_idx],
     )
     g2 = _segment_conductance_valvatne_blunt(
-        Ap[p2_idx], Gp[p2_idx], np.asarray(net.throat["pore2_length"], dtype=float), viscosity
+        Ap[p2_idx],
+        Gp[p2_idx],
+        np.asarray(net.throat["pore2_length"], dtype=float),
+        mu_p[p2_idx],
     )
     return _harmonic_combine_segments(g1, gt, g2)
 
 
-def valvatne_blunt_throat_conductance(net: Network, viscosity: float) -> np.ndarray:
+def valvatne_blunt_throat_conductance(
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    *,
+    throat_viscosity: float | np.ndarray | None = None,
+) -> np.ndarray:
     """Compute shape-aware throat conductance using throat geometry only.
 
     Parameters
@@ -587,14 +658,26 @@ def valvatne_blunt_throat_conductance(net: Network, viscosity: float) -> np.ndar
         If required throat geometry is unavailable.
     """
 
-    if viscosity <= 0:
-        raise ValueError("viscosity must be positive")
+    _broadcast_viscosity(
+        throat_viscosity if throat_viscosity is not None else viscosity,
+        (net.Nt,),
+    )
     if "hydraulic_conductance" in net.throat:
-        return generic_poiseuille_conductance(net, viscosity)
-    return _throat_only_shape_factor_conductance(net, viscosity)
+        return generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
+    return _throat_only_shape_factor_conductance(
+        net,
+        viscosity,
+        throat_viscosity=throat_viscosity,
+    )
 
 
-def valvatne_blunt_conductance(net: Network, viscosity: float) -> np.ndarray:
+def valvatne_blunt_conductance(
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    *,
+    pore_viscosity: float | np.ndarray | None = None,
+    throat_viscosity: float | np.ndarray | None = None,
+) -> np.ndarray:
     """Compute a shape-factor-aware single-phase conductance following Valvatne-Blunt.
 
     Parameters
@@ -636,32 +719,56 @@ def valvatne_blunt_conductance(net: Network, viscosity: float) -> np.ndarray:
     intentionally out of scope here.
     """
 
-    if viscosity <= 0:
-        raise ValueError("viscosity must be positive")
+    _resolve_pore_throat_viscosities(
+        net,
+        viscosity,
+        pore_viscosity=pore_viscosity,
+        throat_viscosity=throat_viscosity,
+    )
 
     if "hydraulic_conductance" in net.throat:
-        return generic_poiseuille_conductance(net, viscosity)
+        return generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
 
     try:
-        return _valvatne_conduit_baseline(net, viscosity)
+        return _valvatne_conduit_baseline(
+            net,
+            viscosity,
+            pore_viscosity=pore_viscosity,
+            throat_viscosity=throat_viscosity,
+        )
     except KeyError:
         pass
 
     try:
-        return _throat_only_shape_factor_conductance(net, viscosity)
+        return _throat_only_shape_factor_conductance(
+            net,
+            viscosity,
+            throat_viscosity=throat_viscosity,
+        )
     except KeyError:
         warnings.warn(
             "Insufficient geometry for shape-factor model; falling back to generic_poiseuille",
             RuntimeWarning,
             stacklevel=2,
         )
-        return generic_poiseuille_conductance(net, viscosity)
+        return generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
 
 
-def valvatne_blunt_baseline_conductance(net: Network, viscosity: float) -> np.ndarray:
+def valvatne_blunt_baseline_conductance(
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    *,
+    pore_viscosity: float | np.ndarray | None = None,
+    throat_viscosity: float | np.ndarray | None = None,
+) -> np.ndarray:
     """Backward-compatible alias for :func:`valvatne_blunt_conductance`."""
 
-    return valvatne_blunt_conductance(net, viscosity)
+    return valvatne_blunt_conductance(
+        net,
+        viscosity,
+        pore_viscosity=pore_viscosity,
+        throat_viscosity=throat_viscosity,
+    )
 
 
 def available_conductance_models() -> tuple[str, ...]:
@@ -682,7 +789,12 @@ def available_conductance_models() -> tuple[str, ...]:
 
 
 def throat_conductance(
-    net: Network, viscosity: float, model: str = "generic_poiseuille"
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    model: str = "generic_poiseuille",
+    *,
+    pore_viscosity: float | np.ndarray | None = None,
+    throat_viscosity: float | np.ndarray | None = None,
 ) -> np.ndarray:
     """Dispatch to a throat hydraulic conductance model.
 
@@ -707,11 +819,25 @@ def throat_conductance(
     """
 
     if model == "generic_poiseuille":
-        return generic_poiseuille_conductance(net, viscosity)
+        return generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
     if model == "valvatne_blunt_throat":
-        return valvatne_blunt_throat_conductance(net, viscosity)
+        return valvatne_blunt_throat_conductance(
+            net,
+            viscosity,
+            throat_viscosity=throat_viscosity,
+        )
     if model == "valvatne_blunt":
-        return valvatne_blunt_conductance(net, viscosity)
+        return valvatne_blunt_conductance(
+            net,
+            viscosity,
+            pore_viscosity=pore_viscosity,
+            throat_viscosity=throat_viscosity,
+        )
     if model == "valvatne_blunt_baseline":
-        return valvatne_blunt_conductance(net, viscosity)
+        return valvatne_blunt_conductance(
+            net,
+            viscosity,
+            pore_viscosity=pore_viscosity,
+            throat_viscosity=throat_viscosity,
+        )
     raise ValueError(f"Unknown conductance model '{model}'")
