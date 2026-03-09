@@ -83,7 +83,9 @@ drp317_dataset_citation = (
     "11 Sandstones: raw, filtered and segmented data [Dataset]. "
     "Digital Porous Media Portal. https://www.doi.org/10.17612/f4h1-w124"
 )
-drp317_dataset_url = "https://digitalporousmedia.org/published-datasets/drp.project.published.DRP-317"
+drp317_dataset_url = (
+    "https://digitalporousmedia.org/published-datasets/drp.project.published.DRP-317"
+)
 drp317_paper_citation = (
     "Neumann, R. F., Barsi-Andreeta, M., Lucas-Oliveira, E., Barbalho, H., "
     "Trevizan, W. A., Bonagamba, T. J., & Steiner, M. B. (2021). "
@@ -142,8 +144,8 @@ viscosity_model = TabulatedWaterViscosityModel.from_backend(
     pressure_points=viscosity_pressure_points,
 )
 
-# %%
 
+# %%
 def infer_cubic_shape_from_bytes(path: Path) -> tuple[int, int, int]:
     """Infer cubic shape for a uint8 RAW file from byte size."""
     n_bytes = int(path.stat().st_size)
@@ -206,7 +208,8 @@ def resolve_phase_convention(
             phi_ref = 0.01 * reference_porosity_pct
             selected = (
                 "void_is_zero"
-                if abs(phi_if_void_is_zero - phi_ref) <= abs(phi_if_void_is_one - phi_ref)
+                if abs(phi_if_void_is_zero - phi_ref)
+                <= abs(phi_if_void_is_one - phi_ref)
                 else "void_is_one"
             )
     else:
@@ -261,14 +264,17 @@ def scan_roi_origins_by_porosity(
         slx, sly, slz = roi_slices(full_shape, sub_shape, origin)
         raw_block = np.asarray(raw_image[slx, sly, slz], dtype=np.uint8)
         phi_block = float(
-            np.mean(raw_to_void_image(raw_block, selected_convention=selected_convention))
+            np.mean(
+                raw_to_void_image(raw_block, selected_convention=selected_convention)
+            )
         )
         records.append(
             {
                 "origin": tuple(int(v) for v in origin),
                 "porosity_pct": 100.0 * phi_block,
                 "target_porosity_pct": 100.0 * target_porosity,
-                "abs_porosity_error_pct_points": 100.0 * abs(phi_block - target_porosity),
+                "abs_porosity_error_pct_points": 100.0
+                * abs(phi_block - target_porosity),
             }
         )
 
@@ -308,7 +314,9 @@ im_full = np.memmap(raw_path, mode="r", dtype=np.uint8, shape=full_shape)
 print(f"RAW path: {raw_path}")
 print(f"Inferred shape: {full_shape}")
 print(f"dtype: {im_full.dtype}")
-print(f"Unique values (first 1e6 voxels): {np.unique(np.asarray(im_full[:100, :100, :100]))}")
+print(
+    f"Unique values (first 1e6 voxels): {np.unique(np.asarray(im_full[:100, :100, :100]))}"
+)
 
 # %%
 selected_phase_convention, phi_void_is_zero, phi_void_is_one = resolve_phase_convention(
@@ -426,6 +434,7 @@ print(f"Flow axis used: {flow_axis}")
 print(f"Axis lengths [m]: {axis_lengths}")
 print(f"Axis areas [m^2]: {axis_areas}")
 
+
 # %%
 def extract_axis_network(axis: str):
     """Extract one axis-spanning network under the selected paper-like settings."""
@@ -490,6 +499,7 @@ print(
 # %%
 phi_abs = absolute_porosity(net)
 phi_eff = effective_porosity(net, axis=flow_axis)
+
 
 def solve_axis_with_fallback(net_axis, axis: str):
     """Solve one axis using the configured conductance models."""
@@ -563,11 +573,17 @@ for ax in axes_available:
         }
     )
 
-kabs_directional = pd.DataFrame(directional_records).sort_values("axis").reset_index(drop=True)
+kabs_directional = (
+    pd.DataFrame(directional_records).sort_values("axis").reset_index(drop=True)
+)
 kabs_mean_mD = float(kabs_directional["k_mD"].mean())
 kabs_mean_m2 = float(kabs_directional["k_m2"].mean())
-kabs_rms_mD = float(np.sqrt(np.mean(np.square(kabs_directional["k_mD"].to_numpy(dtype=float)))))
-kabs_rms_m2 = float(np.sqrt(np.mean(np.square(kabs_directional["k_m2"].to_numpy(dtype=float)))))
+kabs_rms_mD = float(
+    np.sqrt(np.mean(np.square(kabs_directional["k_mD"].to_numpy(dtype=float))))
+)
+kabs_rms_m2 = float(
+    np.sqrt(np.mean(np.square(kabs_directional["k_m2"].to_numpy(dtype=float))))
+)
 kabs_mean_abs_error_mD = kabs_mean_mD - experimental_kabs_mD
 kabs_mean_rel_error_pct = 100.0 * kabs_mean_abs_error_mD / experimental_kabs_mD
 kabs_rms_abs_error_mD = kabs_rms_mD - experimental_kabs_mD
@@ -620,7 +636,9 @@ for _, row in kabs_directional.iterrows():
         "units": "mD",
         "experimental": experimental_kabs_mD,
         "abs_error": k_dir_mD - experimental_kabs_mD,
-        "rel_error_pct": 100.0 * (k_dir_mD - experimental_kabs_mD) / experimental_kabs_mD,
+        "rel_error_pct": 100.0
+        * (k_dir_mD - experimental_kabs_mD)
+        / experimental_kabs_mD,
     }
 estimated_properties.loc[len(estimated_properties)] = {
     "property": "Absolute permeability arithmetic mean(Kx,Ky,Kz)",
@@ -657,9 +675,7 @@ print(kabs_directional[["axis", "k_mD", "n_pores", "n_throats", "conductance_mod
 print(
     f"Arithmetic mean Kabs across axes: {kabs_mean_m2:.6e} m^2 ({kabs_mean_mD:.3f} mD)"
 )
-print(
-    f"Quadratic mean Kabs across axes: {kabs_rms_m2:.6e} m^2 ({kabs_rms_mD:.3f} mD)"
-)
+print(f"Quadratic mean Kabs across axes: {kabs_rms_m2:.6e} m^2 ({kabs_rms_mD:.3f} mD)")
 estimated_properties
 
 # %% [markdown]
@@ -668,7 +684,10 @@ estimated_properties
 # %%
 experimental_kabs_error_mD = experimental_kabs_mD * experimental_kabs_rel_error
 
-bar_labels = [f"K{ax}" for ax in kabs_directional["axis"]] + [aggregate_label, "Experimental"]
+bar_labels = [f"K{ax}" for ax in kabs_directional["axis"]] + [
+    aggregate_label,
+    "Experimental",
+]
 bar_values = list(kabs_directional["k_mD"].to_numpy(dtype=float)) + [
     aggregate_kabs_mD,
     experimental_kabs_mD,
@@ -687,7 +706,13 @@ bars = ax.bar(
     edgecolor="black",
     alpha=0.85,
 )
-ax.axhline(experimental_kabs_mD, color="black", linestyle="--", linewidth=1.5, label="Experimental")
+ax.axhline(
+    experimental_kabs_mD,
+    color="black",
+    linestyle="--",
+    linewidth=1.5,
+    label="Experimental",
+)
 ax.fill_between(
     [-0.6, len(bar_labels) - 0.4],
     experimental_kabs_mD - experimental_kabs_error_mD,
@@ -697,7 +722,9 @@ ax.fill_between(
     label="Experimental +/-10%",
 )
 ax.set_ylabel("Absolute permeability [mD]")
-ax.set_title(f"Estimated Kabs by direction and {aggregate_label.lower()} vs experimental")
+ax.set_title(
+    f"Estimated Kabs by direction and {aggregate_label.lower()} vs experimental"
+)
 ax.grid(alpha=0.3, linestyle=":", axis="y")
 ax.legend()
 
@@ -875,5 +902,3 @@ print(f"Saved network stats: {out_stats_csv}")
 print(f"Saved directional Kabs: {out_kabs_dir_csv}")
 if roi_scan_summary is not None:
     print(f"Saved ROI scan summary: {out_roi_scan_csv}")
-
-
