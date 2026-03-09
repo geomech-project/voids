@@ -5,9 +5,13 @@ from typing import Any
 import warnings
 
 import numpy as np
+from scipy import sparse
 
 from voids.core.network import Network
-from voids.geom.hydraulic import throat_conductance as _throat_conductance
+from voids.geom.hydraulic import (
+    throat_conductance as _throat_conductance,
+    throat_conductance_with_sensitivities as _throat_conductance_with_sensitivities,
+)
 from voids.graph.connectivity import connected_components, induced_subnetwork
 from voids.linalg.assemble import assemble_pressure_system
 from voids.linalg.bc import apply_dirichlet_rowcol
@@ -131,6 +135,18 @@ class SinglePhaseOptions:
         Relative infinity-norm pressure-change tolerance for the Picard loop.
     nonlinear_relaxation :
         Under-relaxation factor applied to the Picard pressure update.
+    solver_parameters :
+        Optional linear-solver configuration dictionary passed to the inner
+        SciPy linear solves. For Krylov methods, this can include
+        ``{"preconditioner": "pyamg"}``.
+    nonlinear_solver :
+        Nonlinear strategy used when viscosity depends on pressure. Supported
+        values are ``"picard"`` and ``"newton"``.
+    nonlinear_line_search_reduction :
+        Backtracking reduction factor used by the damped Newton update.
+    nonlinear_line_search_max_steps :
+        Maximum number of backtracking steps attempted by the damped Newton
+        update.
     """
 
     conductance_model: str = "generic_poiseuille"
@@ -140,6 +156,10 @@ class SinglePhaseOptions:
     nonlinear_max_iterations: int = 25
     nonlinear_pressure_tolerance: float = 1.0e-10
     nonlinear_relaxation: float = 1.0
+    solver_parameters: dict[str, Any] = field(default_factory=dict)
+    nonlinear_solver: str = "picard"
+    nonlinear_line_search_reduction: float = 0.5
+    nonlinear_line_search_max_steps: int = 8
 
 
 @dataclass(slots=True)
@@ -309,6 +329,12 @@ def _validate_options(options: SinglePhaseOptions) -> None:
         raise ValueError("nonlinear_pressure_tolerance must be positive")
     if not (0.0 < options.nonlinear_relaxation <= 1.0):
         raise ValueError("nonlinear_relaxation must lie in the interval (0, 1]")
+    if options.nonlinear_solver not in {"picard", "newton"}:
+        raise ValueError("nonlinear_solver must be either 'picard' or 'newton'")
+    if not (0.0 < options.nonlinear_line_search_reduction < 1.0):
+        raise ValueError("nonlinear_line_search_reduction must lie in the interval (0, 1)")
+    if options.nonlinear_line_search_max_steps < 1:
+        raise ValueError("nonlinear_line_search_max_steps must be at least 1")
 
 
 def _solve_active_linear_system(
@@ -327,8 +353,66 @@ def _solve_active_linear_system(
         A = A.copy().tocsr()
         A.setdiag(A.diagonal() + float(options.regularization))
     A_bc, b_bc = apply_dirichlet_rowcol(A, b, values=active_values, mask=active_fixed_mask)
-    p_active, solver_info = solve_linear_system(A_bc, b_bc, method=options.solver)
+    p_active, solver_info = solve_linear_system(
+        A_bc,
+        b_bc,
+        method=options.solver,
+        solver_parameters=options.solver_parameters,
+    )
     return p_active, solver_info, A_bc, b_bc
+
+
+def _assemble_active_system(
+    active_net: Network,
+    g_active: np.ndarray,
+    *,
+    active_values: np.ndarray,
+    active_fixed_mask: np.ndarray,
+    options: SinglePhaseOptions,
+) -> tuple[Any, np.ndarray]:
+    """Assemble the Dirichlet-eliminated active pressure system."""
+
+    A = assemble_pressure_system(active_net, g_active)
+    b = np.zeros(active_net.Np, dtype=float)
+    if options.regularization is not None:
+        A = A.copy().tocsr()
+        A.setdiag(A.diagonal() + float(options.regularization))
+    return apply_dirichlet_rowcol(A, b, values=active_values, mask=active_fixed_mask)
+
+
+def _assemble_variable_viscosity_system(
+    active_net: Network,
+    pore_pressure: np.ndarray,
+    *,
+    fluid: FluidSinglePhase,
+    bc: PressureBC,
+    active_values: np.ndarray,
+    active_fixed_mask: np.ndarray,
+    options: SinglePhaseOptions,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, Any, np.ndarray]:
+    """Assemble the current pressure-dependent system and associated viscosity fields."""
+
+    pore_mu, throat_mu = _evaluate_viscosity_fields(
+        active_net,
+        pore_pressure,
+        fluid=fluid,
+        bc=bc,
+    )
+    g_active = _throat_conductance(
+        active_net,
+        viscosity=None,
+        model=options.conductance_model,
+        pore_viscosity=pore_mu,
+        throat_viscosity=throat_mu,
+    )
+    A_bc, b_bc = _assemble_active_system(
+        active_net,
+        g_active,
+        active_values=active_values,
+        active_fixed_mask=active_fixed_mask,
+        options=options,
+    )
+    return pore_mu, throat_mu, g_active, A_bc, b_bc
 
 
 def _evaluate_viscosity_fields(
@@ -359,6 +443,101 @@ def _evaluate_viscosity_fields(
         np.asarray(pore_viscosity, dtype=float),
         np.asarray(throat_viscosity, dtype=float),
     )
+
+
+def _evaluate_viscosity_fields_with_derivatives(
+    active_net: Network,
+    pore_pressure: np.ndarray,
+    *,
+    fluid: FluidSinglePhase,
+    bc: PressureBC,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return viscosity fields and their local pressure derivatives."""
+
+    if fluid.viscosity_model is None:
+        mu = fluid.reference_viscosity(pin=bc.pin, pout=bc.pout)
+        return (
+            np.full(active_net.Np, mu, dtype=float),
+            np.full(active_net.Nt, mu, dtype=float),
+            np.zeros(active_net.Np, dtype=float),
+            np.zeros(active_net.Nt, dtype=float),
+        )
+
+    conns = active_net.throat_conns
+    throat_pressure = 0.5 * (pore_pressure[conns[:, 0]] + pore_pressure[conns[:, 1]])
+    pore_viscosity, pore_dmu = fluid.viscosity_model.evaluate_with_derivative(
+        pore_pressure,
+        pin=bc.pin,
+        pout=bc.pout,
+    )
+    throat_viscosity, throat_dmu = fluid.viscosity_model.evaluate_with_derivative(
+        throat_pressure,
+        pin=bc.pin,
+        pout=bc.pout,
+    )
+    return (
+        np.asarray(pore_viscosity, dtype=float),
+        np.asarray(throat_viscosity, dtype=float),
+        np.asarray(pore_dmu, dtype=float),
+        np.asarray(throat_dmu, dtype=float),
+    )
+
+
+def _nonlinear_residual_and_jacobian(
+    active_net: Network,
+    pore_pressure: np.ndarray,
+    *,
+    fluid: FluidSinglePhase,
+    bc: PressureBC,
+    active_values: np.ndarray,
+    active_fixed_mask: np.ndarray,
+    options: SinglePhaseOptions,
+) -> tuple[np.ndarray, sparse.csr_matrix, np.ndarray, np.ndarray, np.ndarray]:
+    """Assemble the nonlinear residual and exact local Jacobian."""
+
+    pore_mu, throat_mu, pore_dmu, throat_dmu = _evaluate_viscosity_fields_with_derivatives(
+        active_net,
+        pore_pressure,
+        fluid=fluid,
+        bc=bc,
+    )
+    g_active, dg_dpi, dg_dpj = _throat_conductance_with_sensitivities(
+        active_net,
+        viscosity=None,
+        model=options.conductance_model,
+        pore_viscosity=pore_mu,
+        throat_viscosity=throat_mu,
+        pore_dviscosity_dpressure=pore_dmu,
+        throat_dviscosity_dpressure=throat_dmu,
+    )
+
+    conns = active_net.throat_conns
+    i_idx = conns[:, 0]
+    j_idx = conns[:, 1]
+    delta_p = pore_pressure[i_idx] - pore_pressure[j_idx]
+    q = g_active * delta_p
+    residual = np.zeros(active_net.Np, dtype=float)
+    np.add.at(residual, i_idx, q)
+    np.add.at(residual, j_idx, -q)
+
+    dq_dpi = g_active + delta_p * dg_dpi
+    dq_dpj = -g_active + delta_p * dg_dpj
+    rows = np.concatenate([i_idx, i_idx, j_idx, j_idx])
+    cols = np.concatenate([i_idx, j_idx, i_idx, j_idx])
+    data = np.concatenate([dq_dpi, dq_dpj, -dq_dpi, -dq_dpj])
+    jacobian = sparse.coo_matrix(
+        (data, (rows, cols)),
+        shape=(active_net.Np, active_net.Np),
+    ).tocsr()
+
+    if np.any(active_fixed_mask):
+        fixed = np.flatnonzero(active_fixed_mask)
+        residual[fixed] = pore_pressure[fixed] - active_values[fixed]
+        jacobian = jacobian.tolil()
+        jacobian[fixed, :] = 0.0
+        jacobian[fixed, fixed] = 1.0
+        jacobian = jacobian.tocsr()
+    return residual, jacobian, g_active, pore_mu, throat_mu
 
 
 def _solve_with_variable_viscosity(
@@ -462,6 +641,7 @@ def _solve_with_variable_viscosity(
         **solver_info,
         "nonlinear_iterations": int(iterations),
         "nonlinear_pressure_change": nonlinear_change,
+        "nonlinear_solver": "picard",
         "viscosity_backend": (
             fluid.viscosity_model.backend_name if fluid.viscosity_model is not None else "constant"
         ),
@@ -472,6 +652,163 @@ def _solve_with_variable_viscosity(
         ),
     }
     return p_final, g_active, pore_mu, throat_mu, solver_info, A_bc, b_bc
+
+
+def _solve_with_variable_viscosity_newton(
+    active_net: Network,
+    *,
+    fluid: FluidSinglePhase,
+    bc: PressureBC,
+    active_values: np.ndarray,
+    active_fixed_mask: np.ndarray,
+    options: SinglePhaseOptions,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any], Any, np.ndarray]:
+    """Solve the active subsystem with damped Newton for pressure-dependent viscosity."""
+
+    ref_mu = fluid.reference_viscosity(pin=bc.pin, pout=bc.pout)
+    g_ref = _throat_conductance(
+        active_net,
+        viscosity=ref_mu,
+        model=options.conductance_model,
+    )
+    p_initial, _, _, _ = _solve_active_linear_system(
+        active_net,
+        g_ref,
+        active_values=active_values,
+        active_fixed_mask=active_fixed_mask,
+        options=options,
+    )
+    residual0, J0, g0, pore_mu0, throat_mu0 = _nonlinear_residual_and_jacobian(
+        active_net,
+        p_initial,
+        fluid=fluid,
+        bc=bc,
+        active_values=active_values,
+        active_fixed_mask=active_fixed_mask,
+        options=options,
+    )
+
+    state: dict[str, Any] = {
+        "pore_mu": pore_mu0,
+        "throat_mu": throat_mu0,
+        "conductance": g0,
+        "residual": residual0,
+        "jacobian": J0,
+    }
+
+    def _refresh_state(pore_pressure: np.ndarray) -> dict[str, Any]:
+        residual, jacobian, g_active, pore_mu, throat_mu = _nonlinear_residual_and_jacobian(
+            active_net,
+            pore_pressure,
+            fluid=fluid,
+            bc=bc,
+            active_values=active_values,
+            active_fixed_mask=active_fixed_mask,
+            options=options,
+        )
+        state.update(
+            {
+                "pore_mu": pore_mu,
+                "throat_mu": throat_mu,
+                "conductance": g_active,
+                "residual": residual,
+                "jacobian": jacobian,
+            }
+        )
+        return state
+
+    p_active = p_initial.copy()
+    free = ~active_fixed_mask
+    residual = residual0
+    jacobian = J0
+    g_active = g0
+    pore_mu = pore_mu0
+    throat_mu = throat_mu0
+    nonlinear_change = float("inf")
+    residual_measure = float(np.linalg.norm(residual[free], ord=np.inf)) if np.any(free) else 0.0
+    iterations = 0
+    linear_solver_info: dict[str, Any] = {"method": options.solver, "info": 0}
+
+    for iterations in range(1, options.nonlinear_max_iterations + 1):
+        if np.any(free):
+            scale = max(float(np.linalg.norm(p_active[free], ord=np.inf)), 1.0)
+            nonlinear_change = float(residual_measure / scale)
+        else:
+            nonlinear_change = 0.0
+        if nonlinear_change <= options.nonlinear_pressure_tolerance:
+            break
+
+        delta, linear_solver_info = solve_linear_system(
+            jacobian,
+            -residual,
+            method=options.solver,
+            solver_parameters=options.solver_parameters,
+        )
+        alpha = 1.0
+        accepted = False
+        trial_state = state
+        trial_pressure = p_active
+        trial_residual_measure = residual_measure
+        for _ in range(options.nonlinear_line_search_max_steps):
+            trial_pressure = p_active + alpha * delta
+            trial_pressure[active_fixed_mask] = active_values[active_fixed_mask]
+            trial_state = _refresh_state(trial_pressure)
+            trial_residual = trial_state["residual"]
+            trial_residual_measure = (
+                float(np.linalg.norm(trial_residual[free], ord=np.inf)) if np.any(free) else 0.0
+            )
+            if trial_residual_measure < residual_measure:
+                accepted = True
+                break
+            alpha *= float(options.nonlinear_line_search_reduction)
+        if not accepted:
+            alpha = float(options.nonlinear_line_search_reduction)
+            trial_pressure = p_active + alpha * delta
+            trial_pressure[active_fixed_mask] = active_values[active_fixed_mask]
+            trial_state = _refresh_state(trial_pressure)
+            trial_residual = trial_state["residual"]
+            trial_residual_measure = (
+                float(np.linalg.norm(trial_residual[free], ord=np.inf)) if np.any(free) else 0.0
+            )
+
+        p_active = trial_pressure
+        state = trial_state
+        residual = state["residual"]
+        jacobian = state["jacobian"]
+        g_active = state["conductance"]
+        pore_mu = state["pore_mu"]
+        throat_mu = state["throat_mu"]
+        residual_measure = trial_residual_measure
+    else:
+        warnings.warn(
+            "Pressure-dependent viscosity Newton iteration reached the iteration limit; "
+            "using the last iterate.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    if np.any(free):
+        scale = max(float(np.linalg.norm(p_active[free], ord=np.inf)), 1.0)
+        nonlinear_change = float(residual_measure / scale)
+    else:
+        nonlinear_change = 0.0
+    solver_info = {
+        **linear_solver_info,
+        "nonlinear_solver": "newton",
+        "nonlinear_iterations": int(iterations),
+        "nonlinear_pressure_change": nonlinear_change,
+        "viscosity_backend": (
+            fluid.viscosity_model.backend_name if fluid.viscosity_model is not None else "constant"
+        ),
+        "viscosity_temperature": (
+            float(fluid.viscosity_model.temperature)
+            if fluid.viscosity_model is not None
+            else np.nan
+        ),
+    }
+    A_bc = jacobian
+    b_bc = jacobian @ p_active - residual
+    return p_active, g_active, pore_mu, throat_mu, solver_info, A_bc, b_bc
 
 
 def solve(
@@ -490,8 +827,10 @@ def solve(
         Network containing topology, geometry, and sample metadata.
     fluid :
         Fluid properties. Constant viscosity is supported directly; when
-        ``fluid.viscosity_model`` is provided the solver performs a Picard outer
-        iteration so conductances can depend on the evolving pressure field.
+        ``fluid.viscosity_model`` is provided the solver performs a nonlinear
+        outer iteration so conductances can depend on the evolving pressure
+        field. Built-in nonlinear strategies are Picard iteration and a damped
+        Newton method using the exact Jacobian of the tabulated viscosity model.
     bc :
         Pressure boundary conditions.
     axis :
@@ -577,25 +916,25 @@ def solve(
             **solver_info,
             "nonlinear_iterations": 0,
             "nonlinear_pressure_change": 0.0,
+            "nonlinear_solver": "none",
             "viscosity_backend": "constant",
             "viscosity_temperature": np.nan,
         }
     else:
-        (
-            p_active,
-            g_active,
-            pore_mu_active,
-            throat_mu_active,
-            solver_info,
-            A_bc,
-            b_bc,
-        ) = _solve_with_variable_viscosity(
-            active_net,
-            fluid=fluid,
-            bc=bc,
-            active_values=active_values,
-            active_fixed_mask=active_fixed_mask,
-            options=options,
+        nonlinear_solver = (
+            _solve_with_variable_viscosity_newton
+            if options.nonlinear_solver == "newton"
+            else _solve_with_variable_viscosity
+        )
+        p_active, g_active, pore_mu_active, throat_mu_active, solver_info, A_bc, b_bc = (
+            nonlinear_solver(
+                active_net,
+                fluid=fluid,
+                bc=bc,
+                active_values=active_values,
+                active_fixed_mask=active_fixed_mask,
+                options=options,
+            )
         )
 
     p = np.full(net.Np, np.nan, dtype=float)
