@@ -9,6 +9,10 @@
   `06_mwe_real_porespy_extraction.ipynb`.
 - `syn_vugs/synthetic_vugs.tif`: grayscale synthetic vug image used in
   `07_mwe_synthetic_vug_case.ipynb`.
+- `external_pnflow_benchmark/`: committed reference inputs and outputs for
+  `15_mwe_external_pnflow_benchmark.ipynb`, including exact binary benchmark
+  volumes and saved `pnextract` / `pnflow` outputs so the notebook can run
+  without those external binaries.
 
 ## Source attribution for downloaded rock images
 

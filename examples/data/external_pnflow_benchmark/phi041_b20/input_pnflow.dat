@@ -1,0 +1,22 @@
+TITLE  phi041_b20;
+
+writeStatistics true;
+
+NETWORK  F phi041_b20;
+
+cycle1:    0.00     2.00E+05     0.05          T            T;
+
+cycle1_BC:   T     F       T       T      DP    1.00  2.00;
+
+CALC_BOX:  0.0 1.0;
+
+INIT_CONT_ANG:   1   0   10  -0.2    -3.0   rand   0.0;
+EQUIL_CON_ANG:   4   30   50   -0.2   -3.0   rand   0.0;
+
+Water  0.001               1.2                1000.0;
+Oil   0.001               1000.0              1000.0;
+ClayResistivity            2.0 ;
+
+WaterOilInterface          0.03 ;
+
+DRAIN_SINGLETS: T;

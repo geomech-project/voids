@@ -1,0 +1,6 @@
+case,shape,porosity_target,blobiness,seed_start,seed_used,flow_axis,voxel_size_m,volume_file,pnflow_prt_file,pnflow_upscaled_file
+phi032_b14,32x32x32,0.32,1.4,401,401,x,2e-06,phi032_b14/void_volume.npy,phi032_b14/phi032_b14_pnflow.prt,phi032_b14/phi032_b14_upscaled.tsv
+phi035_b16,32x32x32,0.35,1.6,501,501,x,2e-06,phi035_b16/void_volume.npy,phi035_b16/phi035_b16_pnflow.prt,phi035_b16/phi035_b16_upscaled.tsv
+phi038_b18,32x32x32,0.38,1.8,601,601,x,2e-06,phi038_b18/void_volume.npy,phi038_b18/phi038_b18_pnflow.prt,phi038_b18/phi038_b18_upscaled.tsv
+phi040_b18,32x32x32,0.4,1.8,901,901,x,2e-06,phi040_b18/void_volume.npy,phi040_b18/phi040_b18_pnflow.prt,phi040_b18/phi040_b18_upscaled.tsv
+phi041_b20,32x32x32,0.41,2.0,701,701,x,2e-06,phi041_b20/void_volume.npy,phi041_b20/phi041_b20_pnflow.prt,phi041_b20/phi041_b20_upscaled.tsv
