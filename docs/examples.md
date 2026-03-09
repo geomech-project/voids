@@ -62,6 +62,7 @@ In practice:
 | `28_mwe_drp317_parker_raw_porosity_perm` | Run the DRP-317 Parker raw-volume workflow against the Table 1 experimental references |
 | `29_mwe_drp443_ifn_raw_porosity_perm` | Validate DRP-443 IFN fractured-media permeability against SPE 212849 Table 2 |
 | `30_mwe_drp443_dilatedifn_raw_porosity_perm` | Validate DRP-443 Dilated IFN fractured-media permeability against SPE 212849 Table 2 |
+| `31_mwe_drp10_estaillades_raw_porosity_perm` | Validate DRP-10 Estaillades v2 carbonate permeability against Muljadi et al. (2016) Table 2 |
 
 ---
 
