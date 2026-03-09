@@ -49,7 +49,8 @@ The current `v0.1.x` implementation includes:
 Important boundaries:
 
 - multiphase flow is not implemented yet
-- image segmentation and extraction are not implemented in `voids`
+- production image acquisition and fully automated "push-button" extraction pipelines are out of scope
+- controlled grayscale preprocessing, segmentation helpers, and `snow2`-based extraction helpers are available in `voids.image`
 - synthetic mesh/manufactured examples are controlled validation cases, not realistic rock reconstructions
 
 For a more formal statement of scope and assumptions, see [spec_v0_1.md](spec_v0_1.md).
@@ -61,9 +62,9 @@ The rendered documentation is intended to live alongside the repository at
 
 ### Recommended: Pixi
 
-This repository is configured for Pixi and exposes three main environments:
+This repository is configured for Pixi and exposes four main environments:
 
-- `default`: core library + plotting + PyVista + OpenPNM
+- `default`: core library + notebooks + plotting + PyVista + OpenPNM
 - `test`: everything in `default` plus test-only dependencies
 - `lbm`: test environment plus the optional XLB stack
 - `docs`: MkDocs, Material for MkDocs, and mkdocstrings
@@ -155,6 +156,10 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
   - synthetic spanning volumes, synthetic grayscale segmentation, `snow2` extraction, and `Kabs` cross-checks between `voids` and OpenPNM
 - `13_mwe_synthetic_volume_xlb_benchmark`
   - synthetic segmented volumes, direct-image XLB solves, extracted-network `voids` solves, and `Kabs` comparison between voxel-scale LBM and PNM
+- `14_mwe_shape_factor_conductance_comparison`
+  - synthetic and extracted-network comparison of conductance closures (`generic_poiseuille`, `valvatne_blunt_throat`, and `valvatne_blunt`) and permeability sensitivity to shape factors
+- `15_mwe_external_pnflow_benchmark`
+  - committed external `pnextract`/`pnflow` reference cases compared against the current `voids` extraction + solve workflow
 
 Example data under `examples/data/` includes a deterministic manufactured void image and
 generated artifacts from the extraction/mesh notebooks.
