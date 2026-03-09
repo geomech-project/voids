@@ -354,8 +354,26 @@ def _override_area_from_shape_factor_and_radius(data: dict[str, np.ndarray]) -> 
     if "shape_factor" not in data or "radius_inscribed" not in data:
         return False
     g = np.asarray(data["shape_factor"], dtype=float)
+    if not np.all(np.isfinite(g)) or not np.all(g > 0.0):
+        raise ValueError(
+            "shape_factor must be positive and finite for all elements before area can be"
+            " overridden; found non-positive or non-finite values in shape_factor"
+        )
     r = np.asarray(data["radius_inscribed"], dtype=float)
-    data["area"] = r * r / np.maximum(4.0 * g, 1e-30)
+    with np.errstate(divide="raise", over="raise", invalid="raise"):
+        try:
+            area = r * r / (4.0 * g)
+        except FloatingPointError as exc:
+            raise ValueError(
+                "Failed to compute area from radius_inscribed and shape_factor:"
+                " non-finite result due to numerical overflow or invalid operation"
+            ) from exc
+    if not np.all(np.isfinite(area)) or not np.all(area > 0.0):
+        raise ValueError(
+            "Computed area must be positive and finite for all elements; found non-positive"
+            " or non-finite values in area derived from radius_inscribed and shape_factor"
+        )
+    data["area"] = area
     return True
 
 
@@ -420,9 +438,13 @@ def _apply_imperial_export_geometry_repairs(
         throat_area_weight = np.asarray(throat_area_weight, dtype=float).copy()
 
     if throat_radius is not None and throat_area_weight is not None:
-        throat_shape = np.asarray(throat_radius, dtype=float) ** 2 / np.maximum(
-            4.0 * throat_area_weight, 1e-30
-        )
+        if not np.all(np.isfinite(throat_area_weight)) or not np.all(throat_area_weight > 0.0):
+            raise ValueError(
+                "throat area values must be positive and finite for all elements when"
+                " deriving shape factors via r^2/(4A); found non-positive or"
+                " non-finite values in throat area"
+            )
+        throat_shape = np.asarray(throat_radius, dtype=float) ** 2 / (4.0 * throat_area_weight)
         summary["throat_shape_factor_source"] = "radius_area"
     elif "shape_factor" in throat_data:
         throat_shape = np.asarray(throat_data["shape_factor"], dtype=float).copy()

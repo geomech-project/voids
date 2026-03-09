@@ -362,6 +362,53 @@ def test_from_porespy_maps_dotted_passthrough_and_extra_fields() -> None:
     assert net.extra["unmapped"] == {"value": 1}
 
 
+@pytest.mark.parametrize("bad_g", [0.0, -0.1, float("nan"), float("inf")])
+def test_override_area_raises_on_invalid_shape_factor(bad_g: float) -> None:
+    data = {
+        "shape_factor": np.array([0.1, bad_g]),
+        "radius_inscribed": np.array([1.0, 1.0]),
+    }
+    with pytest.raises(ValueError, match="shape_factor must be positive and finite"):
+        _override_area_from_shape_factor_and_radius(data)
+
+
+@pytest.mark.parametrize("bad_area", [0.0, -1.0, float("nan"), float("inf")])
+def test_imperial_repairs_raises_on_invalid_throat_area(bad_area: float) -> None:
+    throat_data = {
+        "radius_inscribed": np.array([1.0, 1.0]),
+        "area": np.array([1.0, bad_area]),
+    }
+    with pytest.raises(ValueError, match="throat area values must be positive and finite"):
+        _apply_imperial_export_geometry_repairs(
+            pore_data={},
+            throat_data=throat_data,
+            throat_conns=np.array([[0, 1], [1, 2]]),
+            num_pores=3,
+            random_seed=0,
+        )
+
+
+def test_override_area_raises_on_overflow_from_tiny_shape_factor() -> None:
+    # shape_factor so small that r^2/(4g) overflows to inf; 1e-310 triggers overflow
+    data = {
+        "shape_factor": np.array([1e-310]),
+        "radius_inscribed": np.array([1.0]),
+    }
+    with pytest.raises(ValueError):
+        _override_area_from_shape_factor_and_radius(data)
+
+
+def test_override_area_raises_when_radius_produces_nonfinite_area() -> None:
+    # radius_inscribed = inf gives infinite area without a FP overflow exception,
+    # caught by the post-computation isfinite check (line ~372).
+    data = {
+        "shape_factor": np.array([0.1]),
+        "radius_inscribed": np.array([float("inf")]),
+    }
+    with pytest.raises(ValueError, match="Computed area must be positive and finite"):
+        _override_area_from_shape_factor_and_radius(data)
+
+
 def test_from_porespy_warns_and_stores_hydraulic_size_factors() -> None:
     d = {
         "pore.coords": np.array([[0.0, 0.0], [1.0, 0.0]]),
