@@ -969,7 +969,7 @@ def test_benchmark_segmented_volume_with_xlb_uses_defaults_and_records(
     assert solve_args["bc"].pout == pytest.approx(101325.0)
     assert solve_args["fluid"].viscosity == pytest.approx(1.0e-3)
     assert solve_args["fluid"].density == pytest.approx(1.0e3)
-    assert solve_args["options"].conductance_model == "valvatne_blunt_baseline"
+    assert solve_args["options"].conductance_model == "valvatne_blunt"
     assert solve_args["options"].solver == "direct"
 
     xlb_args = captured["xlb_args"]

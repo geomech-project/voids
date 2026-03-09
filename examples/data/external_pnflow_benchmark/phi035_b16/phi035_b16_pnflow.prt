@@ -1,0 +1,119 @@
+{// -*- C -*- phi035_b16 input keywords:
+
+ TITLE:	phi035_b16
+
+ writeStatistics:	true
+
+ NETWORK:	F phi035_b16
+
+ cycle1:	0.00     2.00E+05     0.05          T            T
+
+ cycle1_BC:	T     F       T       T      DP    1.00  2.00
+
+ CALC_BOX:	0.0 1.0
+
+ INIT_CONT_ANG:	1   0   10  -0.2    -3.0   rand   0.0
+
+ EQUIL_CON_ANG:	4   30   50   -0.2   -3.0   rand   0.0
+
+ Water:	0.001               1.2                1000.0
+
+ Oil:	0.001               1000.0              1000.0
+
+ ClayResistivity:	2.0
+
+ WaterOilInterface:	0.03
+
+ DRAIN_SINGLETS:	T
+
+ end:
+
+}
+solving for single-phase flow
+
+
+
+ Number of pores:                71
+ Number of throats:              198
+ Average connection number:      4.14085
+ Number of inlet connections:    18
+ Number of outlet connections:   13
+ Number of isolated elements:    0
+ Number of singlets removed:     0
+ Number of triangular elements:  250
+ Number of square     elements:  50
+ Number of circular   elements:  2
+ Median of throat length/radius: 20.3035
+ Clay bound porosity:            0
+ Total porosity:        0.295502
+ Absolute permeability: 1.33185e-14 (m2), 13.495 (mD)
+ Formation factor:      15.1497
+
+
+
+
+********************  Oil-injection -- cycle 1  ********************
+
+Setting initial (oil-injection) contact angles:
+ krw: 1         kro: 0         RI: 1Sw: 1        Pc: 100         1:    0 invasions  krw: 1         kro: 0         RI: 1
+Sw: 1        Pc: 1120        1:    0 invasions  krw: 1         kro: 0         RI: 1
+Sw: 1        Pc: 2344        1:    0 invasions  krw: 1         kro: 0         RI: 1
+Sw: 1        Pc: 3813        1:    0 invasions  krw: 1         kro: 0         RI: 1
+Sw: 1        Pc: 5575        1:    0 invasions  krw: 1         kro: 0         RI: 1
+Sw: 1        Pc: 7690        1:    0 invasions  krw: 1         kro: 0         RI: 1
+Sw: 1        Pc: 10229       1:    0 invasions  krw: 1         kro: 0         RI: 1
+Sw: 1        Pc: 13274       1:    0 invasions  krw: 1         kro: 0         RI: 1
+Sw: 0.997233 Pc: 16929       1:    1 invasions  krw: 0.9965    kro: 0         RI: 1.00382
+Sw: 0.996729 Pc: 21315       1:    0 invasions  krw: 0.99251   kro: 0         RI: 1.00628
+Sw: 0.987959 Pc: 26578       2:    4 invasions  krw: 0.976585  kro: 0         RI: 1.01747
+Sw: 0.984225 Pc: 32893       1:    1 invasions  krw: 0.968459  kro: 0         RI: 1.02293
+Sw: 0.980729 Pc: 40472       2:    2 invasions  krw: 0.961682  kro: 0         RI: 1.02943
+Sw: 0.935517 Pc: 49567       3:   14 invasions  krw: 0.649373  kro: 0         RI: 1.18377
+Sw: 0.892856 Pc: 59313       4:   16 invasions  krw: 0.165678  kro: 0         RI: 1.56403
+Sw: 0.849125 Pc: 59591       3:   19 invasions  krw: 0.102288  kro: 0         RI: 1.88326
+Sw: 0.793491 Pc: 59605       7:   16 invasions  krw: 0.0955194 kro: 0         RI: 2.18811
+Sw: 0.747899 Pc: 59632       5:   15 invasions  krw: 0.0659836 kro: 0         RI: 2.59851
+Sw: 0.692678 Pc: 59669       3:   20 invasions  krw: 0.0544759 kro: 0         RI: 3.11068
+Sw: 0.64894  Pc: 59669       3:   12 invasions  krw: 0.0332147 kro: 0         RI: 3.66126
+Sw: 0.57338  Pc: 59669       4:   21 invasions  krw: 0.0312081 kro: 0.136098  RI: 4.32851
+Sw: 0.547033 Pc: 59669       3:    7 invasions  krw: 0.0309965 kro: 0.159114  RI: 4.5086
+Sw: 0.481218 Pc: 59669       4:   20 invasions  krw: 0.0220366 kro: 0.247435  RI: 5.26641
+Sw: 0.44661  Pc: 59669       4:   12 invasions  krw: 0.0150384 kro: 0.279825  RI: 6.46436
+Sw: 0.352099 Pc: 59868       3:   24 invasions  krw: 0.00728081 kro: 0.558523  RI: 9.347
+Sw: 0.299729 Pc: 59868       6:   13 invasions  krw: 0.00464842 kro: 0.623663  RI: 12.7832
+Sw: 0.244159 Pc: 59893       3:   17 invasions  krw: 0.00447475 kro: 0.7083    RI: 13.2233
+Sw: 0.190232 Pc: 59917       4:   12 invasions  krw: 0.00409135 kro: 0.809359  RI: 14.2296
+Sw: 0.124333 Pc: 60258       3:   16 invasions  krw: 0.00392844 kro: 0.852101  RI: 14.7428
+Sw: 0.0769846 Pc: 73309       3:    7 invasions  krw: 0.00179036 kro: 0.915653  RI: 21.6827
+Sw: 0.0522665 Pc: 88971       1:    0 invasions  krw: 0.000825237 kro: 0.943001  RI: 31.4082
+Sw: 0.0356257 Pc: 107765      1:    0 invasions  krw: 0.000383405 kro: 0.961266  RI: 45.0057
+Sw: 0.0243618 Pc: 130318      1:    0 invasions  krw: 0.000179288 kro: 0.973565  RI: 63.6891
+Sw: 0.0167036 Pc: 157382      1:    0 invasions  krw: 8.42856e-05 kro: 0.981899  RI: 88.8038
+Sw: 0.0114779 Pc: 189858      1:    0 invasions  krw: 3.97974e-05 kro: 0.987573  RI: 121.657
+Sw: 0.0103433 Pc: 200000      1:    0 invasions  krw: 3.23183e-05 kro: 0.988804  RI: 132.323
+
+
+
+===================== Drainage   =====================
+Total elapsed time for  drainage:        0.012974
+Solving for water relative permeability: 0.004669
+Solving for oil relative permeability:   0.001627
+Solving for resistivity index:           0.004618
+Identifying trapped elements:            6e-06
+Coalesceing trapped oil:                 0
+Max water flow solver residual:          3.24048e-12 %
+Max oil flow solver residual:            2.25311e-12 %
+Max resistivity index residual:          4.42132e-13 %
+
+===================== Network State  =====================
+Maximum capillary pressure reached (Pa): 200000
+Water saturation:                        0.0103433
+Number of elements invaded:              269
+Remaining uninvaded elements:            0
+Number of trapped water regions:         0
+Total number of trapped water elements:  0
+Number of trapped oil regions:           0
+Total number of trapped oil elements:    0
+
+
+:/

@@ -60,11 +60,12 @@ $$
 
 For this benchmark, the `voids` side uses:
 
-- `conductance_model = "valvatne_blunt_baseline"`
+- `conductance_model = "valvatne_blunt"`
 - `solver = "direct"`
 - $\mu = 1.0 \times 10^{-3}$ Pa s
 
-The `valvatne_blunt_baseline` model is a pragmatic single-phase conduit model.
+The `valvatne_blunt` model is the complete single-phase conduit closure
+implemented in `voids`.
 It prefers available shape-factor and conduit-length information when present,
 but it is not a full reproduction of Valvatne-Blunt multiphase physics.
 
@@ -470,7 +471,7 @@ Important limits and assumptions:
 - side walls are sealed in the XLB benchmark; periodic transverse boundaries are
   not used here
 - `voids` is compared against one specific network conductance closure:
-  `valvatne_blunt_baseline`
+  `valvatne_blunt`
 - the XLB permeability conversion is a lattice-unit permeability mapping, not a
   full dimensional calibration of the transient flow field
 - the steady-Stokes-limit mode is an interpretation of the same LBM operator in

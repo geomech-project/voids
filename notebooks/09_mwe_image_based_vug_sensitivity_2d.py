@@ -289,9 +289,7 @@ def evaluate_case_2d(
         fluid=FluidSinglePhase(viscosity=1.0e-3),
         bc=bc,
         axis=FLOW_AXIS,
-        options=SinglePhaseOptions(
-            conductance_model="valvatne_blunt_baseline", solver="direct"
-        ),
+        options=SinglePhaseOptions(conductance_model="valvatne_blunt", solver="direct"),
     )
 
     kabs = float(res.permeability[FLOW_AXIS])

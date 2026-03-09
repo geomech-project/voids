@@ -14,6 +14,7 @@ from voids.geom.hydraulic import (
     _segment_conductance_from_agl,
     generic_poiseuille_conductance,
     throat_conductance,
+    valvatne_blunt_conductance,
     valvatne_blunt_baseline_conductance,
 )
 from voids.graph.connectivity import spanning_component_ids
@@ -130,6 +131,12 @@ def test_valvatne_shape_factor_branches_and_model_selection(line_network: Networ
 
     via_wrapper = throat_conductance(throat_only, viscosity=1.0, model="valvatne_blunt_baseline")
     assert np.allclose(via_wrapper, expected)
+    via_new_name = throat_conductance(throat_only, viscosity=1.0, model="valvatne_blunt")
+    assert np.allclose(via_new_name, expected)
+    via_throat_only = throat_conductance(throat_only, viscosity=1.0, model="valvatne_blunt_throat")
+    assert np.allclose(via_throat_only, expected)
+    direct_new = valvatne_blunt_conductance(throat_only, viscosity=1.0)
+    assert np.allclose(direct_new, expected)
 
     with pytest.raises(ValueError, match="Unknown conductance model"):
         throat_conductance(throat_only, viscosity=1.0, model="unsupported")

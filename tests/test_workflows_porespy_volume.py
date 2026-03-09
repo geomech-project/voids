@@ -355,3 +355,65 @@ def test_extract_spanning_pore_network_forwards_extraction_kwargs(
     assert result.net.Np >= 1
     assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=int))
     assert captured["kwargs"] == {"sigma": 0.5}
+
+
+def test_extract_spanning_pore_network_enables_imperial_export_repairs_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Image extraction should apply Imperial export-style importer repairs by default."""
+
+    def fake_snow2(_phases, *, snow2_kwargs):
+        assert snow2_kwargs == {}
+        return {
+            "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+            "throat.conns": np.array([[0, 1]], dtype=int),
+            "pore.inscribed_diameter": np.array([2.0, 2.0]),
+            "throat.inscribed_diameter": np.array([1.0]),
+            "throat.cross_sectional_area": np.array([2.0]),
+            "throat.total_length": np.array([1.0]),
+            "pore.xmin": np.array([True, False], dtype=bool),
+            "pore.xmax": np.array([False, True], dtype=bool),
+        }
+
+    monkeypatch.setattr(nex, "_snow2_network_dict", fake_snow2)
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        flow_axis="x",
+    )
+
+    assert result.provenance.random_seed == 0
+    assert result.net_full.extra["geometry_repairs"]["mode"] == "imperial_export"
+    assert result.net_full.throat["shape_factor"][0] == pytest.approx(0.03125)
+    assert np.allclose(result.net_full.pore["shape_factor"], np.array([0.03125, 0.03125]))
+
+
+def test_extract_spanning_pore_network_accepts_legacy_geometry_repairs_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The public extraction workflow should accept deprecated repair-mode aliases."""
+
+    def fake_snow2(_phases, *, snow2_kwargs):
+        assert snow2_kwargs == {}
+        return {
+            "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+            "throat.conns": np.array([[0, 1]], dtype=int),
+            "pore.inscribed_diameter": np.array([2.0, 2.0]),
+            "throat.inscribed_diameter": np.array([1.0]),
+            "throat.cross_sectional_area": np.array([2.0]),
+            "throat.total_length": np.array([1.0]),
+            "pore.xmin": np.array([True, False], dtype=bool),
+            "pore.xmax": np.array([False, True], dtype=bool),
+        }
+
+    monkeypatch.setattr(nex, "_snow2_network_dict", fake_snow2)
+    with pytest.warns(DeprecationWarning, match=r"geometry_repairs='pnextract'.*'imperial_export'"):
+        result = extract_spanning_pore_network(
+            np.ones((2, 2, 2), dtype=int),
+            voxel_size=1.0,
+            flow_axis="x",
+            geometry_repairs="pnextract",
+        )
+
+    assert result.net_full.extra["geometry_repairs"]["mode"] == "imperial_export"
+    assert result.net_full.throat["shape_factor"][0] == pytest.approx(0.03125)

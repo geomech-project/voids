@@ -177,7 +177,7 @@ flow_axis = "x"
 axis_index = 0
 voxel_size = 2.0e-6
 options = SinglePhaseOptions(
-    conductance_model="valvatne_blunt_baseline",
+    conductance_model="valvatne_blunt",
     solver="direct",
 )
 benchmark_delta_p = 25.0 / 3.0

@@ -84,6 +84,14 @@ _LENGTH_KEYS = frozenset(
 )
 _VOLUME_KEYS = frozenset({"pore.volume", "pore.region_volume", "throat.volume"})
 _PERIMETER_KEYS = frozenset({"pore.perimeter", "throat.perimeter"})
+_IMPERIAL_EXPORT_THROAT_G_HIGH_TRIGGER = 0.09
+_IMPERIAL_EXPORT_THROAT_G_HIGH_CAP = 0.079
+_IMPERIAL_EXPORT_THROAT_G_LOW_TRIGGER = 0.01
+_IMPERIAL_EXPORT_RANDOM_G_SCALE = 0.00625
+_IMPERIAL_EXPORT_RANDOM_G_SHIFT = 5.0
+_IMPERIAL_EXPORT_RANDOM_G_CAP_TRIGGER = 0.049
+_IMPERIAL_EXPORT_RANDOM_G_CAP_VALUE = 0.0625
+_LEGACY_GEOMETRY_REPAIR_ALIASES = {"pnextract": "imperial_export"}
 
 
 def _normalize_value(value: object) -> np.ndarray:
@@ -233,8 +241,10 @@ def ensure_cartesian_boundary_labels(
                 f"axis '{axis}' is not available in pore.coords with shape {coords.shape}"
             )
         values = coords[:, axis_index]
-        lo = float(values.min())
-        hi = float(values.max())
+        # Use argmin/argmax instead of ndarray.min/max for compatibility with
+        # environments where numpy reduction defaults are monkeypatched.
+        lo = float(values[np.argmin(values)])
+        hi = float(values[np.argmax(values)])
         tol = tol_fraction * max(hi - lo, 1e-12)
         inlet_key = f"pore.inlet_{axis}min"
         outlet_key = f"pore.outlet_{axis}max"
@@ -294,12 +304,218 @@ def _derive_missing_geometry(
         )
 
 
+def _ensure_inscribed_size_aliases(data: dict[str, np.ndarray]) -> None:
+    """Backfill diameter/radius aliases without deriving areas."""
+
+    if "diameter_inscribed" not in data and "radius_inscribed" in data:
+        r = np.asarray(data["radius_inscribed"], dtype=float)
+        data["diameter_inscribed"] = 2.0 * r
+    if "radius_inscribed" not in data and "diameter_inscribed" in data:
+        d = np.asarray(data["diameter_inscribed"], dtype=float)
+        data["radius_inscribed"] = 0.5 * d
+
+
+def _imperial_export_random_shape_factors(size: int, rng: np.random.Generator) -> np.ndarray:
+    """Sample the fallback distribution used by the Imperial export heuristics.
+
+    Notes
+    -----
+    This follows the `randomG()` helper in the reference `pnextract`
+    ``blockNet_write_cnm.cpp`` export path.
+    """
+
+    out = np.empty(int(size), dtype=float)
+    filled = 0
+    while filled < out.size:
+        needed = out.size - filled
+        x1 = 2.0 * rng.random(needed) - 1.0
+        x2 = 2.0 * rng.random(needed) - 1.0
+        w = x1 * x1 + x2 * x2
+        keep = (w > 0.0) & (w < 1.0)
+        if not np.any(keep):
+            continue
+        y = _IMPERIAL_EXPORT_RANDOM_G_SCALE * (
+            x1[keep] * np.sqrt((-2.0 * np.log(w[keep])) / w[keep]) + _IMPERIAL_EXPORT_RANDOM_G_SHIFT
+        )
+        y = np.where(
+            y > _IMPERIAL_EXPORT_RANDOM_G_CAP_TRIGGER,
+            _IMPERIAL_EXPORT_RANDOM_G_CAP_VALUE,
+            y,
+        )
+        n_take = min(int(y.size), needed)
+        out[filled : filled + n_take] = y[:n_take]
+        filled += n_take
+    return out
+
+
+def _override_area_from_shape_factor_and_radius(data: dict[str, np.ndarray]) -> bool:
+    """Set `area = r^2 / (4G)` when both inscribed radius and shape factor exist."""
+
+    if "shape_factor" not in data or "radius_inscribed" not in data:
+        return False
+    g = np.asarray(data["shape_factor"], dtype=float)
+    if not np.all(np.isfinite(g)) or not np.all(g > 0.0):
+        raise ValueError(
+            "shape_factor must be positive and finite for all elements before area can be"
+            " overridden; found non-positive or non-finite values in shape_factor"
+        )
+    r = np.asarray(data["radius_inscribed"], dtype=float)
+    with np.errstate(divide="raise", over="raise", invalid="raise"):
+        try:
+            area = r * r / (4.0 * g)
+        except FloatingPointError as exc:
+            raise ValueError(
+                "Failed to compute area from radius_inscribed and shape_factor:"
+                " non-finite result due to numerical overflow or invalid operation"
+            ) from exc
+    if not np.all(np.isfinite(area)) or not np.all(area > 0.0):
+        raise ValueError(
+            "Computed area must be positive and finite for all elements; found non-positive"
+            " or non-finite values in area derived from radius_inscribed and shape_factor"
+        )
+    data["area"] = area
+    return True
+
+
+def _normalize_geometry_repairs_mode(geometry_repairs: str | None) -> str | None:
+    """Normalize geometry-repair mode names, accepting legacy aliases."""
+
+    if geometry_repairs in _LEGACY_GEOMETRY_REPAIR_ALIASES:
+        normalized = _LEGACY_GEOMETRY_REPAIR_ALIASES[geometry_repairs]
+        warnings.warn(
+            f"geometry_repairs={geometry_repairs!r} is deprecated; use {normalized!r} instead",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return normalized
+    return geometry_repairs
+
+
+def _apply_imperial_export_geometry_repairs(
+    pore_data: dict[str, np.ndarray],
+    throat_data: dict[str, np.ndarray],
+    throat_conns: np.ndarray,
+    *,
+    num_pores: int,
+    random_seed: int | None,
+) -> dict[str, object]:
+    """Apply Imperial export-style shape-factor preprocessing and repair heuristics.
+
+    Notes
+    -----
+    This follows the reference Imperial College `pnextract`
+    `blockNet_write_cnm.cpp` logic closely:
+
+    - throats prefer ``G = r^2 / (4A)`` when both ``radius_inscribed`` and
+      ``area`` are available
+    - very large throat shape factors are repaired with ``min(0.079, G/2)``
+    - very small throat shape factors are replaced by the reference-style
+      randomized admissible distribution, floored at ``0.01``
+    - pore shape factor is reassigned as a throat-area-weighted average of the
+      repaired neighboring throat shape factors
+    - when inscribed radii are available, pore and throat areas are overwritten
+      by ``r^2 / (4G)`` to match the geometry used by `pnflow`
+    """
+
+    _ensure_inscribed_size_aliases(pore_data)
+    _ensure_inscribed_size_aliases(throat_data)
+
+    summary: dict[str, object] = {
+        "mode": "imperial_export",
+        "random_seed": random_seed,
+        "throat_shape_factor_source": "existing",
+        "throat_high_repairs": 0,
+        "throat_low_repairs": 0,
+        "pore_shape_factor_weighted": False,
+        "throat_area_overridden": False,
+        "pore_area_overridden": False,
+    }
+
+    throat_area_weight = throat_data.get("area")
+    throat_radius = throat_data.get("radius_inscribed")
+
+    if throat_area_weight is not None:
+        throat_area_weight = np.asarray(throat_area_weight, dtype=float).copy()
+
+    if throat_radius is not None and throat_area_weight is not None:
+        if not np.all(np.isfinite(throat_area_weight)) or not np.all(throat_area_weight > 0.0):
+            raise ValueError(
+                "throat area values must be positive and finite for all elements when"
+                " deriving shape factors via r^2/(4A); found non-positive or"
+                " non-finite values in throat area"
+            )
+        throat_shape = np.asarray(throat_radius, dtype=float) ** 2 / (4.0 * throat_area_weight)
+        summary["throat_shape_factor_source"] = "radius_area"
+    elif "shape_factor" in throat_data:
+        throat_shape = np.asarray(throat_data["shape_factor"], dtype=float).copy()
+    else:
+        return summary
+
+    high = throat_shape >= _IMPERIAL_EXPORT_THROAT_G_HIGH_TRIGGER
+    if np.any(high):
+        throat_shape[high] = np.minimum(
+            _IMPERIAL_EXPORT_THROAT_G_HIGH_CAP, throat_shape[high] / 2.0
+        )
+    summary["throat_high_repairs"] = int(np.count_nonzero(high))
+
+    low = throat_shape < _IMPERIAL_EXPORT_THROAT_G_LOW_TRIGGER
+    if np.any(low):
+        rng = np.random.default_rng(random_seed)
+        repl = np.maximum(
+            _imperial_export_random_shape_factors(int(np.count_nonzero(low)), rng),
+            _IMPERIAL_EXPORT_THROAT_G_LOW_TRIGGER,
+        )
+        throat_shape[low] = repl
+    summary["throat_low_repairs"] = int(np.count_nonzero(low))
+    throat_data["shape_factor"] = throat_shape
+
+    if _override_area_from_shape_factor_and_radius(throat_data):
+        summary["throat_area_overridden"] = True
+
+    if throat_area_weight is None:
+        return summary
+
+    accum = np.full(int(num_pores), 5.0e-38, dtype=float)
+    weights = np.full(int(num_pores), 1.0e-36, dtype=float)
+    counts = np.zeros(int(num_pores), dtype=int)
+
+    p1 = np.asarray(throat_conns[:, 0], dtype=int)
+    p2 = np.asarray(throat_conns[:, 1], dtype=int)
+    contrib = throat_shape * throat_area_weight
+    np.add.at(accum, p1, contrib)
+    np.add.at(accum, p2, contrib)
+    np.add.at(weights, p1, throat_area_weight)
+    np.add.at(weights, p2, throat_area_weight)
+    np.add.at(counts, p1, 1)
+    np.add.at(counts, p2, 1)
+
+    if np.any(counts > 0):
+        connected = counts > 0
+        if "shape_factor" in pore_data:
+            pore_shape = np.asarray(pore_data["shape_factor"], dtype=float).copy()
+            pore_shape[connected] = accum[connected] / weights[connected]
+            pore_data["shape_factor"] = pore_shape
+            summary["pore_shape_factor_weighted"] = True
+        elif np.all(connected):
+            pore_data["shape_factor"] = accum / weights
+            summary["pore_shape_factor_weighted"] = True
+
+        if summary["pore_shape_factor_weighted"] and _override_area_from_shape_factor_and_radius(
+            pore_data
+        ):
+            summary["pore_area_overridden"] = True
+
+    return summary
+
+
 def from_porespy(
     network_dict: Mapping[str, object],
     *,
     sample: SampleGeometry | None = None,
     provenance: Provenance | None = None,
     strict: bool = True,
+    geometry_repairs: str | None = None,
+    repair_seed: int | None = 0,
 ) -> Network:
     """Build a :class:`Network` from a PoreSpy/OpenPNM-style mapping.
 
@@ -316,6 +532,16 @@ def from_porespy(
         ``source_kind="porespy"`` is created.
     strict :
         If ``True``, missing topology keys immediately raise an error.
+    geometry_repairs :
+        Optional extraction-style preprocessing mode. Set to
+        ``"imperial_export"`` to apply the Imperial College export heuristics
+        for throat shape-factor repair and pore shape-factor reconstruction.
+        The default ``None`` preserves the imported geometry as-is apart from
+        basic alias normalization. The legacy name ``"pnextract"`` is still
+        accepted as a deprecated alias for backward compatibility.
+    repair_seed :
+        Seed for any stochastic repair branch. Only used when
+        ``geometry_repairs="imperial_export"``.
 
     Returns
     -------
@@ -401,6 +627,22 @@ def from_porespy(
     for alias, canonical in _AXIS_LABEL_ALIASES:
         if alias in pore_labels and canonical not in pore_labels:
             pore_labels[canonical] = pore_labels[alias]
+
+    _ensure_inscribed_size_aliases(pore_data)
+    _ensure_inscribed_size_aliases(throat_data)
+
+    geometry_repairs = _normalize_geometry_repairs_mode(geometry_repairs)
+
+    if geometry_repairs not in {None, "imperial_export"}:
+        raise ValueError("geometry_repairs must be None or 'imperial_export'")
+    if geometry_repairs == "imperial_export":
+        extra["geometry_repairs"] = _apply_imperial_export_geometry_repairs(
+            pore_data,
+            throat_data,
+            np.asarray(throat_conns, dtype=int),
+            num_pores=int(pore_coords.shape[0]),
+            random_seed=repair_seed,
+        )
 
     _derive_missing_geometry(pore_data, throat_data)
 

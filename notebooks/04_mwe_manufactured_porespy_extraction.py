@@ -141,9 +141,7 @@ res = solve(
     fluid=FluidSinglePhase(viscosity=1.0e-3),
     bc=bc,
     axis="x",
-    options=SinglePhaseOptions(
-        conductance_model="valvatne_blunt_baseline", solver="direct"
-    ),
+    options=SinglePhaseOptions(conductance_model="valvatne_blunt", solver="direct"),
 )
 print("Q =", res.total_flow_rate)
 print("Kx =", res.permeability["x"])

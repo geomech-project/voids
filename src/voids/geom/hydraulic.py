@@ -10,6 +10,12 @@ from voids.core.network import Network
 
 DEFAULT_G_REF: Final[float] = 1.0 / (4.0 * np.pi)  # circular duct shape factor A/P^2
 _CIRCLE_COEFF_AG2: Final[float] = 0.5  # gives Hagen-Poiseuille when G=1/(4π)
+TRIANGLE_MAX_G: Final[float] = np.sqrt(3.0) / 36.0
+SQUARE_G_REF: Final[float] = 1.0 / 16.0
+_SQUARE_CIRCLE_TRANSITION_G: Final[float] = 0.07
+_MAX_PHYSICAL_G: Final[float] = DEFAULT_G_REF
+_TRIANGLE_COEFF_AG2: Final[float] = 3.0 / 5.0
+_SQUARE_COEFF_AG2: Final[float] = 0.5623
 
 
 def _require(net: Network, kind: str, names: tuple[str, ...]) -> None:
@@ -90,6 +96,79 @@ def _shape_factor_from_area_perimeter(area: np.ndarray, perimeter: np.ndarray) -
     return np.asarray(area / np.maximum(perimeter, 1e-30) ** 2)
 
 
+def _shape_factor_from_area_inscribed_radius(area: np.ndarray, radius: np.ndarray) -> np.ndarray:
+    """Compute shape factor from area and inscribed radius.
+
+    Parameters
+    ----------
+    area :
+        Cross-sectional areas.
+    radius :
+        Inscribed radii.
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape factor defined by ``G = r**2 / (4 * A)``.
+
+    Notes
+    -----
+    This relation is exact for the equivalent circle/square/triangle ducts used by
+    Valvatne-Blunt style network models and by the Imperial College extraction code.
+    """
+
+    return np.asarray(radius**2 / np.maximum(4.0 * area, 1e-30))
+
+
+def _shape_factor_from_area_inscribed_diameter(
+    area: np.ndarray, diameter: np.ndarray
+) -> np.ndarray:
+    """Compute shape factor from area and inscribed diameter."""
+
+    return np.asarray(diameter**2 / np.maximum(16.0 * area, 1e-30))
+
+
+def _area_from_shape_factor_radius(shape_factor: np.ndarray, radius: np.ndarray) -> np.ndarray:
+    """Compute area from shape factor and inscribed radius."""
+
+    return np.asarray(radius**2 / np.maximum(4.0 * shape_factor, 1e-30))
+
+
+def _area_from_shape_factor_diameter(shape_factor: np.ndarray, diameter: np.ndarray) -> np.ndarray:
+    """Compute area from shape factor and inscribed diameter."""
+
+    return np.asarray(diameter**2 / np.maximum(16.0 * shape_factor, 1e-30))
+
+
+def _sanitize_shape_factor(
+    shape_factor: np.ndarray,
+    *,
+    clip_min: float = 1e-12,
+    clip_max: float = _MAX_PHYSICAL_G,
+) -> np.ndarray:
+    """Clip shape factors to a physically admissible range.
+
+    Parameters
+    ----------
+    shape_factor :
+        Input shape-factor array.
+    clip_min :
+        Lower clip bound.
+    clip_max :
+        Upper clip bound. The default is the circular-duct maximum ``1 / (4 * pi)``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Clipped shape factors.
+    """
+
+    gsf = np.asarray(shape_factor, dtype=float)
+    if np.any(gsf < 0):
+        raise ValueError("shape_factor contains negative values")
+    return np.clip(gsf, clip_min, clip_max)
+
+
 def _get_entity_area(net: Network, kind: str) -> np.ndarray:
     """Return area data for pores or throats, deriving it when possible.
 
@@ -114,13 +193,24 @@ def _get_entity_area(net: Network, kind: str) -> np.ndarray:
     store = net.throat if kind == "throat" else net.pore
     if "area" in store:
         return np.asarray(store["area"], dtype=float)
+    if "shape_factor" in store:
+        gsf = _sanitize_shape_factor(np.asarray(store["shape_factor"], dtype=float))
+        if "diameter_inscribed" in store:
+            d = np.asarray(store["diameter_inscribed"], dtype=float)
+            return _area_from_shape_factor_diameter(gsf, d)
+        if "radius_inscribed" in store:
+            r = np.asarray(store["radius_inscribed"], dtype=float)
+            return _area_from_shape_factor_radius(gsf, r)
     if "diameter_inscribed" in store:
         d = np.asarray(store["diameter_inscribed"], dtype=float)
         return _area_from_diameter(d)
     if "radius_inscribed" in store:
         r = np.asarray(store["radius_inscribed"], dtype=float)
         return np.pi * r**2
-    raise KeyError(f"Need {kind}.area or {kind}.diameter_inscribed (or radius_inscribed)")
+    raise KeyError(
+        f"Need {kind}.area or {kind}.diameter_inscribed (or radius_inscribed); "
+        f"shape_factor + inscribed size is also accepted"
+    )
 
 
 def _get_entity_shape_factor(net: Network, kind: str, area: np.ndarray | None = None) -> np.ndarray:
@@ -153,7 +243,17 @@ def _get_entity_shape_factor(net: Network, kind: str, area: np.ndarray | None = 
         a = _get_entity_area(net, kind) if area is None else np.asarray(area, dtype=float)
         p = np.asarray(store["perimeter"], dtype=float)
         return _shape_factor_from_area_perimeter(a, p)
-    raise KeyError(f"Need {kind}.shape_factor or {kind}.perimeter (with area/diameter)")
+    a = _get_entity_area(net, kind) if area is None else np.asarray(area, dtype=float)
+    if "diameter_inscribed" in store:
+        d = np.asarray(store["diameter_inscribed"], dtype=float)
+        return _shape_factor_from_area_inscribed_diameter(a, d)
+    if "radius_inscribed" in store:
+        r = np.asarray(store["radius_inscribed"], dtype=float)
+        return _shape_factor_from_area_inscribed_radius(a, r)
+    raise KeyError(
+        f"Need {kind}.shape_factor, {kind}.perimeter (with area/diameter), "
+        f"or {kind}.area + inscribed size"
+    )
 
 
 def _segment_conductance_from_agl(
@@ -216,6 +316,86 @@ def _segment_conductance_from_agl(
     out = np.full_like(a, np.inf, dtype=float)
     nz = L > 0
     out[nz] = (_CIRCLE_COEFF_AG2 * gsf[nz] * a[nz] ** 2) / (viscosity * L[nz])
+    return out
+
+
+def _conductance_coefficient_from_shape_factor(shape_factor: np.ndarray) -> np.ndarray:
+    """Return the Valvatne-Blunt single-phase coefficient for each shape factor.
+
+    Parameters
+    ----------
+    shape_factor :
+        Shape-factor array.
+
+    Returns
+    -------
+    numpy.ndarray
+        Coefficient array ``k`` in ``g = k * G * A**2 / (mu * L)``.
+
+    Notes
+    -----
+    The triangular coefficient ``3/5`` and square coefficient ``0.5623`` follow
+    Valvatne and Blunt (2004) and Patzek and Silin (2001). The square/circle
+    transition at ``G = 0.07`` follows the Imperial College `pnflow` reference code.
+    """
+
+    gsf = np.asarray(shape_factor, dtype=float)
+    if np.any(gsf < 0):
+        raise ValueError("shape_factor contains negative values")
+    coeff = np.full_like(gsf, _CIRCLE_COEFF_AG2, dtype=float)
+    coeff[gsf <= TRIANGLE_MAX_G + 1e-12] = _TRIANGLE_COEFF_AG2
+    square = (gsf > TRIANGLE_MAX_G + 1e-12) & (gsf < _SQUARE_CIRCLE_TRANSITION_G)
+    coeff[square] = _SQUARE_COEFF_AG2
+    return coeff
+
+
+def _segment_conductance_valvatne_blunt(
+    area: np.ndarray,
+    shape_factor: np.ndarray,
+    length: np.ndarray,
+    viscosity: float,
+    *,
+    clip_shape_factor: bool = True,
+) -> np.ndarray:
+    """Compute segment conductance using the Valvatne-Blunt single-phase closure.
+
+    Parameters
+    ----------
+    area :
+        Segment cross-sectional area.
+    shape_factor :
+        Segment shape factor ``G = A / P**2``.
+    length :
+        Segment length.
+    viscosity :
+        Dynamic viscosity.
+    clip_shape_factor :
+        If ``True``, clip shape factors to the physically admissible interval
+        ``[1e-12, 1 / (4 * pi)]`` before classification and evaluation.
+
+    Returns
+    -------
+    numpy.ndarray
+        Hydraulic conductance array.
+    """
+
+    if viscosity <= 0:
+        raise ValueError("viscosity must be positive")
+    a = np.asarray(area, dtype=float)
+    gsf = np.asarray(shape_factor, dtype=float)
+    L = np.asarray(length, dtype=float)
+    if np.any(a < 0):
+        raise ValueError("area contains negative values")
+    if np.any(L < 0):
+        raise ValueError("length contains negative values")
+    if np.any(gsf < 0):
+        raise ValueError("shape_factor contains negative values")
+    if clip_shape_factor:
+        gsf = _sanitize_shape_factor(gsf)
+    coeff = _conductance_coefficient_from_shape_factor(gsf)
+    out = np.full_like(a, np.inf, dtype=float)
+    nz = L > 0
+    out[nz] = (coeff[nz] * gsf[nz] * a[nz] ** 2) / (viscosity * L[nz])
     return out
 
 
@@ -337,7 +517,7 @@ def _throat_only_shape_factor_conductance(net: Network, viscosity: float) -> np.
     L = np.asarray(net.throat["length"], dtype=float)
     A = _get_entity_area(net, "throat")
     G = _get_entity_shape_factor(net, "throat", area=A)
-    return _segment_conductance_from_agl(A, G, L, viscosity)
+    return _segment_conductance_valvatne_blunt(A, G, L, viscosity)
 
 
 def _valvatne_conduit_baseline(net: Network, viscosity: float) -> np.ndarray:
@@ -368,24 +548,54 @@ def _valvatne_conduit_baseline(net: Network, viscosity: float) -> np.ndarray:
     At = _get_entity_area(net, "throat")
     Gt = _get_entity_shape_factor(net, "throat", area=At)
     Lt = np.asarray(net.throat["core_length"], dtype=float)
-    gt = _segment_conductance_from_agl(At, Gt, Lt, viscosity)
+    gt = _segment_conductance_valvatne_blunt(At, Gt, Lt, viscosity)
 
     conns = net.throat_conns
     p1_idx = conns[:, 0]
     p2_idx = conns[:, 1]
     Ap = _get_entity_area(net, "pore")
     Gp = _get_entity_shape_factor(net, "pore", area=Ap)
-    g1 = _segment_conductance_from_agl(
+    g1 = _segment_conductance_valvatne_blunt(
         Ap[p1_idx], Gp[p1_idx], np.asarray(net.throat["pore1_length"], dtype=float), viscosity
     )
-    g2 = _segment_conductance_from_agl(
+    g2 = _segment_conductance_valvatne_blunt(
         Ap[p2_idx], Gp[p2_idx], np.asarray(net.throat["pore2_length"], dtype=float), viscosity
     )
     return _harmonic_combine_segments(g1, gt, g2)
 
 
-def valvatne_blunt_baseline_conductance(net: Network, viscosity: float) -> np.ndarray:
-    """Compute a shape-factor-informed single-phase conductance baseline.
+def valvatne_blunt_throat_conductance(net: Network, viscosity: float) -> np.ndarray:
+    """Compute shape-aware throat conductance using throat geometry only.
+
+    Parameters
+    ----------
+    net :
+        Network containing throat length and cross-sectional geometry.
+    viscosity :
+        Dynamic viscosity.
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape-aware throat conductance array.
+
+    Raises
+    ------
+    ValueError
+        If viscosity is not positive.
+    KeyError
+        If required throat geometry is unavailable.
+    """
+
+    if viscosity <= 0:
+        raise ValueError("viscosity must be positive")
+    if "hydraulic_conductance" in net.throat:
+        return generic_poiseuille_conductance(net, viscosity)
+    return _throat_only_shape_factor_conductance(net, viscosity)
+
+
+def valvatne_blunt_conductance(net: Network, viscosity: float) -> np.ndarray:
+    """Compute a shape-factor-aware single-phase conductance following Valvatne-Blunt.
 
     Parameters
     ----------
@@ -406,8 +616,15 @@ def valvatne_blunt_baseline_conductance(net: Network, viscosity: float) -> np.nd
 
     Notes
     -----
-    This is a pragmatic single-phase baseline inspired by conduit decomposition
-    commonly used in pore-network models. The selection logic is:
+    This implements the single-phase geometric closure used in the Imperial
+    College Valvatne-Blunt style network model:
+
+    - segment conductance is evaluated as ``g = k * G * A**2 / (mu * L)``
+    - ``k = 3/5`` for triangular ducts
+    - ``k = 0.5623`` for square ducts
+    - ``k = 1/2`` for circular ducts
+
+    The selection logic is:
 
     1. If ``throat.hydraulic_conductance`` is explicitly present, return it.
     2. Else, if conduit lengths and pore/throat shape data are available, compute a
@@ -415,7 +632,8 @@ def valvatne_blunt_baseline_conductance(net: Network, viscosity: float) -> np.nd
     3. Else, if throat-only shape data are available, use a throat-only model.
     4. Else, warn and fall back to circular Poiseuille conductance.
 
-    It is not a full reproduction of Valvatne-Blunt multiphase physics.
+    This is still a single-phase closure; corner films and multiphase occupancy are
+    intentionally out of scope here.
     """
 
     if viscosity <= 0:
@@ -440,6 +658,12 @@ def valvatne_blunt_baseline_conductance(net: Network, viscosity: float) -> np.nd
         return generic_poiseuille_conductance(net, viscosity)
 
 
+def valvatne_blunt_baseline_conductance(net: Network, viscosity: float) -> np.ndarray:
+    """Backward-compatible alias for :func:`valvatne_blunt_conductance`."""
+
+    return valvatne_blunt_conductance(net, viscosity)
+
+
 def available_conductance_models() -> tuple[str, ...]:
     """Return the names of built-in hydraulic conductance models.
 
@@ -449,7 +673,12 @@ def available_conductance_models() -> tuple[str, ...]:
         Available model names.
     """
 
-    return ("generic_poiseuille", "valvatne_blunt_baseline")
+    return (
+        "generic_poiseuille",
+        "valvatne_blunt_throat",
+        "valvatne_blunt",
+        "valvatne_blunt_baseline",
+    )
 
 
 def throat_conductance(
@@ -479,6 +708,10 @@ def throat_conductance(
 
     if model == "generic_poiseuille":
         return generic_poiseuille_conductance(net, viscosity)
+    if model == "valvatne_blunt_throat":
+        return valvatne_blunt_throat_conductance(net, viscosity)
+    if model == "valvatne_blunt":
+        return valvatne_blunt_conductance(net, viscosity)
     if model == "valvatne_blunt_baseline":
-        return valvatne_blunt_baseline_conductance(net, viscosity)
+        return valvatne_blunt_conductance(net, viscosity)
     raise ValueError(f"Unknown conductance model '{model}'")

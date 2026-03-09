@@ -15,6 +15,8 @@
 #   own conductances from geometry rather than reusing the `voids` values
 
 # %%
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -27,15 +29,31 @@ from voids.generators import (
 )
 from voids.image import binarize_grayscale_volume
 
+
+def _find_project_root() -> Path:
+    cwd = Path.cwd().resolve()
+    for candidate in (cwd, *cwd.parents):
+        if (candidate / "mkdocs.yml").exists() and (candidate / "docs").exists():
+            return candidate
+    return cwd
+
+
 # %%
 flow_axis = "x"
 axis_index = 0
 voxel_size = 2.0e-6
 fluid = FluidSinglePhase(viscosity=1.0e-3)
 options = SinglePhaseOptions(
-    conductance_model="valvatne_blunt_baseline",
+    conductance_model="valvatne_blunt",
     solver="direct",
 )
+project_root = _find_project_root()
+report_dir = project_root / "docs" / "assets" / "verification"
+report_dir.mkdir(parents=True, exist_ok=True)
+report_csv = report_dir / "openpnm_5_case_results.csv"
+segmentation_figure_path = report_dir / "openpnm_representative_segmentation.png"
+comparison_figure_path = report_dir / "openpnm_permeability_scatter.png"
+porosity_figure_path = report_dir / "openpnm_porosity_pipeline.png"
 
 case_specs = [
     {
@@ -205,11 +223,13 @@ axes[2].set_ylabel("y")
 
 fig.suptitle("Representative mid-plane slices", fontsize=14)
 plt.tight_layout()
+fig.savefig(segmentation_figure_path, dpi=160, bbox_inches="tight")
 plt.show()
 
 rep_row = summary_df.loc[summary_df["case"] == representative_case].iloc[0]
 print("Representative threshold:", rep_row["threshold"])
 print("Representative segmentation mismatch:", rep_row["segmentation_mismatch"])
+print("Saved:", segmentation_figure_path)
 
 # %% [markdown]
 # ## Comparison plots
@@ -219,70 +239,80 @@ print("Representative segmentation mismatch:", rep_row["segmentation_mismatch"])
 # going from the segmented image to the pruned spanning network used for transport.
 
 # %%
-fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
+fig, ax = plt.subplots(figsize=(6.4, 5.2))
 
 kmin = float(min(summary_df["k_voids"].min(), summary_df["k_openpnm"].min()))
 kmax = float(max(summary_df["k_voids"].max(), summary_df["k_openpnm"].max()))
 
-axes[0].scatter(
+ax.scatter(
     summary_df["k_voids"],
     summary_df["k_openpnm"],
     s=70,
     color="tab:blue",
 )
-axes[0].plot([kmin, kmax], [kmin, kmax], "k--", linewidth=1.5)
+ax.plot([kmin, kmax], [kmin, kmax], "k--", linewidth=1.5)
 for row in summary_df.itertuples(index=False):
-    axes[0].annotate(
+    ax.annotate(
         row.case,
         (row.k_voids, row.k_openpnm),
         textcoords="offset points",
         xytext=(5, 4),
         fontsize=8,
     )
-axes[0].set_xscale("log")
-axes[0].set_yscale("log")
-axes[0].set_xlabel("Kabs from voids [m^2]")
-axes[0].set_ylabel("Kabs from OpenPNM [m^2]")
-axes[0].set_title("Permeability comparison")
-axes[0].grid(alpha=0.3, linestyle=":")
+ax.set_xscale("log")
+ax.set_yscale("log")
+ax.set_xlabel("Kabs from voids [m^2]")
+ax.set_ylabel("Kabs from OpenPNM [m^2]")
+ax.set_title("Permeability comparison")
+ax.grid(alpha=0.3, linestyle=":")
 
-axes[1].plot(
+plt.tight_layout()
+fig.savefig(comparison_figure_path, dpi=160, bbox_inches="tight")
+plt.show()
+print("Saved:", comparison_figure_path)
+
+# %%
+fig, ax = plt.subplots(figsize=(7.4, 4.8))
+
+ax.plot(
     summary_df["case"],
     summary_df["phi_truth"],
     marker="o",
     linewidth=2,
     label="phi_truth",
 )
-axes[1].plot(
+ax.plot(
     summary_df["case"],
     summary_df["phi_image"],
     marker="s",
     linewidth=2,
     label="phi_segmented",
 )
-axes[1].plot(
+ax.plot(
     summary_df["case"],
     summary_df["phi_abs"],
     marker="^",
     linewidth=2,
     label="phi_abs(network)",
 )
-axes[1].plot(
+ax.plot(
     summary_df["case"],
     summary_df["phi_eff"],
     marker="d",
     linewidth=2,
     label="phi_eff(network)",
 )
-axes[1].set_xlabel("Benchmark case")
-axes[1].set_ylabel("Porosity [-]")
-axes[1].set_title("Porosity from image to extracted network")
-axes[1].tick_params(axis="x", rotation=20)
-axes[1].grid(alpha=0.3, linestyle=":")
-axes[1].legend()
+ax.set_xlabel("Benchmark case")
+ax.set_ylabel("Porosity [-]")
+ax.set_title("Porosity from image to extracted network")
+ax.tick_params(axis="x", rotation=20)
+ax.grid(alpha=0.3, linestyle=":")
+ax.legend()
 
 plt.tight_layout()
+fig.savefig(porosity_figure_path, dpi=160, bbox_inches="tight")
 plt.show()
+print("Saved:", porosity_figure_path)
 
 # %% [markdown]
 # ## Numerical summary
@@ -290,6 +320,10 @@ plt.show()
 # On this benchmark suite, permeability and total-flow differences should remain near machine precision.
 # If that stops being true, the first things to inspect are extraction changes, BC labeling, or solver/API
 # changes in OpenPNM.
+
+# %%
+summary_df.to_csv(report_csv, index=False)
+print("Saved:", report_csv)
 
 # %%
 max_k_rel = float(summary_df["k_rel_diff"].max())

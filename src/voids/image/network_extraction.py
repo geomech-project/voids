@@ -156,6 +156,8 @@ def extract_spanning_pore_network(
     extraction_kwargs: dict[str, object] | None = None,
     provenance_notes: dict[str, object] | None = None,
     strict: bool = True,
+    geometry_repairs: str | None = "imperial_export",
+    repair_seed: int | None = 0,
 ) -> NetworkExtractionResult:
     """Extract, import, and prune an axis-spanning pore network from an image.
 
@@ -176,6 +178,14 @@ def extract_spanning_pore_network(
         Optional extra provenance metadata attached to the resulting network.
     strict :
         Forwarded to :func:`voids.io.porespy.from_porespy`.
+    geometry_repairs :
+        Optional importer preprocessing mode. The default
+        ``"imperial_export"`` applies the Imperial College export-style
+        shape-factor repair heuristics during the PoreSpy-to-``voids``
+        conversion.
+    repair_seed :
+        Seed for any stochastic repair branch when ``geometry_repairs`` is not
+        ``None``.
 
     Returns
     -------
@@ -197,7 +207,7 @@ def extract_spanning_pore_network(
     if selected_axis not in axis_lengths:
         raise ValueError(f"flow_axis '{selected_axis}' is not compatible with shape {arr.shape}")
 
-    network_dict = _snow2_network_dict(arr, snow2_kwargs=extraction_kwargs)
+    network_dict = _snow2_network_dict(arr, snow2_kwargs=dict(extraction_kwargs or {}))
     network_dict = scale_porespy_geometry(network_dict, voxel_size=voxel_size)
     network_dict = ensure_cartesian_boundary_labels(network_dict, axes=(selected_axis,))
 
@@ -218,9 +228,17 @@ def extract_spanning_pore_network(
         source_kind="image_extraction",
         source_version=getattr(ps, "__version__", None),
         extraction_method="snow2",
+        random_seed=repair_seed if geometry_repairs is not None else None,
         user_notes=dict(provenance_notes or {}),
     )
-    net_full = from_porespy(network_dict, sample=sample, provenance=provenance, strict=strict)
+    net_full = from_porespy(
+        network_dict,
+        sample=sample,
+        provenance=provenance,
+        strict=strict,
+        geometry_repairs=geometry_repairs,
+        repair_seed=repair_seed,
+    )
     net, pore_indices, throat_mask = spanning_subnetwork(net_full, axis=selected_axis)
     return NetworkExtractionResult(
         image=arr,

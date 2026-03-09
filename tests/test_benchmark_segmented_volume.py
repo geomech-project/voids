@@ -40,7 +40,7 @@ def test_benchmark_segmented_volume_with_openpnm_returns_consistent_scalars() ->
     assert record["Nt"] == result.extract.net.Nt
     assert record["phi_abs"] == pytest.approx(result.absolute_porosity)
     assert record["phi_eff"] == pytest.approx(result.effective_porosity)
-    assert record["conductance_model"] == "valvatne_blunt_baseline"
+    assert record["conductance_model"] == "valvatne_blunt"
     assert record["solver_voids"] == "direct"
     assert record["dp_physical"] == pytest.approx(1.0)
     assert record["k_rel_diff"] < 1.0e-10
@@ -212,7 +212,7 @@ def test_benchmark_segmented_volume_with_openpnm_uses_harmonized_pressure_defaul
     assert crosscheck_args["bc"].pin == pytest.approx(1.0)
     assert crosscheck_args["bc"].pout == pytest.approx(0.0)
     assert crosscheck_args["fluid"].viscosity == pytest.approx(1.0e-3)
-    assert crosscheck_args["options"].conductance_model == "valvatne_blunt_baseline"
+    assert crosscheck_args["options"].conductance_model == "valvatne_blunt"
     assert crosscheck_args["options"].solver == "direct"
 
     assert result.image_porosity == pytest.approx(1.0)

@@ -261,9 +261,7 @@ def evaluate_case(
         fluid=FluidSinglePhase(viscosity=1.0e-3),
         bc=bc,
         axis=FLOW_AXIS,
-        options=SinglePhaseOptions(
-            conductance_model="valvatne_blunt_baseline", solver="direct"
-        ),
+        options=SinglePhaseOptions(conductance_model="valvatne_blunt", solver="direct"),
     )
 
     pore_size_m, pore_size_field = characteristic_size(
@@ -862,7 +860,7 @@ print("PNG export summary:", png_export_summary)
 # - One centered vug does not capture stochastic spatial distributions of vugs.
 # - Synthetic grayscale + Otsu may differ from real imaging artifacts and segmentation bias.
 # - Results depend on the extraction model (`snow2`) and conductance model
-#   (`valvatne_blunt_baseline`).
+#   (`valvatne_blunt`).
 # - Even with 15 baselines, uncertainty quantification is still limited; more realizations
 #   are recommended for robust inference.
 #

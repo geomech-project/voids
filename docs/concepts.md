@@ -62,6 +62,44 @@ cannot recover the scientific intent automatically.
 
 ---
 
+## Hydraulic Geometry Fields
+
+For the single-phase conductance models, the most important geometric fields are:
+
+- `throat.length`
+- `throat.area`
+- `throat.perimeter`
+- `throat.shape_factor`
+- `throat.radius_inscribed` or `throat.diameter_inscribed`
+
+and, for the full pore-throat-pore conduit model,
+
+- `pore.area`
+- `pore.perimeter`
+- `pore.shape_factor`
+- `pore.radius_inscribed` or `pore.diameter_inscribed`
+- `throat.pore1_length`
+- `throat.core_length`
+- `throat.pore2_length`
+
+The guiding interpretation is:
+
+- `generic_poiseuille` assumes circular throats
+- `valvatne_blunt_throat` treats each throat as an equivalent non-circular duct
+- `valvatne_blunt` treats each connection as three resistors in series: pore1,
+  throat core, pore2
+
+If `shape_factor` is missing but enough surrogate geometry exists, `voids` may
+derive it from `A / P^2` or from the equivalent relation between area and
+inscribed size.
+If conduit sub-lengths are absent, `valvatne_blunt` falls back to the throat-only
+shape-aware model.
+
+The richer theory and derivation are documented in
+[Theoretical Background](background.md#hydraulic-conductance).
+
+---
+
 ## Pore And Throat Array Semantics
 
 The most important convention is simple:
