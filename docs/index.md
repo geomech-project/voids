@@ -2,7 +2,7 @@
   <img src="assets/logo.png" alt="voids logo" style="max-width: 600px; width: 100%;">
 </p>
 
-# voids
+# Overview
 
 [![Tests](https://github.com/geomech-project/voids/actions/workflows/tests.yml/badge.svg)](https://github.com/geomech-project/voids/actions/workflows/tests.yml)
 [![Coverage](https://codecov.io/gh/geomech-project/voids/branch/main/graph/badge.svg)](https://codecov.io/gh/geomech-project/voids)
