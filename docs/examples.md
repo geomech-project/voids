@@ -45,6 +45,7 @@ In practice:
 | `08` to `11` vug notebooks | Run controlled geometry-sensitivity studies |
 | `12_mwe_synthetic_volume_openpnm_benchmark` | Benchmark extracted-volume transport against OpenPNM |
 | `13_mwe_synthetic_volume_xlb_benchmark` | Benchmark direct-image LBM transport against extracted-network PNM |
+| `15_mwe_external_pnflow_benchmark` | Compare `voids` against a committed external `pnextract` / `pnflow` reference |
 
 ---
 
@@ -171,6 +172,8 @@ extracts a network with PoreSpy, and compares resulting `Kabs` predictions betwe
 
 This notebook is the closest thing in the current tree to an end-to-end extraction
 and solver-comparison benchmark.
+The corresponding narrative report is documented in
+[Verification / OpenPNM Extracted-Network Cross-Check](verification/openpnm.md).
 
 ---
 
@@ -191,3 +194,20 @@ pressure level, and includes a full 15-case steady Stokes-limit rerun alongside 
 benchmark-mode comparison.
 The corresponding narrative report is documented in
 [Verification / XLB Direct-Image Permeability Benchmark](verification/xlb.md).
+
+---
+
+### 15 — External `pnextract` / `pnflow` Benchmark
+
+**`15_mwe_external_pnflow_benchmark`**
+
+Loads a committed reference dataset produced earlier with external `pnextract`
+and `pnflow`, reruns the current `voids` workflow on the same exact saved
+binary volumes, and compares permeability, porosity, and extracted-network
+size.
+
+This is the notebook to use when the scientific question is whether the current
+`voids` image-to-network workflow tracks an independent external PNM workflow
+closely enough on controlled synthetic cases.
+The corresponding narrative report is documented in
+[Verification / External pnextract / pnflow Benchmark](verification/pnflow.md).
