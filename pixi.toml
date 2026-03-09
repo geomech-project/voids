@@ -1,6 +1,6 @@
 [workspace]
 name = "voids"
-version = "0.1.4"
+version = "0.1.5"
 description = "Scientific Python package for pore network modeling (PNM)"
 channels = ["conda-forge"]
 platforms = ["linux-64", "osx-arm64", "win-64"]

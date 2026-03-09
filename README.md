@@ -262,7 +262,7 @@ pixi run notebooks-smoke
 Version updates are handled with:
 
 ```bash
-pixi run bump-version 0.1.4
+pixi run bump-version <new-version>
 ```
 
 ## Status
