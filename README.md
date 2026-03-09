@@ -188,6 +188,22 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
   - DRP-317 Bentheimer validation notebook against experimental porosity and permeability
 - `20_mwe_drp317_banderagray_raw_porosity_perm`
   - DRP-317 Bandera Gray validation notebook against experimental porosity and permeability
+- `21_mwe_drp317_banderabrown_raw_porosity_perm`
+  - DRP-317 Bandera Brown notebook against the Table 1 experimental porosity and permeability values
+- `22_mwe_drp317_bereasistergray_raw_porosity_perm`
+  - DRP-317 Berea Sister Gray notebook against the Table 1 experimental porosity and permeability values
+- `23_mwe_drp317_bereauppergray_raw_porosity_perm`
+  - DRP-317 Berea Upper Gray notebook against the Table 1 experimental porosity and permeability values
+- `24_mwe_drp317_buffberea_raw_porosity_perm`
+  - DRP-317 Buff Berea notebook against the Table 1 experimental porosity and permeability values
+- `25_mwe_drp317_castlegate_raw_porosity_perm`
+  - DRP-317 Castlegate notebook against the Table 1 experimental porosity and permeability values
+- `26_mwe_drp317_kirby_raw_porosity_perm`
+  - DRP-317 Kirby notebook against the Table 1 experimental porosity and permeability values
+- `27_mwe_drp317_leopard_raw_porosity_perm`
+  - DRP-317 Leopard notebook against the Table 1 experimental porosity and permeability values
+- `28_mwe_drp317_parker_raw_porosity_perm`
+  - DRP-317 Parker notebook against the Table 1 experimental porosity and permeability values
 
 Example data under `examples/data/` includes a deterministic manufactured void image and
 generated artifacts from the extraction/mesh notebooks.
@@ -214,6 +230,9 @@ The DRP-317 notebooks and validation reports use the following sources:
   Barbalho, H., Trevizan, W. A., Bonagamba, T. J., & Steiner, M. B. (2021).
   *High accuracy capillary network representation in digital rock reveals permeability scaling functions*.
   *Scientific Reports, 11*, 11370. <https://doi.org/10.1038/s41598-021-90090-0>
+
+The full Table 1 sample references used by the DRP-317 notebooks are committed in
+[`examples/data/drp-317/drp317_experimental_references.csv`](examples/data/drp-317/drp317_experimental_references.csv).
 
 ## Scientific Notes
 

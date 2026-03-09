@@ -24,7 +24,15 @@ come from any part of the workflow, including:
 Current validation studies:
 
 - [DRP-317 sandstone validation overview](drp317.md)
+- [DRP-317 Parker notebook report](drp317_parker.md)
+- [DRP-317 Kirby notebook report](drp317_kirby.md)
+- [DRP-317 Bandera Brown notebook report](drp317_bandera_brown.md)
+- [DRP-317 Berea Sister Gray notebook report](drp317_berea_sister_gray.md)
+- [DRP-317 Berea Upper Gray notebook report](drp317_berea_upper_gray.md)
 - [DRP-317 Berea notebook report](drp317_berea.md)
+- [DRP-317 Castlegate notebook report](drp317_castlegate.md)
+- [DRP-317 Buff Berea notebook report](drp317_buff_berea.md)
+- [DRP-317 Leopard notebook report](drp317_leopard.md)
 - [DRP-317 Bentheimer notebook report](drp317_bentheimer.md)
 - [DRP-317 Bandera Gray notebook report](drp317_banderagray.md)
 

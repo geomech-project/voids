@@ -26,7 +26,15 @@ The software-verification studies live under [Verification](software.md):
 The experimental-validation studies live under [Validation](../validation/index.md):
 
 - [DRP-317 sandstone validation overview](../validation/drp317.md)
+- [DRP-317 Parker notebook report](../validation/drp317_parker.md)
+- [DRP-317 Kirby notebook report](../validation/drp317_kirby.md)
+- [DRP-317 Bandera Brown notebook report](../validation/drp317_bandera_brown.md)
+- [DRP-317 Berea Sister Gray notebook report](../validation/drp317_berea_sister_gray.md)
+- [DRP-317 Berea Upper Gray notebook report](../validation/drp317_berea_upper_gray.md)
 - [DRP-317 Berea notebook report](../validation/drp317_berea.md)
+- [DRP-317 Castlegate notebook report](../validation/drp317_castlegate.md)
+- [DRP-317 Buff Berea notebook report](../validation/drp317_buff_berea.md)
+- [DRP-317 Leopard notebook report](../validation/drp317_leopard.md)
 - [DRP-317 Bentheimer notebook report](../validation/drp317_bentheimer.md)
 - [DRP-317 Bandera Gray notebook report](../validation/drp317_banderagray.md)
 

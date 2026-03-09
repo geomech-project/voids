@@ -52,6 +52,14 @@ In practice:
 | `18_mwe_drp317_berea_raw_porosity_perm` | Validate the DRP-317 Berea case against experimental porosity and permeability |
 | `19_mwe_drp317_bentheimer_raw_porosity_perm` | Validate the DRP-317 Bentheimer case against experimental porosity and permeability |
 | `20_mwe_drp317_banderagray_raw_porosity_perm` | Validate the DRP-317 Bandera Gray case against experimental porosity and permeability |
+| `21_mwe_drp317_banderabrown_raw_porosity_perm` | Run the DRP-317 Bandera Brown raw-volume workflow against the Table 1 experimental references |
+| `22_mwe_drp317_bereasistergray_raw_porosity_perm` | Run the DRP-317 Berea Sister Gray raw-volume workflow against the Table 1 experimental references |
+| `23_mwe_drp317_bereauppergray_raw_porosity_perm` | Run the DRP-317 Berea Upper Gray raw-volume workflow against the Table 1 experimental references |
+| `24_mwe_drp317_buffberea_raw_porosity_perm` | Run the DRP-317 Buff Berea raw-volume workflow against the Table 1 experimental references |
+| `25_mwe_drp317_castlegate_raw_porosity_perm` | Run the DRP-317 Castlegate raw-volume workflow against the Table 1 experimental references |
+| `26_mwe_drp317_kirby_raw_porosity_perm` | Run the DRP-317 Kirby raw-volume workflow against the Table 1 experimental references |
+| `27_mwe_drp317_leopard_raw_porosity_perm` | Run the DRP-317 Leopard raw-volume workflow against the Table 1 experimental references |
+| `28_mwe_drp317_parker_raw_porosity_perm` | Run the DRP-317 Parker raw-volume workflow against the Table 1 experimental references |
 
 ---
 
@@ -283,10 +291,32 @@ The corresponding narrative report is documented in
 
 ---
 
+### 21-28 - Additional DRP-317 Sandstones
+
+**`21_mwe_drp317_banderabrown_raw_porosity_perm`**
+**`22_mwe_drp317_bereasistergray_raw_porosity_perm`**
+**`23_mwe_drp317_bereauppergray_raw_porosity_perm`**
+**`24_mwe_drp317_buffberea_raw_porosity_perm`**
+**`25_mwe_drp317_castlegate_raw_porosity_perm`**
+**`26_mwe_drp317_kirby_raw_porosity_perm`**
+**`27_mwe_drp317_leopard_raw_porosity_perm`**
+**`28_mwe_drp317_parker_raw_porosity_perm`**
+
+These notebooks extend the existing DRP-317 workflow to the remaining raw binary
+volumes under `examples/data/drp-317/`. They keep the same current PNM setup as
+notebooks 18-20: ROI-based extraction from the full `1000^3` volume, pressure-
+dependent water viscosity, and directional `Kabs` comparison against the Table 1
+experimental values from the Scientific Reports paper.
+
+The paper-reference values used by all eleven DRP-317 notebooks are committed in
+`examples/data/drp-317/drp317_experimental_references.csv`.
+
+---
+
 ## DRP-317 Data Source
 
-The three DRP-317 validation notebooks use the following sources and should cite them
-explicitly in downstream work:
+The DRP-317 notebooks use the following sources and should cite them explicitly in
+downstream work:
 
 - Dataset: Neumann, R., ANDREETA, M., Lucas-Oliveira, E. (2020, October 7).
   *11 Sandstones: raw, filtered and segmented data* [Dataset].
@@ -295,6 +325,9 @@ explicitly in downstream work:
   Barbalho, H., Trevizan, W. A., Bonagamba, T. J., & Steiner, M. B. (2021).
   *High accuracy capillary network representation in digital rock reveals permeability scaling functions*.
   *Scientific Reports, 11*, 11370. <https://doi.org/10.1038/s41598-021-90090-0>
+
+For convenience, the Table 1 experimental porosity and permeability values used by the
+notebooks are also committed in `examples/data/drp-317/drp317_experimental_references.csv`.
 
 ---
 
