@@ -60,6 +60,8 @@ In practice:
 | `26_mwe_drp317_kirby_raw_porosity_perm` | Run the DRP-317 Kirby raw-volume workflow against the Table 1 experimental references |
 | `27_mwe_drp317_leopard_raw_porosity_perm` | Run the DRP-317 Leopard raw-volume workflow against the Table 1 experimental references |
 | `28_mwe_drp317_parker_raw_porosity_perm` | Run the DRP-317 Parker raw-volume workflow against the Table 1 experimental references |
+| `29_mwe_drp443_ifn_raw_porosity_perm` | Validate DRP-443 IFN fractured-media permeability against SPE 212849 Table 2 |
+| `30_mwe_drp443_dilatedifn_raw_porosity_perm` | Validate DRP-443 Dilated IFN fractured-media permeability against SPE 212849 Table 2 |
 
 ---
 
@@ -310,6 +312,23 @@ experimental values from the Scientific Reports paper.
 
 The paper-reference values used by all eleven DRP-317 notebooks are committed in
 `examples/data/drp-317/drp317_experimental_references.csv`.
+
+---
+
+### 29-30 - DRP-443 Fractured IFN Cases
+
+**`29_mwe_drp443_ifn_raw_porosity_perm`**
+**`30_mwe_drp443_dilatedifn_raw_porosity_perm`**
+
+These notebooks validate `voids` on two DRP-443 induced-fracture-network
+volumes (`IFN` and `DilatedIFN`) using paper-reference values from SPE
+212849 Table 2.
+
+For DRP-443, both workflows are intentionally full-volume only (no ROI
+selection/subvolume analysis), matching your fractured-media requirement.
+
+The extracted paper-reference values used by these notebooks are committed in
+`examples/data/drp-443/drp443_reference_values.csv`.
 
 ---
 

@@ -1,0 +1,3 @@
+sample_label,sample_name,raw_filename,voxel_shape,resolution_um,physical_size_mm,paper_average_aperture_um,paper_kabs_darcy,paper_kabs_mD,paper_table_reference,paper_doi,dataset_url
+IFN,IFN,IFN.raw,550x550x500,12.559,6.9074x6.9074x6.2795,140.95,130.29,130290.0,Table 2,10.2118/212849-PA,https://digitalporousmedia.org/published-datasets/drp.project.published.DRP-443
+DIFN,Dilated IFN,DilatedIFN.raw,550x550x500,12.559,6.9074x6.9074x6.2795,117.36,36.73,36730.0,Table 2,10.2118/212849-PA,https://digitalporousmedia.org/published-datasets/drp.project.published.DRP-443

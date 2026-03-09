@@ -1,0 +1,6 @@
+property,estimated,units,paper_reference,abs_error,rel_error_pct,reference_label
+Porosity (image full volume),11.242818512396695,%,,,,SPE 212849-PA Table 2
+Porosity (network absolute),11.421615206611571,%,,,,SPE 212849-PA Table 2
+Porosity (network effective),11.421615206611571,%,,,,SPE 212849-PA Table 2
+Absolute permeability Kx (paper flow direction),21247.638887278146,mD,36730.0,-15482.361112721854,-42.151813538583866,SPE 212849-PA Table 2
+Paper average aperture,,um,117.36,,,SPE 212849-PA Table 2

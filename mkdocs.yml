@@ -98,6 +98,7 @@ nav:
       - XLB Direct-Image Permeability Benchmark: verification/xlb.md
     - Validation:
       - Experimental Validation Overview: validation/index.md
+      - DRP-443 Fracture-Network Validation Overview: validation/drp443.md
       - DRP-317 Sandstone Validation Overview: validation/drp317.md
       - DRP-317 Berea Notebook Report: validation/drp317_berea.md
       - DRP-317 Bentheimer Notebook Report: validation/drp317_bentheimer.md

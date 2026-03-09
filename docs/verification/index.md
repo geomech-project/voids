@@ -25,6 +25,7 @@ The software-verification studies live under [Verification](software.md):
 
 The experimental-validation studies live under [Validation](../validation/index.md):
 
+- [DRP-443 fracture-network validation overview](../validation/drp443.md)
 - [DRP-317 sandstone validation overview](../validation/drp317.md)
 - [DRP-317 Parker notebook report](../validation/drp317_parker.md)
 - [DRP-317 Kirby notebook report](../validation/drp317_kirby.md)
