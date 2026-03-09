@@ -485,10 +485,10 @@ def generic_poiseuille_conductance(
     ``throat.area``.
     """
 
-    mu_t = _broadcast_viscosity(
-        throat_viscosity if throat_viscosity is not None else viscosity,
-        (net.Nt,),
-    )
+    selected_viscosity = throat_viscosity if throat_viscosity is not None else viscosity
+    if selected_viscosity is None:
+        raise ValueError("Need either viscosity or throat_viscosity")
+    mu_t = _broadcast_viscosity(selected_viscosity, (net.Nt,))
     if "hydraulic_conductance" in net.throat:
         g = np.asarray(net.throat["hydraulic_conductance"], dtype=float)
         if (g < 0).any():
@@ -506,7 +506,7 @@ def generic_poiseuille_conductance(
             "Need throat.diameter_inscribed or throat.area (or precomputed hydraulic_conductance)"
         )
     r = 0.5 * d
-    return (np.pi * r**4) / (8.0 * mu_t * L)
+    return np.asarray((np.pi * r**4) / (8.0 * mu_t * L), dtype=float)
 
 
 def _conduit_lengths_available(net: Network) -> bool:
@@ -598,8 +598,10 @@ def _throat_only_shape_factor_conductance(
     L = np.asarray(net.throat["length"], dtype=float)
     A = _get_entity_area(net, "throat")
     G = _get_entity_shape_factor(net, "throat", area=A)
-    mu_t = throat_viscosity if throat_viscosity is not None else viscosity
-    return _segment_conductance_valvatne_blunt(A, G, L, mu_t)
+    selected_viscosity = throat_viscosity if throat_viscosity is not None else viscosity
+    if selected_viscosity is None:
+        raise ValueError("Need either viscosity or throat_viscosity")
+    return _segment_conductance_valvatne_blunt(A, G, L, selected_viscosity)
 
 
 def _valvatne_conduit_baseline(
@@ -692,10 +694,10 @@ def valvatne_blunt_throat_conductance(
         If required throat geometry is unavailable.
     """
 
-    _broadcast_viscosity(
-        throat_viscosity if throat_viscosity is not None else viscosity,
-        (net.Nt,),
-    )
+    selected_viscosity = throat_viscosity if throat_viscosity is not None else viscosity
+    if selected_viscosity is None:
+        raise ValueError("Need either viscosity or throat_viscosity")
+    _broadcast_viscosity(selected_viscosity, (net.Nt,))
     if "hydraulic_conductance" in net.throat:
         return generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
     return _throat_only_shape_factor_conductance(
@@ -905,10 +907,10 @@ def throat_conductance_with_sensitivities(
         return g, zeros, zeros
 
     if model == "generic_poiseuille":
-        mu_t = _broadcast_viscosity(
-            throat_viscosity if throat_viscosity is not None else viscosity,
-            (net.Nt,),
-        )
+        selected_viscosity = throat_viscosity if throat_viscosity is not None else viscosity
+        if selected_viscosity is None:
+            raise ValueError("Need either viscosity or throat_viscosity")
+        mu_t = _broadcast_viscosity(selected_viscosity, (net.Nt,))
         dmu_t = (
             _broadcast_finite(
                 throat_dviscosity_dpressure,
@@ -935,10 +937,10 @@ def throat_conductance_with_sensitivities(
         return g, dg_dmu * factor, dg_dmu * factor
 
     if model == "valvatne_blunt_throat":
-        mu_t = _broadcast_viscosity(
-            throat_viscosity if throat_viscosity is not None else viscosity,
-            (net.Nt,),
-        )
+        selected_viscosity = throat_viscosity if throat_viscosity is not None else viscosity
+        if selected_viscosity is None:
+            raise ValueError("Need either viscosity or throat_viscosity")
+        mu_t = _broadcast_viscosity(selected_viscosity, (net.Nt,))
         dmu_t = (
             _broadcast_finite(
                 throat_dviscosity_dpressure,
