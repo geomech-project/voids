@@ -7,6 +7,17 @@ workflow that exercises the current single-phase solver.
 
 ## Installation
 
+### Install from PyPI
+
+If you want the published package from PyPI:
+
+```bash
+pip install voids
+```
+
+Package page:
+<https://pypi.org/project/voids/>
+
 ### Recommended: Pixi
 
 The repository is configured for [Pixi](https://pixi.sh) and exposes four primary
@@ -44,7 +55,8 @@ That command exercises the packaged demo workflow and prints a compact JSON summ
 
 ### Editable pip install
 
-If you prefer a plain Python environment (Python ≥ 3.11):
+If you prefer a plain Python environment from a local repository checkout
+(Python ≥ 3.11):
 
 ```bash
 python -m pip install -e .

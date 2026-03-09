@@ -7,6 +7,8 @@
 [![Tests](https://github.com/geomech-project/voids/actions/workflows/tests.yml/badge.svg)](https://github.com/geomech-project/voids/actions/workflows/tests.yml)
 [![Coverage](https://codecov.io/gh/geomech-project/voids/branch/main/graph/badge.svg)](https://codecov.io/gh/geomech-project/voids)
 [![Supported OS](https://img.shields.io/badge/OS-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/geomech-project/voids/actions/workflows/tests.yml)
+[![PyPI version](https://img.shields.io/pypi/v/voids)](https://pypi.org/project/voids/)
+[![pip install voids](https://img.shields.io/badge/pip%20install-voids-3775A9?logo=pypi&logoColor=white)](https://pypi.org/project/voids/)
 
 `voids` is a scientific Python package for pore network modeling (PNM) aimed at
 research workflows where reproducibility, explicit assumptions, and validation matter.
@@ -65,6 +67,17 @@ The rendered documentation is intended to live alongside the repository at
 
 ## Installation
 
+### Install from PyPI
+
+If you want the published package rather than a local editable checkout:
+
+```bash
+pip install voids
+```
+
+PyPI package page:
+<https://pypi.org/project/voids/>
+
 ### Recommended: Pixi
 
 This repository is configured for Pixi and exposes four main environments:
@@ -88,7 +101,7 @@ Pixi activation also provides project path variables used by notebooks:
 
 ### Editable pip install
 
-If you prefer a plain Python environment:
+If you prefer a plain Python environment from the repository checkout:
 
 ```bash
 python -m pip install -e .
