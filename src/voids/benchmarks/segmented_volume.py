@@ -167,7 +167,7 @@ def benchmark_segmented_volume_with_openpnm(
         permeability.
     options :
         Solver controls. Defaults to the image-workflow baseline
-        ``valvatne_blunt_baseline`` with the direct linear solver.
+        ``valvatne_blunt`` with the direct linear solver.
     length_unit, pressure_unit :
         Units attached to the extracted sample geometry.
     extraction_kwargs :
@@ -230,7 +230,7 @@ def benchmark_segmented_volume_with_openpnm(
 
     fluid_used = fluid or FluidSinglePhase(viscosity=1.0e-3)
     options_used = options or SinglePhaseOptions(
-        conductance_model="valvatne_blunt_baseline",
+        conductance_model="valvatne_blunt",
         solver="direct",
     )
     axis = extract.flow_axis

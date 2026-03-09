@@ -972,7 +972,7 @@ def benchmark_segmented_volume_with_xlb(
 
     fluid_used = fluid or FluidSinglePhase(viscosity=1.0e-3, density=1.0e3)
     options_used = options or SinglePhaseOptions(
-        conductance_model="valvatne_blunt_baseline",
+        conductance_model="valvatne_blunt",
         solver="direct",
     )
     xlb_options_used = xlb_options or XLBOptions()
