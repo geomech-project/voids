@@ -9,6 +9,8 @@ import pytest
 from scipy import sparse
 
 from voids.core.network import Network
+from voids.core.sample import SampleGeometry
+from voids.examples import make_linear_chain_network
 from voids.geom.hydraulic import (
     _get_entity_area,
     _segment_conductance_from_agl,
@@ -26,9 +28,60 @@ from voids.physics.singlephase import (
     FluidSinglePhase,
     PressureBC,
     SinglePhaseOptions,
+    _assemble_active_system,
+    _assemble_variable_viscosity_system,
+    _evaluate_viscosity_fields,
+    _evaluate_viscosity_fields_with_derivatives,
     _make_dirichlet_vector,
+    _solve_with_variable_viscosity,
+    _solve_with_variable_viscosity_newton,
+    _validate_options,
     solve,
 )
+from voids.physics.thermo import TabulatedWaterViscosityModel
+
+
+class LinearPressureViscosityBackend:
+    """Analytic backend used to drive variable-viscosity solver branches."""
+
+    name = "linear-test"
+
+    def evaluate(self, pressure: np.ndarray, *, temperature: float) -> np.ndarray:
+        del temperature
+        return np.asarray(pressure, dtype=float)
+
+
+def _linear_viscosity_model() -> TabulatedWaterViscosityModel:
+    """Return a compact analytic pressure-viscosity model."""
+
+    return TabulatedWaterViscosityModel(
+        backend=LinearPressureViscosityBackend(),
+        temperature=300.0,
+        pressure_points=32,
+        pressure_padding_fraction=0.0,
+    )
+
+
+def _two_pore_active_network() -> Network:
+    """Return a minimal active network with no free pores."""
+
+    return Network(
+        pore_coords=np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+        throat_conns=np.array([[0, 1]], dtype=int),
+        sample=SampleGeometry(lengths={"x": 1.0}, cross_sections={"x": 1.0}),
+        pore={"diameter_inscribed": np.ones(2), "volume": np.ones(2)},
+        throat={
+            "diameter_inscribed": np.ones(1),
+            "length": np.ones(1),
+            "cross_sectional_area": np.ones(1),
+            "volume": np.ones(1),
+        },
+        pore_labels={
+            "inlet_xmin": np.array([True, False]),
+            "outlet_xmax": np.array([False, True]),
+        },
+        throat_labels={},
+    )
 
 
 def test_hydraulic_geometry_fallbacks_and_errors(line_network: Network) -> None:
@@ -288,3 +341,260 @@ def test_singlephase_ignores_floating_components(branched_network: Network) -> N
     assert np.isnan(result.pore_pressure[4])
     assert np.isnan(result.throat_flux).sum() == 0
     assert np.isclose(result.throat_flux[2], 0.0)
+
+
+def test_fluid_singlephase_validates_and_reports_reference_viscosity() -> None:
+    """Fluid wrappers reject missing data and expose both constant and variable modes."""
+
+    with pytest.raises(
+        ValueError, match="Provide either a constant viscosity or a viscosity_model"
+    ):
+        FluidSinglePhase()
+
+    constant = FluidSinglePhase(viscosity=1.5)
+    assert constant.has_variable_viscosity is False
+    assert constant.reference_viscosity(pin=2.0, pout=1.0) == pytest.approx(1.5)
+
+    model = _linear_viscosity_model()
+    variable = FluidSinglePhase(viscosity_model=model)
+    assert variable.has_variable_viscosity is True
+    assert variable.reference_viscosity(pressure=1.5) == pytest.approx(1.5)
+    with pytest.raises(ValueError, match="Need explicit pressure or both pin and pout"):
+        variable.reference_viscosity()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"nonlinear_max_iterations": 0}, "at least 1"),
+        ({"nonlinear_pressure_tolerance": 0.0}, "must be positive"),
+        ({"nonlinear_relaxation": 0.0}, "interval \\(0, 1\\]"),
+        ({"nonlinear_solver": "secant"}, "either 'picard' or 'newton'"),
+        ({"nonlinear_line_search_reduction": 1.0}, "interval \\(0, 1\\)"),
+        ({"nonlinear_line_search_max_steps": 0}, "at least 1"),
+    ],
+)
+def test_validate_options_rejects_invalid_nonlinear_controls(
+    kwargs: dict[str, float | int | str], message: str
+) -> None:
+    """Nonlinear solver options are validated explicitly."""
+
+    with pytest.raises(ValueError, match=message):
+        _validate_options(SinglePhaseOptions(**kwargs))
+
+
+def test_assemble_active_system_applies_regularization(line_network: Network) -> None:
+    """Regularization shifts the active linear system diagonal."""
+
+    values, fixed_mask = _make_dirichlet_vector(
+        line_network, PressureBC("inlet_xmin", "outlet_xmax", 1.0, 0.0)
+    )
+    conductance = np.ones(line_network.Nt)
+    A_unreg, _ = _assemble_active_system(
+        line_network,
+        conductance,
+        active_values=values,
+        active_fixed_mask=fixed_mask,
+        options=SinglePhaseOptions(),
+    )
+    A_reg, _ = _assemble_active_system(
+        line_network,
+        conductance,
+        active_values=values,
+        active_fixed_mask=fixed_mask,
+        options=SinglePhaseOptions(regularization=1.0e-6),
+    )
+    diagonal_shift = A_reg.diagonal() - A_unreg.diagonal()
+    assert diagonal_shift[1] == pytest.approx(1.0e-6)
+    assert np.allclose(diagonal_shift[[0, 2]], 0.0)
+
+
+def test_variable_viscosity_helpers_cover_constant_and_tabulated_paths() -> None:
+    """Helper assembly paths work for both constant and variable viscosity fields."""
+
+    net = make_linear_chain_network()
+    net.throat.pop("hydraulic_conductance")
+    net.throat["area"] = np.sqrt(8.0 * np.pi) * np.ones(net.Nt)
+    values, fixed_mask = _make_dirichlet_vector(
+        net, PressureBC("inlet_xmin", "outlet_xmax", 2.0, 1.0)
+    )
+    pressure = np.array([2.0, np.sqrt(2.0), 1.0])
+
+    constant_fluid = FluidSinglePhase(viscosity=1.5)
+    pore_mu_c, throat_mu_c = _evaluate_viscosity_fields(
+        net, pressure, fluid=constant_fluid, bc=PressureBC("inlet_xmin", "outlet_xmax", 2.0, 1.0)
+    )
+    assert np.allclose(pore_mu_c, 1.5)
+    assert np.allclose(throat_mu_c, 1.5)
+
+    pore_mu_cd, throat_mu_cd, pore_dmu_cd, throat_dmu_cd = (
+        _evaluate_viscosity_fields_with_derivatives(
+            net,
+            pressure,
+            fluid=constant_fluid,
+            bc=PressureBC("inlet_xmin", "outlet_xmax", 2.0, 1.0),
+        )
+    )
+    assert np.allclose(pore_mu_cd, 1.5)
+    assert np.allclose(throat_mu_cd, 1.5)
+    assert np.allclose(pore_dmu_cd, 0.0)
+    assert np.allclose(throat_dmu_cd, 0.0)
+
+    variable_fluid = FluidSinglePhase(viscosity_model=_linear_viscosity_model())
+    pore_mu_v, throat_mu_v, g_active, A_bc, b_bc = _assemble_variable_viscosity_system(
+        net,
+        pressure,
+        fluid=variable_fluid,
+        bc=PressureBC("inlet_xmin", "outlet_xmax", 2.0, 1.0),
+        active_values=values,
+        active_fixed_mask=fixed_mask,
+        options=SinglePhaseOptions(conductance_model="generic_poiseuille"),
+    )
+    assert np.allclose(pore_mu_v, pressure)
+    assert np.all(throat_mu_v > 0.0)
+    assert np.all(g_active > 0.0)
+    assert A_bc.shape == (net.Np, net.Np)
+    assert b_bc.shape == (net.Np,)
+
+
+def test_variable_viscosity_picard_handles_no_free_pores_and_iteration_limit() -> None:
+    """Picard covers the no-free-pore branch and warns on iteration-limit exhaustion."""
+
+    active_net = _two_pore_active_network()
+    active_values = np.array([2.0, 1.0], dtype=float)
+    active_fixed_mask = np.array([True, True], dtype=bool)
+    fluid = FluidSinglePhase(viscosity_model=_linear_viscosity_model())
+    bc = PressureBC("inlet_xmin", "outlet_xmax", 2.0, 1.0)
+
+    p, g, pore_mu, throat_mu, info, _, _ = _solve_with_variable_viscosity(
+        active_net,
+        fluid=fluid,
+        bc=bc,
+        active_values=active_values,
+        active_fixed_mask=active_fixed_mask,
+        options=SinglePhaseOptions(
+            conductance_model="generic_poiseuille",
+            nonlinear_max_iterations=5,
+            nonlinear_pressure_tolerance=1.0e-12,
+        ),
+    )
+    assert np.allclose(p, active_values)
+    assert info["nonlinear_pressure_change"] == pytest.approx(0.0)
+    assert np.all(g > 0.0)
+    assert np.all(pore_mu > 0.0)
+    assert np.all(throat_mu > 0.0)
+
+    net = make_linear_chain_network()
+    net.throat.pop("hydraulic_conductance")
+    net.throat["area"] = np.sqrt(8.0 * np.pi) * np.ones(net.Nt)
+    values, fixed_mask = _make_dirichlet_vector(net, bc)
+    with pytest.warns(RuntimeWarning, match="Picard iteration reached the iteration limit"):
+        _solve_with_variable_viscosity(
+            net,
+            fluid=fluid,
+            bc=bc,
+            active_values=values,
+            active_fixed_mask=fixed_mask,
+            options=SinglePhaseOptions(
+                conductance_model="generic_poiseuille",
+                nonlinear_max_iterations=1,
+                nonlinear_pressure_tolerance=1.0e-16,
+            ),
+        )
+
+
+def test_variable_viscosity_newton_handles_no_free_pores() -> None:
+    """Newton covers the degenerate no-free-pore branch cleanly."""
+
+    active_net = _two_pore_active_network()
+    active_values = np.array([2.0, 1.0], dtype=float)
+    active_fixed_mask = np.array([True, True], dtype=bool)
+    p, g, pore_mu, throat_mu, info, _, _ = _solve_with_variable_viscosity_newton(
+        active_net,
+        fluid=FluidSinglePhase(viscosity_model=_linear_viscosity_model()),
+        bc=PressureBC("inlet_xmin", "outlet_xmax", 2.0, 1.0),
+        active_values=active_values,
+        active_fixed_mask=active_fixed_mask,
+        options=SinglePhaseOptions(
+            conductance_model="generic_poiseuille",
+            nonlinear_solver="newton",
+            nonlinear_max_iterations=5,
+            nonlinear_pressure_tolerance=1.0e-12,
+        ),
+    )
+    assert np.allclose(p, active_values)
+    assert info["nonlinear_pressure_change"] == pytest.approx(0.0)
+    assert np.all(g > 0.0)
+    assert np.all(pore_mu > 0.0)
+    assert np.all(throat_mu > 0.0)
+
+
+def test_variable_viscosity_newton_covers_backtracking_fallback_and_warning(
+    monkeypatch, line_network: Network
+) -> None:
+    """Newton backtracking falls back to a damped step and warns after exhaustion."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance")
+    net.throat["diameter_inscribed"] = np.ones(net.Nt)
+    net.throat["length"] = np.ones(net.Nt)
+    values, fixed_mask = _make_dirichlet_vector(
+        net, PressureBC("inlet_xmin", "outlet_xmax", 2.0, 1.0)
+    )
+
+    def _fake_residual_and_jacobian(*args, **kwargs):
+        del args, kwargs
+        residual = np.array([0.0, 1.0, 0.0], dtype=float)
+        jacobian = sparse.eye(3, format="csr")
+        g_active = np.ones(net.Nt, dtype=float)
+        pore_mu = np.ones(net.Np, dtype=float)
+        throat_mu = np.ones(net.Nt, dtype=float)
+        return residual, jacobian, g_active, pore_mu, throat_mu
+
+    monkeypatch.setattr(
+        "voids.physics.singlephase._nonlinear_residual_and_jacobian",
+        _fake_residual_and_jacobian,
+    )
+
+    with pytest.warns(RuntimeWarning, match="Newton iteration reached the iteration limit"):
+        p, _, _, _, info, _, _ = _solve_with_variable_viscosity_newton(
+            net,
+            fluid=FluidSinglePhase(viscosity_model=_linear_viscosity_model()),
+            bc=PressureBC("inlet_xmin", "outlet_xmax", 2.0, 1.0),
+            active_values=values,
+            active_fixed_mask=fixed_mask,
+            options=SinglePhaseOptions(
+                solver="direct",
+                conductance_model="generic_poiseuille",
+                nonlinear_solver="newton",
+                nonlinear_max_iterations=1,
+                nonlinear_line_search_max_steps=2,
+                nonlinear_line_search_reduction=0.5,
+            ),
+        )
+    assert np.allclose(p[fixed_mask], values[fixed_mask])
+    assert info["nonlinear_solver"] == "newton"
+
+
+def test_solve_rejects_nonpositive_absolute_pressure_with_viscosity_model(
+    line_network: Network,
+) -> None:
+    """Thermodynamic viscosity models require positive absolute boundary pressures."""
+
+    with pytest.raises(ValueError, match="require positive absolute boundary pressures"):
+        solve(
+            line_network,
+            fluid=FluidSinglePhase(viscosity_model=_linear_viscosity_model()),
+            bc=PressureBC("inlet_xmin", "outlet_xmax", pin=1.0, pout=0.0),
+            axis="x",
+        )
+
+
+def test_fluid_reference_viscosity_raises_when_no_viscosity_source_remains() -> None:
+    """Reference-viscosity lookup fails loudly if both viscosity sources are absent."""
+
+    fluid = FluidSinglePhase(viscosity_model=_linear_viscosity_model())
+    fluid.viscosity = None
+    fluid.viscosity_model = None
+    with pytest.raises(ValueError, match="No viscosity or viscosity_model is available"):
+        fluid.reference_viscosity(pin=2.0, pout=1.0)

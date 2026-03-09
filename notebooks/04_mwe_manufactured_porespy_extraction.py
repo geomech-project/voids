@@ -135,6 +135,8 @@ print("phi_eff_x =", effective_porosity(net, axis="x"))
 
 # %%
 # Single-phase solve: use robust fallback conductance model unless enough geometry is present.
+# A constant viscosity is the sensible default here because this notebook is about extraction,
+# geometry import, and workflow validation rather than fluid-property sensitivity.
 bc = PressureBC("inlet_xmin", "outlet_xmax", pin=2.0e5, pout=1.0e5)
 res = solve(
     net,

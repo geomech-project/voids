@@ -93,6 +93,10 @@ print(result.permeability["x"], result.mass_balance_error)
 print(crosscheck.permeability_rel_diff, crosscheck.total_flow_rel_diff)
 ```
 
+For most image-based permeability studies, a constant viscosity such as `1.0e-3 Pa s`
+remains the defensible first choice. It isolates geometry and topology effects and
+keeps the pressure solve linear.
+
 ---
 
 ## What To Check Before Solving
@@ -134,6 +138,45 @@ geometry.
 The OpenPNM-style roundtrip cross-check tests representation consistency, not ground
 truth. Agreement after roundtripping is reassuring, but it does not validate the
 segmentation or extraction itself.
+
+### Thermodynamic Viscosity
+
+If the scientific question genuinely depends on \(\mu(P, T)\), the workflow changes in
+two important ways:
+
+1. boundary pressures must be specified as positive absolute pressures
+2. the flow solve becomes nonlinear because conductance depends on the evolving
+   pressure field
+
+A representative pattern is:
+
+```python
+from voids.physics.singlephase import FluidSinglePhase, PressureBC, SinglePhaseOptions, solve
+from voids.physics.thermo import TabulatedWaterViscosityModel
+
+mu_model = TabulatedWaterViscosityModel.from_backend(
+    "thermo",
+    temperature=298.15,
+    pressure_points=128,
+)
+
+result = solve(
+    net,
+    fluid=FluidSinglePhase(viscosity_model=mu_model),
+    bc=PressureBC("inlet_xmin", "outlet_xmax", pin=8.0e6, pout=5.0e6),
+    axis="x",
+    options=SinglePhaseOptions(
+        conductance_model="valvatne_blunt",
+        nonlinear_solver="newton",
+        solver="gmres",
+        solver_parameters={"preconditioner": "pyamg"},
+    ),
+)
+```
+
+This mode should be justified, not used automatically. If the expected pressure
+variation in viscosity is negligible over the imposed pressure window, constant
+viscosity is scientifically cleaner and numerically cheaper.
 
 ---
 

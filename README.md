@@ -7,12 +7,15 @@
 [![Tests](https://github.com/geomech-project/voids/actions/workflows/tests.yml/badge.svg)](https://github.com/geomech-project/voids/actions/workflows/tests.yml)
 [![Coverage](https://codecov.io/gh/geomech-project/voids/branch/main/graph/badge.svg)](https://codecov.io/gh/geomech-project/voids)
 [![Supported OS](https://img.shields.io/badge/OS-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/geomech-project/voids/actions/workflows/tests.yml)
+[![PyPI version](https://img.shields.io/pypi/v/voids)](https://pypi.org/project/voids/)
+[![pip install voids](https://img.shields.io/badge/pip%20install-voids-3775A9?logo=pypi&logoColor=white)](https://pypi.org/project/voids/)
 
 `voids` is a scientific Python package for pore network modeling (PNM) aimed at
 research workflows where reproducibility, explicit assumptions, and validation matter.
 The current project emphasis is a clean canonical network model, interoperability with
-PoreSpy/OpenPNM-style data, and a validated single-phase reference workflow before
-expanding to more complex physics.
+PoreSpy/OpenPNM-style data, and a validated single-phase workflow that now includes
+shape-aware conductance, pressure-dependent thermodynamic viscosity, and nonlinear
+solve options before expanding to more complex multiphase physics.
 
 ## Goals
 
@@ -40,6 +43,10 @@ The current `v0.1.x` implementation includes:
   - effective porosity
   - connectivity metrics
 - single-phase incompressible flow with directional permeability estimation
+- shape-aware `valvatne_blunt_throat` and `valvatne_blunt` conductance closures
+- pressure-dependent water viscosity via `thermo` and `CoolProp`
+- Picard and damped-Newton nonlinear solves for variable-viscosity problems
+- Krylov linear solvers with optional `pyamg` preconditioning
 - HDF5 serialization
 - optional Plotly and PyVista network visualization
 - interoperability cross-checks against OpenPNM
@@ -60,11 +67,22 @@ The rendered documentation is intended to live alongside the repository at
 
 ## Installation
 
+### Install from PyPI
+
+If you want the published package rather than a local editable checkout:
+
+```bash
+pip install voids
+```
+
+PyPI package page:
+<https://pypi.org/project/voids/>
+
 ### Recommended: Pixi
 
 This repository is configured for Pixi and exposes four main environments:
 
-- `default`: core library + notebooks + plotting + PyVista + OpenPNM
+- `default`: core runtime + notebooks + plotting + PyVista + thermodynamic backends
 - `test`: everything in `default` plus test-only dependencies
 - `lbm`: test environment plus the optional XLB stack
 - `docs`: MkDocs, Material for MkDocs, and mkdocstrings
@@ -83,7 +101,7 @@ Pixi activation also provides project path variables used by notebooks:
 
 ### Editable pip install
 
-If you prefer a plain Python environment:
+If you prefer a plain Python environment from the repository checkout:
 
 ```bash
 python -m pip install -e .
@@ -92,7 +110,7 @@ python -m pip install -e .
 Optional extras:
 
 ```bash
-python -m pip install -e ".[dev,viz,test,docs,lbm]"
+python -m pip install -e ".[dev,viz,test,lbm,docs]"
 ```
 
 Assumption to keep in mind: the notebooks are exercised primarily through the Pixi
@@ -160,6 +178,10 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
   - synthetic and extracted-network comparison of conductance closures (`generic_poiseuille`, `valvatne_blunt_throat`, and `valvatne_blunt`) and permeability sensitivity to shape factors
 - `15_mwe_external_pnflow_benchmark`
   - committed external `pnextract`/`pnflow` reference cases compared against the current `voids` extraction + solve workflow
+- `16_mwe_viscosity_model_kabs_benchmark`
+  - benchmark of `Kabs` using constant viscosity versus pressure-dependent thermodynamic viscosity
+- `17_mwe_solver_options_benchmark`
+  - benchmark of the available linear and nonlinear solver options, including `pyamg`-preconditioned Krylov solves
 
 Example data under `examples/data/` includes a deterministic manufactured void image and
 generated artifacts from the extraction/mesh notebooks.

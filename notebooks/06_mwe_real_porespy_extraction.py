@@ -36,6 +36,7 @@ from voids.physics.singlephase import (
     SinglePhaseOptions,
     solve,
 )
+from voids.physics.thermo import TabulatedWaterViscosityModel
 from voids.visualization import plot_network_plotly
 from voids.image import extract_spanning_pore_network, infer_sample_axes
 
@@ -133,19 +134,54 @@ print(
 # Single-phase solve on the BC-reachable subnetwork.
 # Floating disconnected components are excluded from the linear solve and do not
 # contribute to Q or K.
+#
+# We keep a constant-viscosity water case as the primary benchmark because it is
+# cheaper and easier to compare against literature values that assume `mu = const`.
+# We then rerun the same network with the new pressure-coupled `thermo` backend.
 bc = PressureBC(
     f"inlet_{flow_axis}min", f"outlet_{flow_axis}max", pin=2.0e5, pout=1.0e5
 )
+fluid_constant = FluidSinglePhase(viscosity=1.0e-3)
+fluid_thermo = FluidSinglePhase(
+    viscosity=1.0e-3,
+    viscosity_model=TabulatedWaterViscosityModel.from_backend(
+        "thermo",
+        temperature=298.15,
+        pressure_points=128,
+    ),
+)
+solve_options = SinglePhaseOptions(conductance_model="valvatne_blunt", solver="direct")
+
 res = solve(
     net,
-    fluid=FluidSinglePhase(viscosity=1.0e-3),
+    fluid=fluid_constant,
     bc=bc,
     axis=flow_axis,
-    options=SinglePhaseOptions(conductance_model="valvatne_blunt", solver="direct"),
+    options=solve_options,
 )
+res_thermo = solve(
+    net,
+    fluid=fluid_thermo,
+    bc=bc,
+    axis=flow_axis,
+    options=solve_options,
+)
+print("Constant-viscosity case:")
 print("Q =", res.total_flow_rate)
 print(f"K{flow_axis} =", res.permeability[flow_axis])
 print("mbe =", res.mass_balance_error)
+print("\nThermo-coupled case:")
+print("Q =", res_thermo.total_flow_rate)
+print(f"K{flow_axis} =", res_thermo.permeability[flow_axis])
+print("mbe =", res_thermo.mass_balance_error)
+print(
+    "midpoint-reference viscosity [Pa.s] =",
+    res_thermo.reference_viscosity,
+)
+print(
+    "relative K shift thermo vs constant =",
+    (res_thermo.permeability[flow_axis] / res.permeability[flow_axis]) - 1.0,
+)
 
 # %%
 # Save both the full extracted network and the longest-axis spanning pruned network.

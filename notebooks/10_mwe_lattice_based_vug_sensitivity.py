@@ -305,7 +305,9 @@ baseline_iter = iter_progress(
 for baseline_id in baseline_iter:
     net_baseline = baseline_networks[baseline_id]
 
-    # Solve baseline first
+    # Solve baseline first.
+    # Constant viscosity is intentional in this study because the objective is to
+    # isolate the geometric effect of lattice edits on the extracted network.
     bc = PressureBC(
         f"inlet_{FLOW_AXIS}min", f"outlet_{FLOW_AXIS}max", pin=2.0e5, pout=1.0e5
     )

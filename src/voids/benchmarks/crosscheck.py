@@ -330,7 +330,8 @@ def crosscheck_singlephase_with_openpnm(
         raise ValueError("Pressure drop pin-pout must be nonzero")
     L = net.sample.length_for_axis(axis)
     Axs = net.sample.area_for_axis(axis)
-    k_ref = abs(q_ref_raw) * fluid.viscosity * L / (Axs * abs(dP))
+    mu_ref = fluid.reference_viscosity(pin=bc.pin, pout=bc.pout)
+    k_ref = abs(q_ref_raw) * mu_ref * L / (Axs * abs(dP))
     k_voids = float((r_voids.permeability or {}).get(axis, np.nan))
 
     return _summary_from_values(

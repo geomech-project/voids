@@ -30,6 +30,9 @@ dependencies = [
   "scikit-image>=0.22",
   "porespy>=2.4",
   "openpnm>=3.6,<3.7",
+  "pyamg>=5.3",
+  "thermo>=0.6",
+  "CoolProp>=6.6",
   "h5py>=3.10",
   "plotly>=5.0",
   "pyvista>=0.43",
@@ -63,7 +66,6 @@ docs = [
   "mkdocstrings[python]>=0.25",
   "ruff>=0.6",
 ]
-
 [project.urls]
 Homepage = "https://github.com/geomech-project/voids"
 Repository = "https://github.com/geomech-project/voids"

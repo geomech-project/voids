@@ -20,6 +20,7 @@ plotly = ">=5.0"
 voids = { path = ".", editable = true }
 porespy = ">=2.4"
 openpnm = ">=3.6,<3.7"
+pyamg = ">=5.3"
 pyvista = ">=0.43"
 
 [target.unix.activation.env]
@@ -86,11 +87,15 @@ mkdocstrings = {version = ">=0.25", extras = ["python"]}
 [feature.docs.dependencies]
 ruff = ">=0.6"
 
+[feature.thermo.pypi-dependencies]
+coolprop = ">=6.6"
+
 [feature.docs.activation.env]
 NO_MKDOCS_2_WARNING = "1"
 
 [environments]
-default = { features = ["dev", "viz"], solve-group = "default" }
+default = { features = ["dev", "viz", "thermo"], solve-group = "default" }
 test = { features = ["dev", "viz", "test"], solve-group = "default" }
 lbm = { features = ["dev", "test", "lbm"], solve-group = "lbm" }
 docs = { features = ["docs"], solve-group = "docs" }
+thermo = { features = ["dev", "viz", "thermo"], solve-group = "default" }

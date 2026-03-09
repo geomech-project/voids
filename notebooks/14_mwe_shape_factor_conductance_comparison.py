@@ -15,6 +15,10 @@
 # - quantify the change in throat conductance and `Kabs` for non-circular ducts
 # - document whether the real extracted example uses the full pore-throat-pore
 #   conduit model or the throat-only fallback
+#
+# Fluid-property scope:
+# - this notebook intentionally keeps viscosity constant so the observed differences are attributable
+#   to geometry and conduit modeling only, not to pressure-dependent fluid properties
 
 # %%
 from __future__ import annotations

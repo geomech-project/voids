@@ -7,13 +7,16 @@
 [![Tests](https://github.com/geomech-project/voids/actions/workflows/tests.yml/badge.svg)](https://github.com/geomech-project/voids/actions/workflows/tests.yml)
 [![Coverage](https://codecov.io/gh/geomech-project/voids/branch/main/graph/badge.svg)](https://codecov.io/gh/geomech-project/voids)
 [![Supported OS](https://img.shields.io/badge/OS-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/geomech-project/voids/actions/workflows/tests.yml)
+[![PyPI version](https://img.shields.io/pypi/v/voids)](https://pypi.org/project/voids/)
+[![pip install voids](https://img.shields.io/badge/pip%20install-voids-3775A9?logo=pypi&logoColor=white)](https://pypi.org/project/voids/)
 
 **`voids`** is a scientific Python package for pore network modeling (PNM) aimed at
 research workflows where reproducibility, explicit assumptions, and validation matter.
 
 The current project emphasis is a clean canonical network model, interoperability with
-PoreSpy/OpenPNM-style data, and a validated single-phase reference workflow before
-expanding to more complex physics.
+PoreSpy/OpenPNM-style data, and a validated single-phase workflow that now includes
+shape-aware conductance, pressure-dependent thermodynamic viscosity, and nonlinear
+solve options before expanding to more complex multiphase physics.
 
 ---
 
@@ -98,6 +101,10 @@ Those two goals are intentionally separated across the documentation tree:
 | Absolute and effective porosity | ✅ |
 | Connectivity metrics | ✅ |
 | Single-phase incompressible flow | ✅ |
+| Shape-aware Valvatne-Blunt conductance models | ✅ |
+| Pressure-dependent water viscosity via `thermo` / `CoolProp` | ✅ |
+| Damped Newton and Picard nonlinear solves | ✅ |
+| Krylov linear solvers with optional `pyamg` preconditioning | ✅ |
 | Directional permeability estimation | ✅ |
 | HDF5 serialization | ✅ |
 | Plotly and PyVista visualization | ✅ |

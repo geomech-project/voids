@@ -83,6 +83,12 @@ nav:
   - Concepts and Conventions: concepts.md
   - Scientific Workflow: workflow.md
   - Examples: examples.md
+  - Notebook Reports:
+    - Overview: notebook_reports/index.md
+    - Shape-Factor Conductance Comparison: notebook_reports/14_mwe_shape_factor_conductance_comparison.md
+    - External pnextract / pnflow Benchmark Notebook: notebook_reports/15_mwe_external_pnflow_benchmark.md
+    - Kabs Benchmark With Thermodynamic Viscosity: notebook_reports/16_mwe_viscosity_model_kabs_benchmark.md
+    - Solver Options Benchmark Notebook: notebook_reports/17_mwe_solver_options_benchmark.md
   - Verification:
     - Overview: verification/index.md
     - OpenPNM Extracted-Network Cross-Check: verification/openpnm.md

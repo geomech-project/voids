@@ -24,8 +24,8 @@ within a Pixi-managed shell.
 
 In practice:
 
-- use `default` for most notebooks
-- use `test` when a notebook depends on OpenPNM cross-checks
+- use `default` for most notebooks, including OpenPNM and thermodynamic-viscosity workflows
+- use `test` when you want the full test-suite dependency set around the notebook workflow
 - use `lbm` when a notebook depends on the optional XLB direct-image benchmark
 - expect the image-based notebooks to be materially heavier than the minimal demos
 
@@ -45,7 +45,10 @@ In practice:
 | `08` to `11` vug notebooks | Run controlled geometry-sensitivity studies |
 | `12_mwe_synthetic_volume_openpnm_benchmark` | Benchmark extracted-volume transport against OpenPNM |
 | `13_mwe_synthetic_volume_xlb_benchmark` | Benchmark direct-image LBM transport against extracted-network PNM |
+| `14_mwe_shape_factor_conductance_comparison` | Compare conductance closures and shape-factor sensitivity |
 | `15_mwe_external_pnflow_benchmark` | Compare `voids` against a committed external `pnextract` / `pnflow` reference |
+| `16_mwe_viscosity_model_kabs_benchmark` | Quantify `Kabs` drift under constant vs thermodynamic viscosity |
+| `17_mwe_solver_options_benchmark` | Compare direct, Krylov, nonlinear, and preconditioned solver choices |
 
 ---
 
@@ -211,3 +214,41 @@ This is the notebook to use when the scientific question is whether the current
 closely enough on controlled synthetic cases.
 The corresponding narrative report is documented in
 [Verification / External pnextract / pnflow Benchmark](verification/pnflow.md).
+
+---
+
+### 16 — `Kabs` Benchmark: Constant vs Thermodynamic Viscosity
+
+**`16_mwe_viscosity_model_kabs_benchmark`**
+
+Benchmarks the apparent permeability estimate obtained with:
+
+- a constant viscosity equal to the midpoint viscosity over the pressure interval
+- a pressure-dependent thermodynamic viscosity field tabulated from `thermo`
+
+This notebook is the right entry point when the scientific question is whether
+pressure-dependent viscosity materially changes `Kabs` for a fixed network geometry.
+
+---
+
+### 17 — Solver Options Benchmark
+
+**`17_mwe_solver_options_benchmark`**
+
+Benchmarks the currently available solver options on both constant-viscosity and
+pressure-dependent viscosity cases. It is the right notebook when the question is
+numerical rather than physical: which combination of direct solve, Krylov method,
+nonlinear strategy, and `pyamg` preconditioner is most effective for a given regime.
+
+---
+
+## Rendered Notebook Reports
+
+The notebooks below are also rendered directly into the docs from their committed
+`.ipynb` outputs, without re-executing them during the docs build:
+
+- [Notebook Reports Overview](notebook_reports/index.md)
+- [14 — Shape-Factor Conductance Comparison](notebook_reports/14_mwe_shape_factor_conductance_comparison.md)
+- [15 — External `pnextract` / `pnflow` Benchmark](notebook_reports/15_mwe_external_pnflow_benchmark.md)
+- [16 — `Kabs` Benchmark: Constant vs Thermodynamic Viscosity](notebook_reports/16_mwe_viscosity_model_kabs_benchmark.md)
+- [17 — Solver Options Benchmark](notebook_reports/17_mwe_solver_options_benchmark.md)

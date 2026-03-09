@@ -190,6 +190,8 @@ print(
 # Single-phase solve on the pruned spanning network.
 # Because the TIFF has no calibration metadata here, lengths are in voxel units and
 # permeability is reported in voxel-scaled units rather than a physical SI unit.
+# We therefore keep viscosity constant here; pressure-coupled thermodynamic models are more useful
+# once the pressure range and physical units are part of the scientific question.
 bc = PressureBC(
     f"inlet_{flow_axis}min", f"outlet_{flow_axis}max", pin=2.0e5, pout=1.0e5
 )

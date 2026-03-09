@@ -103,7 +103,9 @@ case_specs
 #
 # This high-level benchmark now uses `delta_p` as the preferred physical input. Here we choose
 # `delta_p = 1 Pa` and rely on the default gauge choice `pout = 0 Pa`, `pin = delta_p`. For the
-# present incompressible benchmark, any common offset added to both pressures would be equivalent.
+# present benchmark we intentionally keep **constant viscosity** so the common-offset gauge choice
+# remains irrelevant. A thermodynamic `mu(P, T)` model would require absolute positive pressures and
+# would blur the benchmark goal, which is to isolate extraction and solver agreement.
 
 # %%
 benchmark_rows: list[dict[str, object]] = []

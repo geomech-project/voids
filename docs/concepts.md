@@ -96,7 +96,32 @@ If conduit sub-lengths are absent, `valvatne_blunt` falls back to the throat-onl
 shape-aware model.
 
 The richer theory and derivation are documented in
-[Theoretical Background](background.md#hydraulic-conductance).
+[Theoretical Background](background.md#single-phase-hydraulic-conductance).
+
+---
+
+## Fluid And Solver Semantics
+
+The single-phase solver accepts two scientifically distinct fluid modes:
+
+- `FluidSinglePhase(viscosity=...)` for a constant-viscosity solve
+- `FluidSinglePhase(viscosity_model=...)` for a pressure-dependent thermodynamic solve
+
+The first mode keeps the pressure problem linear. The second mode makes conductance a
+function of pressure through the viscosity field and therefore activates a nonlinear
+solve (`picard` or `newton`).
+
+Three practical conventions matter:
+
+1. constant viscosity can be dimensionless in toy problems if the full workflow is
+   treated consistently
+2. thermodynamic viscosity requires positive absolute pressures, typically in Pa
+3. the reported permeability still uses a scalar reference viscosity, even when the
+   solved flow field uses a spatially varying viscosity
+
+The richer physical and numerical interpretation is documented in
+[Theoretical Background](background.md#pressure-dependent-viscosity) and
+[Theoretical Background](background.md#nonlinear-single-phase-solve).
 
 ---
 

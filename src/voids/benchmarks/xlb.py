@@ -192,14 +192,15 @@ def _physical_pressure_drop_to_lattice(
         raise ValueError("voxel_size must be positive")
     if lattice_viscosity <= 0.0:
         raise ValueError("lattice_viscosity must be positive")
-    if fluid.viscosity <= 0.0:
-        raise ValueError("Fluid viscosity must be positive")
     if fluid.density is None or fluid.density <= 0.0:
         raise ValueError(
             "Fluid density must be positive to map a physical pressure drop into lattice units"
         )
 
-    nu_phys = float(fluid.viscosity) / float(fluid.density)
+    mu_phys = fluid.reference_viscosity()
+    if mu_phys <= 0.0:
+        raise ValueError("Fluid viscosity must be positive")
+    nu_phys = float(mu_phys) / float(fluid.density)
     dt_phys = float(lattice_viscosity) * float(voxel_size) ** 2 / nu_phys
     return float(delta_p_physical) * dt_phys**2 / (float(fluid.density) * float(voxel_size) ** 2)
 

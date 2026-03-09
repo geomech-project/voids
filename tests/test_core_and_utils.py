@@ -123,6 +123,98 @@ def test_solve_linear_system_rejects_unknown_method() -> None:
         solve_linear_system(sparse.csr_matrix(np.eye(1)), np.array([1.0]), method="bicgstab")
 
 
+def test_solve_linear_system_supports_pyamg_preconditioning() -> None:
+    """PyAMG can be attached as a preconditioner to Krylov solves."""
+
+    A = sparse.csr_matrix(np.array([[2.0, -1.0], [-1.0, 2.0]]))
+    b = np.array([1.0, 0.0])
+
+    x, info = solve_linear_system(
+        A,
+        b,
+        method="cg",
+        solver_parameters={"preconditioner": "pyamg"},
+    )
+
+    assert np.allclose(A @ x, b)
+    assert info["method"] == "cg"
+    assert info["preconditioner"] == "pyamg"
+    assert info["pyamg_solver"] == "smoothed_aggregation"
+    assert info["pyamg_levels"] >= 1
+
+
+def test_solve_linear_system_rejects_unknown_preconditioner() -> None:
+    """Unsupported preconditioner names are rejected explicitly."""
+
+    with pytest.raises(ValueError, match="Unknown preconditioner"):
+        solve_linear_system(
+            sparse.csr_matrix(np.eye(2)),
+            np.array([1.0, 2.0]),
+            method="cg",
+            solver_parameters={"preconditioner": "ilu"},
+        )
+
+
+def test_solve_linear_system_rejects_invalid_pyamg_kwargs() -> None:
+    """PyAMG keyword arguments must be passed as a dictionary."""
+
+    with pytest.raises(ValueError, match="pyamg_kwargs must be a dictionary"):
+        solve_linear_system(
+            sparse.csr_matrix(np.eye(2)),
+            np.array([1.0, 2.0]),
+            method="cg",
+            solver_parameters={"preconditioner": "pyamg", "pyamg_kwargs": "invalid"},
+        )
+
+
+def test_solve_linear_system_rejects_unknown_pyamg_solver() -> None:
+    """Unsupported PyAMG hierarchy builders are rejected explicitly."""
+
+    with pytest.raises(ValueError, match="Unknown pyamg_solver"):
+        solve_linear_system(
+            sparse.csr_matrix(np.eye(2)),
+            np.array([1.0, 2.0]),
+            method="cg",
+            solver_parameters={"preconditioner": "pyamg", "pyamg_solver": "unsupported"},
+        )
+
+
+def test_solve_linear_system_supports_gmres_with_pyamg_preconditioning() -> None:
+    """GMRES also accepts the PyAMG preconditioner path."""
+
+    A = sparse.csr_matrix(np.array([[2.0, -1.0], [-1.0, 2.0]]))
+    b = np.array([1.0, 0.0])
+
+    x, info = solve_linear_system(
+        A,
+        b,
+        method="gmres",
+        solver_parameters={"preconditioner": "pyamg"},
+    )
+
+    assert np.allclose(A @ x, b)
+    assert info["method"] == "gmres"
+    assert info["preconditioner"] == "pyamg"
+
+
+@pytest.mark.parametrize("amg_solver", ["rootnode", "ruge_stuben"])
+def test_solve_linear_system_supports_multiple_pyamg_hierarchies(amg_solver: str) -> None:
+    """PyAMG preconditioning supports alternate hierarchy builders."""
+
+    A = sparse.csr_matrix(np.array([[2.0, -1.0], [-1.0, 2.0]]))
+    b = np.array([1.0, 0.0])
+
+    x, info = solve_linear_system(
+        A,
+        b,
+        method="cg",
+        solver_parameters={"preconditioner": "pyamg", "pyamg_solver": amg_solver},
+    )
+
+    assert np.allclose(A @ x, b)
+    assert info["pyamg_solver"] == amg_solver
+
+
 def test_project_and_examples_paths_use_env_overrides(monkeypatch, tmp_path: Path) -> None:
     """Test environment-variable overrides for project and examples paths."""
 

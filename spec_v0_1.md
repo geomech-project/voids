@@ -436,14 +436,16 @@ class ConductanceModel(Protocol):
 - Uses available throat geometry (e.g., area, diameter/hydraulic radius, length)
 - Emits explicit warnings when assumptions/fallbacks are used
 
-#### 2) `valvatne_blunt_baseline` (scientific default when fields exist)
+#### 2) `valvatne_blunt` (scientific default when fields exist)
 - Uses shape-factor-informed conductance and composite pore–throat–pore resistance
 - Activated when required geometry fields are available
 - Fails loudly (with actionable error) if required fields are missing
+- `valvatne_blunt_baseline` may remain as a backward-compatible alias, but it is not
+  a distinct physical model
 
 ### Policy
 - `generic_poiseuille` is the **fallback implementation**
-- `valvatne_blunt_baseline` is the **preferred scientific model** when supported by imported geometry
+- `valvatne_blunt` is the **preferred scientific model** when supported by imported geometry
 
 ---
 
@@ -460,7 +462,8 @@ Defines a minimal interface used by `voids.linalg.solve`:
 - vector norms / diagnostics
 
 ### v0.1 backend
-- `scipy` only
+- `scipy` direct and Krylov solves
+- optional `pyamg` preconditioning for iterative solves
 
 ### Future optional backends
 - `torch` (limited sparse support initially; selected kernels first)
@@ -619,7 +622,7 @@ These are the current defaults adopted in this spec:
 1. **Conductance baseline**
    - Implement both interfaces
    - `generic_poiseuille` = fallback default
-   - `valvatne_blunt_baseline` = preferred scientific model when fields exist
+   - `valvatne_blunt` = preferred scientific model when fields exist
 
 2. **Gravity**
    - API supports potential-based extension

@@ -23,6 +23,8 @@
 # - One centered vug per realization is used to isolate shape/size effects.
 # - Permeability is evaluated along one axis (`x`).
 # - Synthetic grayscale contrast/noise is simplified and may not match real CT artifacts.
+# - Viscosity is kept constant throughout so the response can be attributed to the network geometry
+#   changes induced by the inserted vugs.
 #
 #
 

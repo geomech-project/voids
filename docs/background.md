@@ -1,490 +1,555 @@
 # Theoretical Background
 
-This page gives a concise overview of the theoretical foundations behind `voids`.
-Each section corresponds to a scope boundary or a specific physics module in the code.
+This page summarizes the current physical and numerical model implemented in `voids`.
+The emphasis is on what the code actually solves today, not on the full space of pore-
+network models described in the literature.
+
+The main scientific boundary is simple:
+
+- `voids` is currently a single-phase pore-network code
+- hydraulic conductance can be constant-viscosity or pressure-dependent
+- geometry can be circular, shape-aware throat-only, or shape-aware pore-throat-pore
+- thermodynamic viscosity is available through tabulated `thermo` and `CoolProp` backends
+
+If a study needs corner films, capillary entry, wettability hysteresis, or dynamic
+multiphase occupancy, those physics are still outside the present scope.
 
 ---
 
-## Pore Network Modeling
+## Pore-Network Representation
 
-A pore network model (PNM) represents a porous medium as a graph
+A pore network is represented as a graph
 
 \[
-G = (V, E),
+\mathcal{G} = (V, E),
 \]
 
-where **pores** are the vertices \(V\) (representing void chambers) and
-**throats** are the edges \(E\) (representing the narrow channels connecting pores).
-Each pore \(i\) is associated with a centroid coordinate \(\mathbf{x}_i\) and geometric
-descriptors such as an inscribed diameter or equivalent sphere radius.
-Each throat \(k\) connecting pores \(i\) and \(j\) is described by a length \(L_k\)
-and a characteristic diameter \(d_k\).
+where pores are vertices \(V\) and throats are edges \(E\). For a throat \(t\) that
+connects pores \(i\) and \(j\), `voids` stores:
 
-!!! note "Scope boundary"
-    `voids` delegates image segmentation and pore/throat extraction to upstream tools
-    such as [PoreSpy](https://porespy.org). The canonical representation only enters
-    once a `Network` object is constructed or imported.
+- the pore coordinates \(\mathbf{x}_i\), \(\mathbf{x}_j\)
+- the connectivity pair \((i, j)\)
+- pore-wise and throat-wise geometric arrays
+- boundary labels used to define the macroscopic experiment
+- sample-scale geometry needed for Darcy-scale reporting
 
-### Canonical Representation
+This matters scientifically because topology, conduit geometry, and sample geometry
+play different roles:
 
-Within `voids`, the graph is represented explicitly by:
+- topology controls connectivity and admissible flow paths
+- local geometry controls conductance
+- sample geometry controls the conversion from total flow rate to apparent permeability
 
-- pore coordinates `pore_coords`
-- throat connectivity `throat_conns`
-- pore-wise and throat-wise property arrays
-- boolean pore and throat labels
-- sample-scale geometry and provenance metadata
-
-This separation is not just a software design choice.
-It reflects the fact that topology, constitutive geometry, sample geometry, and
-workflow provenance play different scientific roles and should be inspected separately.
+`voids` therefore keeps those records explicit in `Network`, `SampleGeometry`, and
+`Provenance` instead of collapsing them into one opaque container.
 
 ---
 
-## Hydraulic Conductance
+## Single-Phase Hydraulic Conductance
 
-The hydraulic conductance \(g_k\) of throat \(k\) relates volumetric flow rate to
-pressure difference:
+### Throat Flux Law
 
-\[
-Q_k = g_k \, (p_i - p_j).
-\]
-
-For Hagen–Poiseuille flow in a circular conduit of diameter \(d_k\), length \(L_k\),
-and fluid viscosity \(\mu\):
+The local constitutive law used throughout `voids` is
 
 \[
-g_k = \frac{\pi d_k^4}{128 \, \mu \, L_k}.
+q_t = g_t \, (p_i - p_j),
 \]
 
-`voids` uses this *generic Poiseuille* model as its default conductance model.
-The constitutive choice is explicit: it is stored as
-`SinglePhaseOptions.conductance_model` and documented at the call site.
+where \(q_t\) is the volumetric flow rate through throat \(t\), \(g_t\) is the
+hydraulic conductance assigned to that throat or conduit, and \(p_i - p_j\) is the
+pressure drop between its end pores.
 
-### Equivalent Duct Idea
+The scientific question is therefore how \(g_t\) is modeled from geometry and
+viscosity.
 
-Image-extracted pores and throats are not literal cylinders.
-They are irregular cross-sections that must be reduced to a small number of
-geometric descriptors before a pore-network solver can evaluate conductance.
+### Generic Poiseuille Model
 
-The Valvatne-Blunt style approach used in `voids` starts from the dimensionless
-shape factor
+The fallback model is the circular Poiseuille conductance
+
+\[
+g_t = \frac{\pi r_t^4}{8 \mu L_t}
+    = \frac{\pi d_t^4}{128 \mu L_t},
+\]
+
+where \(r_t\) and \(d_t\) are throat radius and diameter, \(L_t\) is throat length,
+and \(\mu\) is the dynamic viscosity.
+
+This is exposed in `voids` as `generic_poiseuille`.
+
+It is the correct law for creeping flow in a circular tube, but it is only an
+equivalent-duct approximation for image-extracted throats with irregular shape.
+That simplification is often acceptable for controlled baselines and regression tests,
+but it is not a faithful geometric closure for angular or highly non-circular ducts.
+
+### Shape Factor and Equivalent Ducts
+
+For shape-aware closures, `voids` uses the dimensionless shape factor
 
 \[
 G = \frac{A}{P^2},
 \]
 
-where \(A\) is the cross-sectional area and \(P\) is the wetted perimeter.
-This is the same invariant proposed by Mason and Morrow for irregular triangular
-ducts and then used in the Imperial College generalized pore-network workflow.
+where \(A\) is cross-sectional area and \(P\) is wetted perimeter. For the circle,
+square, and equilateral triangle:
+
+\[
+G_{\mathrm{circle}} = \frac{1}{4 \pi}, \qquad
+G_{\mathrm{square}} = \frac{1}{16}, \qquad
+G_{\mathrm{triangle}} = \frac{\sqrt{3}}{36}.
+\]
+
+In the equivalent-duct construction used in the Imperial College workflow, the
+cross-section is represented by an admissible duct family with the same inscribed
+radius \(r\) and shape factor \(G\). For that family,
+
+\[
+A = \frac{r^2}{4G}.
+\]
+
+This relation is exact for the canonical circle, square, and triangle classes used by
+the Valvatne-Blunt style model.
 
 ![Equivalent duct classes from shape factor](assets/valvatne_equivalent_shape_factor.png)
 
-*Equivalent duct concept used by the shape-factor model. The figure is reproduced from
-Valvatne, P. H. (2004),* Predictive pore-scale modelling of multiphase flow, *PhD
-thesis, Department of Earth Science and Engineering, Imperial College London,
-Figure 3.2.*
+Two cautions are important:
 
-The key idea is not that the real pore is literally triangular, square, or circular.
-Instead, an irregular cross-section is replaced by an **equivalent duct** with the
-same shape factor and the same inscribed radius \(r\).
-For the equivalent duct family used here,
+1. The pair \((r, G)\) is a reduced constitutive representation, not a full
+   reconstruction of the original cross-section.
+2. The square/circle transition used in `voids` follows the historical `pnflow`
+   implementation convention. It is a pragmatic modeling rule, not a universal theorem.
 
-\[
-A = \frac{r^2}{4G},
-\]
+### Valvatne-Blunt Throat-Only Model
 
-which is exact for the circle, square, and triangle classes used by `pnflow`.
-This relation is implemented directly in
-[`voids.geom.hydraulic`] [voids.geom.hydraulic].
-
-For the canonical classes:
-
-- circle: \(G = 1/(4\pi)\)
-- square: \(G = 1/16\)
-- triangle: \(0 < G \le \sqrt{3}/36\)
-
-Two cautions matter scientifically:
-
-1. Many distinct irregular cross-sections can share the same \((r, G)\), so this is
-   a reduced constitutive representation, not a full geometric reconstruction.
-2. The square-versus-circle split used in the current implementation follows the
-   Imperial College `pnflow` reference code: values with
-   \(\sqrt{3}/36 < G < 0.07\) are treated as square-like, and values with
-   \(G \ge 0.07\) are treated as circular-like.
-   That threshold is a code-level modeling convention rather than a clean theorem
-   stated in the primary papers.
-
-### Shape-Aware Single-Phase Conductance
-
-For image-based or otherwise non-circular ducts, `voids` provides a
-shape-factor-aware `valvatne_blunt` closure. It classifies each segment as
-triangular, square, or circular from its shape factor \(G\), then uses
+The throat-only shape-aware model classifies the throat from its shape factor and uses
 
 \[
-g_k = \frac{k(G)\, G\, A_k^2}{\mu\, L_k},
+g_t = \frac{k(G_t)\, G_t\, A_t^2}{\mu_t L_t},
 \]
 
-with \(k = 3/5\) for triangles, \(k = 0.5623\) for squares, and \(k = 1/2\) for
-circles.
-
-The circular case reduces to the usual Hagen-Poiseuille conductance since
-\(G = 1/(4\pi)\) implies
+with the single-phase coefficients
 
 \[
-g = \frac{1}{2}\frac{GA^2}{\mu L}
-  = \frac{\pi r^4}{8 \mu L}.
+k =
+\begin{cases}
+3/5      & \text{triangular ducts}, \\
+0.5623   & \text{square-like ducts}, \\
+1/2      & \text{circular ducts}.
+\end{cases}
 \]
 
-The coefficients \(3/5\) and \(0.5623\) are the single-phase noncircular
-conductance constants cited by Valvatne and Blunt to Patzek and Silin (2001).
-This is worth stating explicitly because Patzek's 2001 SPE paper on simulator
-verification is a different reference and does **not** provide the one-phase
-duct conductance derivation.
+In `voids` this closure is exposed as `valvatne_blunt_throat`.
 
-### Conduit Decomposition
+The circular limit is internally consistent. If \(G = 1/(4\pi)\), then
 
-The full `valvatne_blunt` model in `voids` does not treat a throat as one uniform
-resistor from pore center to pore center.
-Instead, when conduit sub-lengths are available, each connection is decomposed into:
+\[
+\frac{1}{2}\frac{GA^2}{\mu L}
+= \frac{1}{2}\frac{1}{4\pi}\frac{(\pi r^2)^2}{\mu L}
+= \frac{\pi r^4}{8 \mu L},
+\]
 
-- a pore-body contribution from pore \(i\) center to a conduit split point on the pore side
-- the throat core contribution
-- a pore-body contribution from the opposite split point to pore \(j\) center
+which recovers the usual Poiseuille conductance.
+
+### Valvatne-Blunt Conduit Model
+
+When conduit sub-lengths are available, `voids` uses a pore-throat-pore series model.
+Each connection is decomposed into three segments:
+
+- pore-1 segment of length \(L_{p,1}\)
+- throat-core segment of length \(L_t\)
+- pore-2 segment of length \(L_{p,2}\)
 
 ![Pore-throat-pore conduit decomposition](assets/valvatne_conduit_series_model.svg)
 
-This schematic is adapted from Valvatne's Figure 3.11. The split points correspond
-to the pore-throat partition used to define \(L_{p,i}\), \(L_t\), and \(L_{p,j}\).
-In the Imperial workflow these lengths are stored explicitly, but the split point
-should be read as a conduit bookkeeping location for resistance partitioning, not
-as an independently resolved geometric surface.
-
-For one segment \(s\), the hydraulic resistance is
+For a segment \(s\), the resistance is
 
 \[
-R_s = \frac{\mu L_s}{k_s G_s A_s^2},
+R_s = \frac{\mu_s L_s}{k_s G_s A_s^2},
 \]
 
-so the conduit resistance is
+and the conduit resistance is
 
 \[
-R_{ij} = R_i + R_t + R_j,
+R_{ij} = R_{p,1} + R_t + R_{p,2}.
 \]
 
-and the equivalent conductance is
+Therefore the equivalent conductance is
 
 \[
 g_{ij} = \frac{1}{R_{ij}}.
 \]
 
-This is exactly the series law implemented in the code through a harmonic
-combination of the segment conductances.
-In the literature this same idea is often written with length-weighted
-conductances between pore centers; the `voids` implementation is algebraically
-equivalent, but stores the already length-normalized segment conductances.
-
-There is also no requirement that a pore and its adjacent throat have the same
-shape class.
-In the current implementation, every pore body and every throat carries its own
-element-wise geometry arrays, so a connection can, for example, use a
-square-like pore segment on one side, a circular-like throat core, and a
-triangular-like pore segment on the other side.
-
-### Model Names In `voids`
-
-`voids` currently exposes three relevant single-phase closures:
-
-- `generic_poiseuille`: circular throat-only model
-- `valvatne_blunt_throat`: shape-aware throat-only model
-- `valvatne_blunt`: shape-aware pore-throat-pore conduit model, falling back to
-  `valvatne_blunt_throat` if conduit sub-lengths are not available
-
-This distinction matters in practice.
-A circular `valvatne_blunt_throat` case collapses to the generic Poiseuille model,
-but the full `valvatne_blunt` model can still differ because pore-body resistance is
-included explicitly.
-
-### Circular Limit Of Throat-Only Versus Full Conduit Models
-
-The circular comparison is subtle and easy to misread.
-
-If a throat is circular and the solver uses only the throat geometry, then
+Equivalently, if each segment conductance is computed first,
 
 \[
-g_{\text{throat-only}} = \frac{\pi r_t^4}{8 \mu L_t},
+\frac{1}{g_{ij}} = \frac{1}{g_{p,1}} + \frac{1}{g_t} + \frac{1}{g_{p,2}},
 \]
 
-which is exactly the generic Poiseuille law.
-This is why `valvatne_blunt_throat` and `generic_poiseuille` agree in the circular
-limit when they are given the same throat radius and the same throat length.
+which is the harmonic series combination implemented in `voids`.
 
-The full conduit model is a different object.
-For a circular pore-throat-pore conduit,
+This closure is exposed as `valvatne_blunt`. The older name
+`valvatne_blunt_baseline` remains as a backward-compatible alias, not as a separate
+physical model.
 
-\[
-\frac{1}{g_{ij}}
-= \frac{8\mu}{\pi}
-\left(
-\frac{L_i}{r_i^4}
-+ \frac{L_t}{r_t^4}
-+ \frac{L_j}{r_j^4}
-\right).
-\]
+### Fallback Hierarchy
 
-Two limiting cases are useful:
+The model-selection logic used by `voids` is:
 
-1. If \(r_i = r_t = r_j\) and \(L_i + L_t + L_j = L\), then the full conduit model
-   collapses to the same Poiseuille conductance over the total center-to-center
-   length \(L\).
-2. If the pore radii differ from the throat radius, then the full conduit model
-   generally differs from `generic_poiseuille`, even though all three segments are
-   circular.
+1. If `throat.hydraulic_conductance` is already present, trust it.
+2. Else, if conduit lengths and shape data are available, use `valvatne_blunt`.
+3. Else, if throat-only shape data are available, use `valvatne_blunt_throat`.
+4. Else, fall back to `generic_poiseuille`.
 
-In most realistic networks the pore bodies are larger than the throat core, so the
-pore-body resistances are smaller than the throat-core resistance.
-In that common case the full conduit model is usually **more conductive** than a
-single-throat Poiseuille model that applies the throat radius over the entire
-center-to-center length.
-However, this is a geometric consequence, not a universal ordering theorem.
-
-### Relation To `pnflow` And `pnextract`
-
-The current `voids` implementation is now close to the Imperial College
-single-phase conductance closure, but not yet identical to the entire
-`pnextract` → `pnflow` workflow.
-
-What matches well:
-
-- the shape-class logic: triangle, square, circle
-- the single-phase coefficients \(3/5\), \(0.5623\), and \(1/2\)
-- the harmonic pore1-throat-pore2 series combination when conduit sub-lengths are
-  available
-- independent pore and throat shape factors at the element level
-
-What can still differ materially:
-
-- `pnextract` geometry generation itself
-- `pnextract` shape-factor repair heuristics during export
-- availability of conduit sub-lengths in the imported network
-- pore shape-factor construction upstream
-- boundary and reservoir conventions between codes
-
-In particular, the reference `pnextract` code computes throat shape factors as
-
-\[
-G = \frac{r^2}{4A},
-\]
-
-then applies additional extraction-stage repairs for problematic values, including:
-
-- clipping or modifying very large throat shape factors
-- replacing very small throat shape factors with randomized admissible values
-- assigning pore shape factor as a throat-area-weighted average of neighboring
-  throat shape factors
-
-`voids` now provides these heuristics through the `imperial_export`
-geometry-repair mode in the PoreSpy importer, and the image-extraction workflow enables that
-mode by default. Therefore:
-
-- if you provide `voids` with a network already carrying `pnextract`-like
-  `shape_factor` and conduit-length fields, or if you extract through the
-  default image workflow, the single-phase hydraulic closure should be close to
-  `pnflow`
-- if the network comes from a different extractor, such as a PoreSpy-based
-  workflow, `Kabs` can still differ substantially because topology and geometry
-  are already different before the conductance model is even applied
-
-### Implementation Boundary
-
-The present implementation is rigorous for **single-phase** conductance closure,
-but it is not yet the full multiphase polygonal model from `pnflow`.
-In particular, `voids` does **not** yet evolve:
-
-- corner half-angle distributions
-- wetting films in corners
-- oil or water layers with separate phase conductances
-- capillary-entry and displacement events tied to polygonal corner occupancy
-
-Those are the natural next steps if the project later extends the current
-single-phase closure toward the full Valvatne-Blunt multiphase framework.
-
-### References For This Section
-
-- Mason, G., & Morrow, N. R. (1991). Capillary behavior of a perfectly wetting
-  liquid in irregular triangular tubes. *Journal of Colloid and Interface Science*,
-  141(1), 262-274.
-- Patzek, T. W., & Silin, D. B. (2001). Shape factor and hydraulic conductance in
-  noncircular capillaries I. One-phase creeping flow. *Journal of Colloid and
-  Interface Science*, 236(2), 295-304.
-- Valvatne, P. H. (2004). *Predictive pore-scale modelling of multiphase flow*.
-  PhD thesis, Department of Earth Science and Engineering, Imperial College London.
-- Valvatne, P. H., & Blunt, M. J. (2004). Predictive pore-scale modeling of
-  two-phase flow in mixed wet media. *Water Resources Research*, 40(7).
+That hierarchy is scientifically deliberate. It preserves richer geometric
+information when available, while keeping the solver usable on incomplete networks.
 
 ---
 
-## Single-Phase Incompressible Flow
+## Pressure-Dependent Viscosity
 
-### Governing Equations
+### Constant-Viscosity Mode
 
-At steady state, mass conservation at each free pore \(i\) requires
-
-\[
-\sum_{j \in \mathcal{N}(i)} g_{ij} \, (p_i - p_j) = 0,
-\]
-
-where \(\mathcal{N}(i)\) is the set of pores connected to \(i\).
-
-Collecting all free-pore equations yields a linear system
+The simplest fluid model is
 
 \[
-\mathbf{A} \, \mathbf{p} = \mathbf{b},
+\mu(\mathbf{x}) = \mu_0,
 \]
 
-where \(\mathbf{A}\) is the weighted graph Laplacian assembled from throat
-conductances, \(\mathbf{p}\) is the unknown pressure vector, and \(\mathbf{b}\)
-encodes the Dirichlet boundary contributions.
+with one constant dynamic viscosity applied everywhere. This remains the right choice
+for:
 
-In expanded graph form, the diagonal and off-diagonal entries satisfy
+- dimensionless toy problems
+- permeability comparisons where viscosity variation is negligible
+- geometry-focused benchmarks where constitutive complexity would only add noise
+
+### Thermodynamic Backend Mode
+
+`voids` also supports pressure-dependent water viscosity through tabulated backend
+calls at fixed temperature:
+
+\[
+\mu = \mu(P, T).
+\]
+
+Two backend families are currently supported:
+
+- `thermo`, through the `thermo.Chemical(...).ViscosityLiquid` interface
+- `CoolProp`, through `CoolProp.CoolProp.PropsSI`
+
+At the code level, the constitutive query is not solved directly at every pore during
+every iteration. Instead, for a given boundary-pressure interval
+\([P_{\min}, P_{\max}]\) and temperature \(T\), `voids` first tabulates the backend
+response on a pressure grid:
+
+\[
+\{(P_n, \mu_n)\}_{n=1}^{N}, \qquad
+\mu_n = \mu_{\mathrm{backend}}(P_n, T).
+\]
+
+The tabulated law is then replaced by a clipped piecewise-cubic Hermite interpolant
+(PCHIP):
+
+\[
+\hat{\mu}(P; T) = \mathcal{I}_{\mathrm{PCHIP}}
+\left(
+\operatorname{clip}(P, P_{\min}, P_{\max})
+\right).
+\]
+
+This matters for two reasons:
+
+1. it avoids repeated expensive backend calls during the nonlinear solve
+2. it provides a differentiable constitutive law with an explicit derivative
+   \(d\hat{\mu}/dP\)
+
+Outside the tabulated interval, pressure is clipped to the interval bounds rather than
+extrapolated. Consequently, the effective derivative is zero outside the tabulated
+range.
+
+### Pore and Throat Viscosity Fields
+
+The current solver evaluates viscosity at:
+
+- pore centers for pore-body segments
+- midpoint throat pressures for throat-core segments
+
+For a throat connecting pores \(i\) and \(j\),
+
+\[
+P_t = \frac{P_i + P_j}{2}.
+\]
+
+Then the local viscosities are
+
+\[
+\mu_{p,i} = \hat{\mu}(P_i; T), \qquad
+\mu_t = \hat{\mu}(P_t; T).
+\]
+
+The same midpoint rule is used for the throat derivative:
+
+\[
+\frac{\partial \mu_t}{\partial P_i}
+= \frac{\partial \mu_t}{\partial P_j}
+= \frac{1}{2}\frac{d\hat{\mu}}{dP}(P_t; T).
+\]
+
+This is not the only admissible closure, but it is consistent with the current local
+pressure representation used in the conduit model.
+
+### Absolute Pressure Requirement
+
+Thermodynamic backends are queried in absolute pressure units. Therefore, unlike a
+constant-viscosity solve, the pair \((P_{\mathrm{in}}, P_{\mathrm{out}})\) is not
+only a pressure drop; its absolute level matters because the constitutive law depends
+on pressure itself.
+
+In practice, this means
+
+- `pin=1.0, pout=0.0` is fine for dimensionless constant-viscosity tests
+- positive absolute pressures in Pa are required for thermodynamic viscosity solves
+
+---
+
+## Nonlinear Single-Phase Solve
+
+### Governing Balance
+
+For each free pore \(i\), steady incompressible mass conservation requires
+
+\[
+R_i(\mathbf{p}) =
+\sum_{j \in \mathcal{N}(i)} q_{ij}(\mathbf{p})
+= 0,
+\]
+
+with
+
+\[
+q_{ij}(\mathbf{p}) = g_{ij}(\mathbf{p}) (p_i - p_j).
+\]
+
+If viscosity is constant, then \(g_{ij}\) is constant and the residual is linear in
+\(\mathbf{p}\). The usual weighted graph-Laplacian system follows:
+
+\[
+\mathbf{A}\mathbf{p} = \mathbf{b},
+\]
+
+where, for free pores,
 
 \[
 A_{ii} = \sum_{j \in \mathcal{N}(i)} g_{ij},
 \qquad
-A_{ij} = -g_{ij} \quad (i \neq j),
+A_{ij} = -g_{ij}.
 \]
 
-for free pores in the active solve domain.
+If viscosity depends on pressure, then \(g_{ij}\) depends on \(\mathbf{p}\) through
+\(\mu(\mathbf{p})\), and the problem becomes nonlinear.
 
-### Boundary Conditions
+### Picard Iteration
 
-Fixed pressures are imposed at inlet and outlet pore sets via Dirichlet row/column
-elimination:
+The Picard strategy used in `voids` is:
 
-- \(p_{\text{inlet}} = p_{\text{in}}\)
-- \(p_{\text{outlet}} = p_{\text{out}}\)
+1. guess a pressure field
+2. evaluate pore and throat viscosities from that field
+3. rebuild the conductance field
+4. solve the resulting linear pressure problem
+5. repeat until the pressure update is small
 
-The current solver uses label-driven Dirichlet conditions.
-In practice, that means the physical experiment is defined partly by geometry and
-partly by the pore labels attached to the network.
-
-### Active Solve Domain
-
-Connected components that do not touch any fixed-pressure pore are excluded from the
-linear solve.
-Those components form floating-pressure blocks and would otherwise leave the system
-singular or under-determined.
-
-As a result:
-
-- the solve is performed on an induced active subnetwork
-- pore pressures outside that subnetwork are reported as `nan`
-- throat fluxes outside that subnetwork are reported as `nan`
-
-This is numerically intentional, not an implementation accident.
-
-### Permeability Estimation
-
-Once the pressure field is solved, the total volumetric flow rate \(Q\) is computed
-by summing fluxes across a cut perpendicular to the flow direction.
-
-Darcy's law at the sample scale gives the absolute permeability:
+In symbols, with iterate \(k\),
 
 \[
-K = \frac{Q \, \mu \, L}{A \, \Delta p},
+\mathbf{A}(\mathbf{p}^{(k)}) \, \mathbf{p}^{(k+1)} = \mathbf{b}(\mathbf{p}^{(k)}).
 \]
 
-where \(L\) is the sample length along the flow axis, \(A\) is the cross-sectional
-area, and \(\Delta p = p_{\text{in}} - p_{\text{out}}\) is the imposed pressure
-difference.
+Picard is robust and remains available as a fallback, but its convergence rate is
+typically linear.
 
-The sample geometry (lengths, cross-sections) is stored in the `SampleGeometry`
-object attached to the `Network`.
+### Newton Linearization
 
-!!! note "Interpretation boundary"
-    The permeability reported by `voids` is an apparent sample-scale permeability
-    consistent with the supplied network, constitutive conductance model, sample
-    lengths, cross-sections, and boundary labels.
-    Agreement with another solver or another code path does not by itself validate
-    the upstream segmentation or extraction.
+The current Newton path in `voids` differentiates the tabulated constitutive law and
+assembles the pore-balance Jacobian explicitly.
+
+For one throat \(t = (i,j)\),
+
+\[
+q_t = g_t(p_i, p_j) (p_i - p_j).
+\]
+
+The local derivatives are
+
+\[
+\frac{\partial q_t}{\partial p_i}
+= g_t + (p_i - p_j)\frac{\partial g_t}{\partial p_i},
+\qquad
+\frac{\partial q_t}{\partial p_j}
+= -g_t + (p_i - p_j)\frac{\partial g_t}{\partial p_j}.
+\]
+
+The pore-balance Jacobian is then assembled from those throat contributions.
+This is close to a full constitutive Newton method for the problem actually being
+solved, with one important caveat:
+
+!!! note "Important modeling point"
+    The Jacobian is exact for the tabulated/interpolated constitutive law
+    \(\hat{\mu}(P;T)\), not for the original backend callable itself.
+    That is a deliberate approximation layer introduced for speed and numerical
+    smoothness.
+
+The Newton step \(\delta \mathbf{p}\) solves
+
+\[
+\mathbf{J}(\mathbf{p}^{(k)}) \, \delta \mathbf{p}
+= -\mathbf{R}(\mathbf{p}^{(k)}),
+\]
+
+followed by a damped update
+
+\[
+\mathbf{p}^{(k+1)} = \mathbf{p}^{(k)} + \alpha \, \delta \mathbf{p},
+\qquad 0 < \alpha \le 1,
+\]
+
+with backtracking if the residual does not decrease.
+
+### Boundary Conditions and Active Domain
+
+Dirichlet boundary conditions are imposed on labeled pore sets:
+
+\[
+p = p_{\mathrm{in}} \text{ on inlet pores}, \qquad
+p = p_{\mathrm{out}} \text{ on outlet pores}.
+\]
+
+Connected components that do not touch any Dirichlet pore are excluded from the active
+solve domain. This avoids singular floating-pressure blocks. Pressures and fluxes on
+those excluded components are reported as `nan` in the returned result.
 
 ---
 
-## Porosity Definitions
+## Linear Solver Options
+
+The inner linear systems used by the constant-viscosity solve, Picard updates, and
+Newton steps can be solved with:
+
+- a sparse direct solve
+- conjugate gradients (`cg`)
+- GMRES (`gmres`)
+
+`voids` also supports optional algebraic multigrid preconditioning through `pyamg`.
+That is a linear algebra acceleration, not a separate physical model.
+
+The most defensible rule of thumb is:
+
+- use `cg` plus `pyamg` for constant-viscosity pressure solves when the system is
+  close to symmetric positive definite
+- use `gmres` plus `pyamg` for Newton inner solves when pressure-dependent viscosity
+  makes the Jacobian less symmetric
+
+The actual speedup is geometry- and conditioning-dependent, so it should be treated as
+an empirical numerical option rather than as a universal guarantee.
+
+---
+
+## Darcy-Scale Permeability
+
+After solving the pore pressures, `voids` computes throat fluxes and sums the net
+inlet flow rate \(Q\). The reported apparent permeability is then obtained from
+Darcy's law:
+
+\[
+K = \frac{|Q| \, \mu_{\mathrm{ref}} \, L}{A \, |\Delta P|},
+\]
+
+where
+
+- \(L\) is the sample length along the chosen axis
+- \(A\) is the sample cross-sectional area normal to that axis
+- \(\Delta P = P_{\mathrm{in}} - P_{\mathrm{out}}\)
+- \(\mu_{\mathrm{ref}}\) is the scalar reporting viscosity
+
+The reporting convention is:
+
+- use `fluid.viscosity` directly if the user supplied a constant reference viscosity
+- otherwise, for thermodynamic viscosity, use the midpoint viscosity over the imposed
+  pressure interval
+
+This is a reporting choice. It does not change the solved nonlinear flow field, but it
+does affect the permeability value reported from that field.
+
+---
+
+## Porosity and Connectivity
 
 ### Absolute Porosity
 
-Absolute porosity is the ratio of total void volume to bulk sample volume:
+Absolute porosity is
 
 \[
-\phi_{\text{abs}} = \frac{V_{\text{void}}}{V_{\text{bulk}}}.
+\phi_{\mathrm{abs}} = \frac{V_{\mathrm{void}}}{V_{\mathrm{bulk}}}.
 \]
 
-`voids` accumulates \(V_{\text{void}}\) from pore and throat volume fields.
-When `pore.region_volume` is available (a disjoint voxel-space partition), it is
-used directly and throat volumes are **not** added to avoid double-counting.
+If `pore.region_volume` is available, `voids` treats it as a disjoint partition of the
+void domain and uses it directly. Otherwise, it falls back to summing pore and throat
+volumes. Those two bookkeeping conventions are not interchangeable and can differ
+materially on extracted networks.
 
 ### Effective Porosity
 
-Effective porosity considers only the connected void space that participates in
-macroscopic transport:
+Effective porosity is
 
 \[
-\phi_{\text{eff}} = \frac{V_{\text{connected}}}{V_{\text{bulk}}}.
+\phi_{\mathrm{eff}} = \frac{V_{\mathrm{connected}}}{V_{\mathrm{bulk}}},
 \]
 
-Two selection rules are available:
+where the connected volume may be defined either by axis-spanning components or by
+boundary-connected components, depending on the selected mode.
 
-1. **Axis-spanning**: include only pores belonging to connected components that
-   span both the inlet and outlet labels along the requested axis.
-2. **Boundary-connected**: include any component touching an `inlet_*`, `outlet_*`,
-   or `boundary` pore label.
+### Connectivity Metrics
 
-The distinction matters when disconnected void clusters are present.
-Absolute porosity may remain high even when the transport-relevant connected volume
-is much smaller.
+Connectivity is not only a graph-theoretic descriptor here. It directly controls:
 
----
-
-## Graph Connectivity
-
-`voids` uses standard connected-component analysis on the throat graph to identify
-isolated clusters, spanning components, and boundary-connected subsets.
-The implementation wraps `scipy.sparse.csgraph.connected_components`.
-
-For transport interpretation, connectivity is not just a descriptive graph property.
-It directly controls which parts of the network can participate in sample-scale flow.
-
-Key metrics reported by [`connectivity_metrics`][voids.physics.petrophysics.connectivity_metrics]:
-
-| Metric | Description |
-|---|---|
-| `n_components` | Total number of connected components |
-| `n_isolated_pores` | Number of single-pore components |
-| `spanning_components` | Components connecting inlet to outlet |
-| `connected_fraction` | Fraction of pores in the largest component |
+- which pores contribute to effective porosity
+- which components are admitted into the active pressure solve
+- whether a reported permeability corresponds to a genuinely spanning flow path
 
 ---
 
 ## Assumptions and Limitations
 
-The following assumptions are deliberate and should be stated in any study using `voids`:
+The main assumptions that should be stated explicitly in any study using `voids` are:
 
-1. **Segmentation quality**: extracted-network predictions depend strongly on upstream
-   segmentation and extraction quality. `voids` does not validate or correct the
-   input geometry.
-2. **Incomplete geometry fields**: imported geometry fields may be incomplete or
-   model-dependent across tools (PoreSpy, OpenPNM, etc.).
-3. **Constitutive models**: `generic_poiseuille` remains a circular simplification.
-   The `valvatne_blunt` model improves single-phase conductance for non-circular
-   ducts, but full multiphase corner and layer physics are still not implemented.
-4. **Scope of OpenPNM cross-checks**: solver/assembly consistency is compared, not
-   universal physical truth.
-5. **Throat visualization**: pore scalar fields may be arithmetically averaged onto
-   throats for visualization; this is a display choice, not a constitutive model.
-6. **Sample metadata dependence**: permeability interpretation depends on the
-   correctness of sample lengths and cross-sectional areas supplied in
-   `SampleGeometry`.
+1. Upstream segmentation and extraction quality dominate the scientific credibility of
+   the imported network.
+2. Shape-factor closures are equivalent-duct models, not reconstructions of the full
+   cross-sectional geometry.
+3. Pressure-dependent viscosity is currently pressure-only at fixed temperature during
+   a given solve; density/compressibility coupling is not modeled.
+4. The thermodynamic nonlinear solve is exact only for the tabulated constitutive law,
+   not for the raw backend callable.
+5. Apparent permeability depends on the correctness of `SampleGeometry.lengths` and
+   `SampleGeometry.cross_sections`.
+6. Multiphase polygonal corner physics from the full Imperial College `pnflow`
+   framework is not implemented yet.
 
-If any of these assumptions are inappropriate for a given study, the corresponding
-workflow should be tightened before using results quantitatively.
+If any of these assumptions are not acceptable for a given study, the workflow needs
+to be tightened before the resulting permeability should be interpreted quantitatively.
+
+---
+
+## References
+
+- Mason, G., and N. R. Morrow (1991). Capillary behavior of a perfectly wetting
+  liquid in irregular triangular tubes. *Journal of Colloid and Interface Science*,
+  141(1), 262-274.
+- Patzek, T. W., and D. B. Silin (2001). Shape factor and hydraulic conductance in
+  noncircular capillaries I. One-phase creeping flow. *Journal of Colloid and
+  Interface Science*, 236(2), 295-304.
+- Valvatne, P. H. (2004). *Predictive pore-scale modelling of multiphase flow*.
+  PhD thesis, Imperial College London.
+- Valvatne, P. H., and M. J. Blunt (2004). Predictive pore-scale modeling of
+  two-phase flow in mixed wet media. *Water Resources Research*, 40(7).
+- Blunt, M. J., et al. (2013). Pore-scale imaging and modelling. *Advances in Water
+  Resources*, 51, 197-216.
+- `thermo` project documentation: <https://thermo.readthedocs.io/>
+- CoolProp documentation: <https://coolprop.org/>

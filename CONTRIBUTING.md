@@ -1,372 +1,218 @@
 # Contributing
 
 `voids` is a scientific Python project for pore-network modeling. Contributions
-should prioritize reproducibility, explicit assumptions, and regression safety
-over convenience. New features are useful only if they are testable,
-documented, and consistent with the current project scope.
+should improve the codebase without weakening reproducibility, numerical clarity, or
+scientific traceability.
 
-This guide describes the expected development environment and the workflows used
-in this repository.
+This guide is intentionally general. It describes how to contribute effectively
+without repeating project details that are better treated as the source of truth in
+`pixi.toml`, `pyproject.toml`, the docs, tests, and CI configuration.
 
-## Development Principles
+## Principles
 
-When contributing code, keep these project constraints in mind:
+Contributions to `voids` should follow a few simple rules:
 
-- prefer physically and numerically explicit implementations over implicit or
-  opaque shortcuts
-- state modeling assumptions clearly in docstrings, tests, notebooks, or PR text
-- treat synthetic or manufactured examples as validation tools, not evidence of
-  universal physical correctness
-- avoid broad refactors in the same PR as scientific or behavioral changes unless
-  they are required to make the result interpretable
-- add or update regression tests whenever behavior changes
+- prefer explicit physical and numerical assumptions over hidden convenience logic
+- keep changes interpretable, testable, and reviewable
+- treat tests, examples, and documentation as part of the scientific result
+- avoid mixing unrelated refactors with behavioral or scientific changes unless there
+  is a clear reason
+- document known limits rather than implying broader validity than the code supports
+
+For scientific or numerical changes, a green test suite is necessary but not always
+sufficient. If behavior changes materially, explain why the new behavior is correct
+and what evidence supports it.
 
 ## Before You Start
 
-1. Open or identify a GitHub issue describing the problem, bug, or proposed change.
-2. Create a branch using the repository naming convention:
+Before implementing a change:
 
-```text
-fb-voids-<issue-number>-<short-branch-name>
+1. Make sure the problem or proposal is described in a GitHub issue, discussion, or
+   an equivalent reviewable context.
+2. Keep one branch focused on one topic when practical.
+3. Read the relevant code, tests, and documentation before changing behavior.
+
+If you are proposing new physics, new constitutive assumptions, or a workflow-level
+change, include the scientific motivation early so reviewers can judge the scope
+correctly.
+
+## Development Environment
+
+The recommended contributor workflow uses [Pixi](https://pixi.sh), because the
+repository tasks, optional features, notebooks, and docs are all wired through it.
+
+Typical setup:
+
+```bash
+pixi install
+pixi run python -c "import voids; print(voids.__version__)"
 ```
 
-Example:
+A plain editable `pip` install is possible, but Pixi is the most representative path
+for local work and CI parity.
 
-```text
-fb-voids-123-fix-singlephase-boundary-flux
-```
+The authoritative dependency and task definitions live in:
 
-Branch naming guidelines:
+- `pixi.toml`
+- `pyproject.toml`
 
-- use the GitHub issue number in `<issue-number>`
-- keep `<short-branch-name>` lowercase and hyphen-separated
-- make the suffix describe the behavior or subsystem being changed
-- keep one branch focused on one issue when practical
-
-Important limitation:
-
-- GitHub issue branch creation allows manual branch naming, but this repository
-  does not automatically inject the issue number into the branch name; enter the
-  format explicitly when creating the branch
+If those files and a prose document disagree, treat the configuration files as the
+current truth and update the prose.
 
 ## Repository Layout
 
-The most important directories are:
+The main directories contributors usually touch are:
 
-- `src/voids/`: package source code
-- `tests/`: automated regression and validation tests
-- `notebooks/`: paired Jupyter notebooks and `py:percent` scripts
-- `examples/`: example assets and generated data used by workflows
-- `scripts/`: repository maintenance scripts such as version bumping
-- `.github/workflows/`: CI definitions used on pull requests and pushes
+- `src/voids/` for package code
+- `tests/` for automated validation and regression coverage
+- `docs/` for user and developer documentation
+- `notebooks/` for paired notebook workflows
+- `examples/` for example assets and workflow data
+- `scripts/` for project-maintenance utilities
 
-High-level source organization under `src/voids/`:
+You do not need to memorize the whole tree. Read the local module layout before
+changing code, and keep changes close to the subsystem they affect.
 
-- `core/`, `graph/`, `geom/`: core data structures and geometry/network utilities
-- `physics/`: physical models and solvers
-- `io/`: import/export and interoperability helpers
-- `visualization/`: optional plotting and rendering integrations
-- `examples/`, `workflows/`: reproducible example entry points and workflows
+## Typical Workflow
 
-## Supported Development Environments
+A normal contribution usually looks like this:
 
-The repository supports Python `3.11` and `3.12`. The recommended workflow uses
-Pixi because CI, notebooks, optional dependencies, and path setup are all defined
-there. A plain `pip` editable install is available, but it is less representative
-of the full contributor workflow.
+1. understand the current behavior and identify the exact change
+2. implement the smallest coherent code change that solves the problem
+3. add or update tests
+4. update documentation, examples, or notebooks if public behavior changed
+5. run the relevant local checks
+6. open a focused pull request with enough context for review
 
-### Recommended: Pixi
+For behavior changes, do not leave the rationale implicit. Reviewers should be able to
+see what changed, why it changed, and what evidence supports it.
 
-Install the project environments:
+## Code Expectations
 
-```bash
-pixi install
-```
+When writing or modifying code:
 
-This repository defines two main Pixi environments:
+- preserve readability and scientific intent
+- keep interfaces typed and specific where practical
+- avoid unnecessary complexity or abstraction
+- prefer deterministic behavior in tests and examples
+- keep comments and docstrings informative rather than verbose
 
-- `default`: development tools, plotting support, and PyVista-related dependencies
-- `test`: everything in `default`, plus OpenPNM and other test-only scientific dependencies
+If a function encodes a modeling assumption, say so in the code or docstring. If a
+result is only valid under certain geometric, physical, or numerical conditions, state
+that explicitly.
 
-The package is installed editable in Pixi through:
+## Testing Expectations
 
-```text
-voids = { path = ".", editable = true }
-```
+Behavioral changes should usually come with one or more of:
 
-Pixi activation also provides these environment variables:
+- a unit test for the changed function or class
+- a regression test for a previously failing case
+- a manufactured or analytically interpretable example
+- a cross-check against an external or reference workflow when relevant
 
-- `VOIDS_PROJECT_ROOT`
-- `VOIDS_NOTEBOOKS_PATH`
-- `VOIDS_EXAMPLES_PATH`
-- `VOIDS_DATA_PATH`
+Changes that affect scientific results, solver behavior, geometry interpretation,
+import/export, or serialization should not be merged without tests unless there is a
+clear and documented reason.
 
-Those variables matter for notebook and path-resolution workflows, so Pixi is the
-most reliable way to reproduce development and CI behavior.
+Be careful with a common bad assumption:
 
-### Fallback: Editable pip install
+- passing in one synthetic case does not imply validity across the range of network
+  topologies, geometries, or parameter regimes used by the project
 
-If you need a plain Python environment:
+If a change has known limits, state them in the test, docstring, issue, or PR.
 
-```bash
-python -m pip install -e .
-```
+## Running Checks
 
-For a fuller local setup:
+The canonical local commands are defined in `pixi.toml`. Common checks include:
 
-```bash
-python -m pip install -e ".[dev,viz,test]"
-```
+- linting
+- formatting checks
+- type checking
+- tests
+- coverage
+- docs build
+- pre-commit hooks
 
-Known limitation of the fallback path:
+Use the project tasks rather than inventing ad hoc commands when possible. For focused
+work, it is also fine to run a specific test file or a narrower subset first.
 
-- notebook, optional-visualization, and interoperability workflows are exercised
-  primarily through Pixi, so `pip` setups should be treated as secondary
+Before opening a PR, run the checks that are relevant to your change. For example:
 
-## Initial Local Setup
+- code changes should usually be linted, type-checked, and tested
+- docs changes should at least build cleanly
+- notebook changes should be synchronized and reviewed in their paired form
 
-After cloning the repository, the usual setup is:
+## Documentation
 
-```bash
-pixi install
-pixi run -e default python -c "import voids; print(voids.__version__)"
-```
-
-If you plan to work with notebooks, you can register project kernels:
-
-```bash
-pixi run register-kernels
-```
-
-This creates:
-
-- `voids (default)`
-- `voids (test)`
-
-To remove them later:
-
-```bash
-pixi run unregister-kernels
-```
-
-## Daily Development Workflow
-
-A typical contribution flow is:
-
-1. Sync your branch with the latest `main`.
-2. Implement a focused change tied to one issue.
-3. Add or update tests for any behavioral change.
-4. Run the relevant local checks.
-5. Update documentation, notebooks, or examples if the public behavior changed.
-6. Open a pull request using the repository template.
-
-For scientific or numerical changes, do not rely only on a green test suite if
-the behavior shift is material. Also explain:
-
-- what physical, numerical, or data-model assumption changed
-- why the change is correct or preferable
-- what evidence supports the change, for example regression tests, manufactured
-  examples, or cross-checks against a known reference workflow
-
-## Code Quality And Validation Commands
-
-The main local commands are defined in `pixi.toml`.
-
-### Core checks
-
-```bash
-pixi run lint
-pixi run format-check
-pixi run typecheck
-pixi run test
-pixi run test-cov
-pixi run precommit
-```
-
-What they do:
-
-- `pixi run lint`: runs Ruff on `src` and `tests`
-- `pixi run format-check`: checks formatting with Ruff formatter
-- `pixi run typecheck`: runs MyPy on `src`
-- `pixi run test`: runs the full pytest suite quietly
-- `pixi run test-cov`: runs pytest with coverage reporting
-- `pixi run precommit`: runs all configured pre-commit hooks on the repository
-
-### Targeted checks
-
-Useful narrower commands include:
-
-```bash
-pixi run spec-check
-pixi run crosscheck-roundtrip
-pixi run examples-singlephase
-pixi run notebooks-smoke
-```
-
-Use them when relevant:
-
-- `spec-check`: validates schema-oriented network behavior
-- `crosscheck-roundtrip`: exercises interoperability roundtrips
-- `examples-singlephase`: runs the single-phase workflow entry point
-- `notebooks-smoke`: verifies notebook discovery in the repository
-
-Pytest can also be run directly for focused work:
-
-```bash
-pixi run -e test pytest -q tests/test_singlephase_toy.py
-```
-
-or with a keyword filter:
-
-```bash
-pixi run -e test pytest -q -k singlephase
-```
-
-## What CI Enforces
-
-GitHub Actions currently checks several things on pull requests:
-
-- tests on Linux, macOS, and Windows
-- coverage reporting on Linux
-- diff coverage on Linux pull requests with a required threshold of `99%`
-- pre-commit checks on the PR diff
-
-Practical implication:
-
-- a change that is technically correct but insufficiently covered by tests may
-  still fail CI because of the diff-coverage threshold
-
-If your change affects executable lines, plan to add tests early rather than as a
-cleanup step at the end.
-
-## Pre-commit And Notebook Hygiene
-
-This repository uses `pre-commit` for both source files and notebooks.
-
-Configured hooks currently include:
-
-- trailing whitespace and end-of-file normalization
-- `ruff` and `ruff-format` on source code
-- `nb-clean` for notebook cleanup
-- `nbqa-black` and `nbqa-ruff` for notebook code cells
-- `jupytext --sync` for paired notebook/script synchronization
-
-The notebook policy is important:
-
-- notebooks under `notebooks/` are maintained as paired `.ipynb` and `.py` files
-- the `.py` files are part of the authoritative review surface because they diff cleanly
-- if you edit one side of a notebook pair, keep the pair synchronized
-
-The configured `jupytext` hook helps enforce this, but contributors should still
-verify that both files reflect the intended final state before opening a PR.
-
-## Working With Notebooks
-
-The notebooks in this repository are not just presentation artifacts. They are
-part of the reproducible workflow and often demonstrate validation scenarios.
-
-Current notebook set includes workflows such as:
-
-- minimal single-phase porosity and permeability
-- optional OpenPNM cross-checks
-- PyVista visualization
-- manufactured PoreSpy extraction
-- synthetic Cartesian mesh-style examples
-
-Environment expectations:
-
-- notebooks that use OpenPNM or PoreSpy should be run in the `test` environment
-- lighter examples can run in the `default` environment
-
-When changing notebook-backed workflows:
-
-- keep outputs meaningful but not noisy
-- avoid committing accidental state unrelated to the change
-- ensure path-dependent code uses the project path helpers or Pixi-provided env vars
-- prefer deterministic examples when possible
-
-## Testing Expectations For Scientific Changes
-
-Not every contribution needs the same validation depth, but behavioral changes
-should usually include one or more of the following:
-
-- a direct unit test for the changed function or class
-- a regression test covering a previous failure mode
-- a manufactured example with analytically interpretable behavior
-- an interoperability or roundtrip check against an external tool when relevant
-
-Examples of changes that should almost certainly come with tests:
-
-- altered boundary-condition handling
-- changes to permeability or flow assembly
-- import normalization changes
-- serialization format changes
-- visualization code that affects saved artifacts or workflow branching
-
-Potentially incorrect assumption to avoid:
-
-- passing tests in a narrow synthetic case does not imply scientific validity over
-  the full range of network topologies or geometry regimes used by contributors
-
-If a change has known validity limits, state them explicitly in the code or PR.
-
-## Documentation Expectations
-
-Update documentation when public behavior changes. Depending on the scope, that may
-mean one or more of:
+Update documentation when public behavior or scientific interpretation changes. That
+may include:
 
 - docstrings
 - `README.md`
-- notebooks
+- pages under `docs/`
 - examples
-- issue or PR descriptions clarifying assumptions and limitations
+- notebooks
+- issue or PR text clarifying assumptions and limitations
 
-For user-visible behavior changes, do not rely on code alone to communicate intent.
+Documentation in a scientific codebase is not secondary. If users can easily misuse a
+feature or misinterpret a result, the docs are incomplete.
 
-## Issues
+## Notebooks
 
-Use the issue form in GitHub and provide:
+Notebooks in this repository are part of the reproducible workflow, not just
+presentation artifacts.
 
-- `Expected Impact`: choose exactly one of `Minor`, `Regular`, or `Major`
-- `Overview`: a brief description of the issue, motivation, or observed problem
+Contributors working on notebooks should keep in mind:
 
-The issue should be specific enough that another contributor can understand:
+- notebooks under `notebooks/` are maintained as paired `.ipynb` and `.py` files
+- the paired `.py` file is the cleaner review surface and should stay synchronized
+- notebook outputs should be meaningful and intentional, not accidental state
+- path-dependent code should use the project path helpers or the configured
+  environment variables instead of hard-coded local paths
 
-- what behavior is wrong, missing, or unclear
-- why the issue matters scientifically, numerically, or ergonomically
-- what evidence or example demonstrates the problem
+If you edit one side of a notebook pair, make sure the pair is synchronized before
+opening a PR.
 
 ## Pull Requests
 
-Use the pull request template and fill in:
+A good pull request should make the reviewer’s job easy. It should state:
 
-- `Overview`: the purpose of the pull request
-- `Changes`: what code behavior changed
-
-A good PR description should also summarize:
-
-- why the implementation is scientifically or technically justified
+- what changed
+- why the change is needed
+- what evidence supports it
 - what tests were added or updated
-- what assumptions remain unresolved
-- whether notebooks, examples, or documentation were updated
+- what assumptions or limitations remain
+- whether docs, notebooks, or examples were updated
 
-Keep pull requests focused. Small, reviewable changes are preferred over large mixed
-PRs that combine scientific changes, formatting churn, and unrelated cleanup.
+Keep PRs focused. Small, reviewable changes are preferred over broad mixed PRs that
+combine scientific changes, formatting churn, and unrelated cleanup.
 
-## Version Updates
+## Issues And Discussions
 
-Version changes should use the repository script rather than editing files manually:
+When opening an issue or proposing a change, try to make three things clear:
 
-```bash
-pixi run bump-version 0.1.4
-```
+- what behavior is wrong, missing, or unclear
+- why it matters scientifically, numerically, or ergonomically
+- what example, evidence, or use case demonstrates the problem
 
-This updates the authoritative version declarations consistently across project
-metadata files.
+That context is often the difference between a quick, correct review and a long,
+ambiguous one.
+
+## Versioning And Project Metadata
+
+If a change requires updating project metadata or the published version, use the
+repository utilities and existing project workflow rather than editing scattered files
+manually.
+
+The same principle applies more broadly:
+
+- treat repository configuration files as authoritative
+- update prose documents when they drift from those files
+- avoid duplicating volatile project state in multiple places when a pointer to the
+  source of truth is enough
 
 ## If You Are Unsure
 
-If a contribution involves new physics, new data-model assumptions, or a broader
-workflow change, prefer over-explaining the rationale in the issue or PR rather
-than leaving reviewers to infer it. In a scientific codebase, ambiguity about
-assumptions is usually more costly than a longer explanation.
+If you are unsure whether a change is too large, too speculative, or insufficiently
+validated, say so explicitly in the issue or PR. In a research codebase, explicit
+uncertainty is easier to review than hidden assumptions.

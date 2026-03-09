@@ -20,6 +20,8 @@
 #   single-phase model
 # - the committed input volumes make this benchmark stable against future changes in the synthetic
 #   generator implementation
+# - we keep `mu = constant` here on purpose because the checked `pnflow` code path uses scalar fluid
+#   viscosities rather than a thermodynamic `mu(P, T)` coupling
 
 # %%
 from __future__ import annotations
