@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import importlib
-from typing import Protocol
+from typing import Protocol, cast
 
 import numpy as np
 from scipy.interpolate import PchipInterpolator
@@ -15,6 +15,34 @@ class ViscosityBackend(Protocol):
 
     def evaluate(self, pressure: np.ndarray, *, temperature: float) -> np.ndarray:
         """Return dynamic viscosity for the requested absolute pressures."""
+
+
+class _ThermoViscosityModel(Protocol):
+    """Minimal typed surface needed from ``thermo`` liquid-viscosity objects."""
+
+    def TP_dependent_property(self, temperature: float, pressure: float) -> float | None:
+        """Return viscosity at the requested state."""
+
+
+class _ChemicalFactory(Protocol):
+    """Typed constructor interface for ``thermo.Chemical``."""
+
+    ViscosityLiquid: _ThermoViscosityModel
+
+
+class _CoolPropPropsSI(Protocol):
+    """Typed callable surface used from ``CoolProp.CoolProp.PropsSI``."""
+
+    def __call__(
+        self,
+        output: str,
+        key1: str,
+        t_value: float,
+        key2: str,
+        p_value: float,
+        fluid: str,
+    ) -> float:
+        """Return the requested CoolProp property."""
 
 
 def _as_float_array(values: float | np.ndarray) -> np.ndarray:
@@ -111,17 +139,17 @@ class ThermoWaterViscosityBackend:
 
     chemical_name: str = "water"
     name: str = field(init=False, default="thermo")
-    _viscosity_liquid: object = field(init=False, repr=False)
+    _viscosity_liquid: _ThermoViscosityModel = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         try:
-            from thermo import Chemical
+            from thermo import Chemical  # type: ignore[import-untyped]
         except Exception as exc:  # pragma: no cover - depends on optional dependency
             raise ImportError(
                 "The 'thermo' package is required for the thermo viscosity backend."
             ) from exc
 
-        chemical = Chemical(self.chemical_name)
+        chemical = cast(_ChemicalFactory, Chemical(self.chemical_name))
         self._viscosity_liquid = chemical.ViscosityLiquid
 
     def evaluate(self, pressure: np.ndarray, *, temperature: float) -> np.ndarray:
@@ -149,7 +177,7 @@ class CoolPropWaterViscosityBackend:
 
     fluid_name: str = "Water"
     name: str = field(init=False, default="coolprop")
-    _props_si: object = field(init=False, repr=False)
+    _props_si: _CoolPropPropsSI = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         try:
@@ -158,7 +186,7 @@ class CoolPropWaterViscosityBackend:
             raise ImportError(
                 "The 'CoolProp' package is required for the coolprop viscosity backend."
             ) from exc
-        self._props_si = getattr(module, "PropsSI")
+        self._props_si = cast(_CoolPropPropsSI, getattr(module, "PropsSI"))
 
     def evaluate(self, pressure: np.ndarray, *, temperature: float) -> np.ndarray:
         """Evaluate water viscosity at the requested absolute pressures."""
