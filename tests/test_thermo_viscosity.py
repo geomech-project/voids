@@ -40,6 +40,20 @@ def test_pressure_viscosity_table_clips_queries_to_bounds() -> None:
     assert values[2] == pytest.approx(30.0)
 
 
+def test_pressure_viscosity_table_returns_differentiable_slope() -> None:
+    """The pressure table exposes a usable derivative for Newton linearization."""
+
+    table = PressureViscosityTable(
+        pressure=np.array([1.0, 2.0, 3.0]),
+        viscosity=np.array([10.0, 20.0, 30.0]),
+    )
+    dmu = table.derivative(np.array([0.5, 1.5, 2.5, 4.0]))
+    assert dmu[0] == pytest.approx(0.0)
+    assert dmu[1] == pytest.approx(10.0)
+    assert dmu[2] == pytest.approx(10.0)
+    assert dmu[3] == pytest.approx(0.0)
+
+
 def test_thermo_backend_changes_viscosity_with_pressure_for_liquid_water() -> None:
     """The thermo backend responds to pressure, even if the sign depends on the backend model."""
 
@@ -142,3 +156,49 @@ def test_singlephase_solver_converges_for_pressure_dependent_viscosity() -> None
     )
     assert result.reference_viscosity == pytest.approx(1.5)
     assert int(result.solver_info["nonlinear_iterations"]) >= 1
+
+
+def test_tabulated_model_exposes_value_and_derivative_consistently() -> None:
+    """Tabulated viscosity model returns value and derivative from the same table."""
+
+    model = TabulatedWaterViscosityModel(
+        backend=LinearPressureViscosityBackend(),
+        temperature=300.0,
+        pressure_points=16,
+        pressure_padding_fraction=0.0,
+    )
+    pressure = np.array([1.25, 1.75])
+    mu, dmu = model.evaluate_with_derivative(pressure, pin=1.0, pout=2.0)
+    assert np.allclose(mu, pressure)
+    assert np.allclose(dmu, np.ones_like(pressure))
+
+
+def test_singlephase_solver_newton_converges_for_variable_viscosity() -> None:
+    """Variable-viscosity Newton solves converge and report the Newton branch."""
+
+    net = make_linear_chain_network()
+    net.throat.pop("hydraulic_conductance")
+    net.throat["area"] = np.sqrt(8.0 * np.pi) * np.ones(net.Nt)
+    model = TabulatedWaterViscosityModel(
+        backend=LinearPressureViscosityBackend(),
+        temperature=300.0,
+        pressure_points=128,
+        pressure_padding_fraction=0.0,
+    )
+
+    result = solve(
+        net,
+        fluid=FluidSinglePhase(viscosity_model=model),
+        bc=PressureBC("inlet_xmin", "outlet_xmax", pin=2.0, pout=1.0),
+        axis="x",
+        options=SinglePhaseOptions(
+            conductance_model="generic_poiseuille",
+            nonlinear_solver="newton",
+            nonlinear_max_iterations=20,
+            nonlinear_pressure_tolerance=1.0e-12,
+        ),
+    )
+
+    expected_midpoint = np.sqrt(2.0)
+    assert result.solver_info["nonlinear_solver"] == "newton"
+    assert result.pore_pressure[1] == pytest.approx(expected_midpoint, rel=1.0e-8)

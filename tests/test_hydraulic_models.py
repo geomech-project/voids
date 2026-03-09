@@ -17,6 +17,7 @@ from voids.geom.hydraulic import (
     available_conductance_models,
     generic_poiseuille_conductance,
     throat_conductance,
+    throat_conductance_with_sensitivities,
     valvatne_blunt_conductance,
     valvatne_blunt_baseline_conductance,
     valvatne_blunt_throat_conductance,
@@ -478,3 +479,76 @@ def test_throat_conductance_dispatches_all_models_and_validates_name(
     )
     with pytest.raises(ValueError, match="Unknown conductance model"):
         throat_conductance(net, viscosity=1.0, model="unknown")
+
+
+def test_generic_poiseuille_sensitivity_matches_analytic_expression(line_network: Network) -> None:
+    """Generic Poiseuille sensitivity follows the expected chain rule."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["diameter_inscribed"] = np.ones(net.Nt)
+    net.throat["length"] = np.ones(net.Nt)
+
+    mu_t = np.array([2.0, 4.0])
+    dmu_t = np.array([6.0, 10.0])
+    g, dg_dpi, dg_dpj = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="generic_poiseuille",
+        throat_viscosity=mu_t,
+        throat_dviscosity_dpressure=dmu_t,
+    )
+
+    expected_g = np.pi / (128.0 * mu_t)
+    expected_dg = -(expected_g / mu_t) * (0.5 * dmu_t)
+    assert np.allclose(g, expected_g)
+    assert np.allclose(dg_dpi, expected_dg)
+    assert np.allclose(dg_dpj, expected_dg)
+
+
+def test_valvatne_conduit_sensitivity_matches_finite_difference(line_network: Network) -> None:
+    """Conduit sensitivity agrees with a finite-difference perturbation."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["pore1_length"] = np.array([0.25, 0.25])
+    net.throat["core_length"] = np.array([0.50, 0.50])
+    net.throat["pore2_length"] = np.array([0.25, 0.25])
+    gref = 1.0 / (4.0 * np.pi)
+    net.throat["shape_factor"] = np.array([gref, gref])
+    net.pore["shape_factor"] = np.array([gref, gref, gref])
+    net.throat["area"] = np.sqrt(2.0 * net.throat["core_length"] / gref)
+    net.pore["area"] = np.sqrt(2.0 * 0.25 / gref) * np.ones(net.Np)
+
+    pore_mu = np.array([2.0, 3.0, 5.0])
+    throat_mu = np.array([7.0, 11.0])
+    pore_dmu = np.array([13.0, 17.0, 19.0])
+    throat_dmu = np.array([23.0, 29.0])
+    g, dg_dpi, dg_dpj = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="valvatne_blunt",
+        pore_viscosity=pore_mu,
+        throat_viscosity=throat_mu,
+        pore_dviscosity_dpressure=pore_dmu,
+        throat_dviscosity_dpressure=throat_dmu,
+    )
+
+    eps = 1.0e-7
+    g_plus = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="valvatne_blunt",
+        pore_viscosity=np.array([pore_mu[0] + pore_dmu[0] * eps, pore_mu[1], pore_mu[2]]),
+        throat_viscosity=np.array([throat_mu[0] + 0.5 * throat_dmu[0] * eps, throat_mu[1]]),
+    )[0]
+    g_minus = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="valvatne_blunt",
+        pore_viscosity=np.array([pore_mu[0] - pore_dmu[0] * eps, pore_mu[1], pore_mu[2]]),
+        throat_viscosity=np.array([throat_mu[0] - 0.5 * throat_dmu[0] * eps, throat_mu[1]]),
+    )[0]
+    fd = (g_plus - g_minus) / (2.0 * eps)
+    assert np.allclose(dg_dpi[0], fd[0], rtol=1.0e-6, atol=1.0e-9)
+    assert np.isfinite(g).all()
