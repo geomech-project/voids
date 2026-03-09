@@ -1,0 +1,12 @@
+sample_label,sample_name,raw_filename,voxel_size_um,experimental_porosity_pct,experimental_permeability_mD,porosity_error_pct_points,permeability_rel_error_pct,reference
+A,Bandera Gray,BanderaGray_2d25um_binary.raw,2.25,18.10,9.0,0.5,10.0,"Neumann et al. (2021), Scientific Reports 11:11370, Table 1"
+B,Parker,Parker_2d25um_binary.raw,2.25,14.77,10.0,0.5,10.0,"Neumann et al. (2021), Scientific Reports 11:11370, Table 1"
+C,Kirby,Kirby_2d25um_binary.raw,2.25,19.95,62.0,0.5,10.0,"Neumann et al. (2021), Scientific Reports 11:11370, Table 1"
+D,Bandera Brown,BanderaBrown_2d25um_binary.raw,2.25,24.11,63.0,0.5,10.0,"Neumann et al. (2021), Scientific Reports 11:11370, Table 1"
+E,Berea Sister Gray,BSG_2d25um_binary.raw,2.25,19.07,80.0,0.5,10.0,"Neumann et al. (2021), Scientific Reports 11:11370, Table 1"
+F,Berea Upper Gray,BUG_2d25um_binary.raw,2.25,18.56,86.0,0.5,10.0,"Neumann et al. (2021), Scientific Reports 11:11370, Table 1"
+G,Berea,Berea_2d25um_binary.raw,2.25,18.96,121.0,0.5,10.0,"Neumann et al. (2021), Scientific Reports 11:11370, Table 1"
+H,Castlegate,CastleGate_2d25um_binary.raw,2.25,26.54,269.0,0.5,10.0,"Neumann et al. (2021), Scientific Reports 11:11370, Table 1"
+I,Buff Berea,BB_2d25um_binary.raw,2.25,24.02,275.0,0.5,10.0,"Neumann et al. (2021), Scientific Reports 11:11370, Table 1"
+J,Leopard,Leopard_2d25um_binary.raw,2.25,20.22,327.0,0.5,10.0,"Neumann et al. (2021), Scientific Reports 11:11370, Table 1"
+K,Bentheimer,Bentheimer_2d25um_binary.raw,2.25,22.64,386.0,0.5,10.0,"Neumann et al. (2021), Scientific Reports 11:11370, Table 1"

@@ -1,0 +1,12 @@
+metric,value,units
+Np,2358.0,count
+Nt,4142.0,count
+Mean coordination,3.5131467345207805,-
+Max coordination,25.0,-
+Mean pore size (diameter_equivalent),27.70749036757814,um
+Median pore size (diameter_equivalent),23.694548204154984,um
+Mean throat size (diameter_equivalent),20.271446503773202,um
+Median throat size (diameter_equivalent),16.64837329574682,um
+Connected components,1.0,count
+Giant component fraction,1.0,-
+Dead-end pore fraction,0.32061068702290074,-
