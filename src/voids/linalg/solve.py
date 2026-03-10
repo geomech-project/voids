@@ -34,6 +34,18 @@ class _PyAMGModule(Protocol):
         """Build a classical AMG hierarchy."""
 
 
+class _PyPardisoSolver(Protocol):
+    """Minimal typed surface for pypardiso.spsolve function."""
+
+    def __call__(
+        self,
+        A: sparse.csr_matrix | sparse.csc_matrix,
+        b: np.ndarray,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Solve sparse linear system using PARDISO."""
+
+
 SolverParameterValue: TypeAlias = (
     str | float | int | bool | dict[str, object] | LinearOperator[np.float64]
 )
@@ -50,6 +62,19 @@ def _import_pyamg() -> _PyAMGModule:
             "PyAMG preconditioning requires the 'pyamg' package to be installed."
         ) from exc
     return cast(_PyAMGModule, pyamg)
+
+
+def _import_pypardiso() -> _PyPardisoSolver:
+    """Import pypardiso lazily so the dependency remains easy to diagnose."""
+
+    try:
+        import pypardiso  # type: ignore[import-untyped]
+    except ImportError as exc:  # pragma: no cover - depends on environment
+        raise ImportError(
+            "PARDISO solver requires the 'pypardiso' package to be installed. "
+            "This is currently only supported on Linux systems."
+        ) from exc
+    return cast(_PyPardisoSolver, pypardiso.spsolve)
 
 
 def _build_preconditioner(
@@ -111,8 +136,8 @@ def solve_linear_system(
     b :
         Right-hand-side vector.
     method :
-        Solver backend. Supported values are ``"direct"``, ``"cg"``,
-        and ``"gmres"``.
+        Solver backend. Supported values are ``"direct"``, ``"pardiso"``,
+        ``"cg"``, and ``"gmres"``.
     solver_parameters :
         Optional backend-specific solver options. For SciPy Krylov methods this
         maps directly to supported keyword arguments such as ``rtol``,
@@ -132,10 +157,21 @@ def solve_linear_system(
     ------
     ValueError
         If ``method`` is not recognized.
+
+    Notes
+    -----
+    The ``"pardiso"`` method uses the Intel MKL PARDISO solver via the
+    ``pypardiso`` package. This is typically only available on Linux systems
+    and may provide better performance for large systems compared to the
+    default SciPy direct solver.
     """
 
     if method == "direct":
         x = spsolve(A, b)
+        return np.asarray(x, dtype=float), {"method": method, "info": 0}
+    if method == "pardiso":
+        pardiso_spsolve = _import_pypardiso()
+        x = pardiso_spsolve(A, b)
         return np.asarray(x, dtype=float), {"method": method, "info": 0}
     if method == "cg":
         parameters = dict(solver_parameters or {})

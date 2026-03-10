@@ -13,7 +13,7 @@ from voids._testing import set_seed
 from voids.core.sample import SampleGeometry
 from voids.graph.incidence import incidence_matrix
 from voids.linalg.backends import SCIPY, SciPyBackend
-from voids.linalg.solve import solve_linear_system
+from voids.linalg.solve import solve_linear_system, _import_pypardiso
 from voids.paths import (
     DATA_PATH_ENV,
     EXAMPLES_PATH_ENV,
@@ -213,6 +213,59 @@ def test_solve_linear_system_supports_multiple_pyamg_hierarchies(amg_solver: str
 
     assert np.allclose(A @ x, b)
     assert info["pyamg_solver"] == amg_solver
+
+
+def test_solve_linear_system_pardiso_available_or_raises_import_error() -> None:
+    """Test that PARDISO solver either works or raises helpful ImportError."""
+
+    A = sparse.csr_matrix(np.array([[2.0, -1.0], [-1.0, 2.0]]))
+    b = np.array([1.0, 0.0])
+
+    try:
+        x, info = solve_linear_system(A, b, method="pardiso")
+        # If pypardiso is available (Linux), verify it works correctly
+        assert np.allclose(A @ x, b)
+        assert info["method"] == "pardiso"
+        assert info["info"] == 0
+    except ImportError as exc:
+        # Expected on non-Linux platforms or when pypardiso is not installed
+        assert "pypardiso" in str(exc).lower()
+        assert "linux" in str(exc).lower()
+
+
+def test_import_pypardiso_raises_clear_error_when_unavailable() -> None:
+    """Test that _import_pypardiso raises a clear ImportError when pypardiso is missing."""
+
+    try:
+        solver = _import_pypardiso()
+        # If we get here, pypardiso is available (Linux)
+        assert callable(solver)
+    except ImportError as exc:
+        # Expected on non-Linux platforms
+        error_msg = str(exc).lower()
+        assert "pypardiso" in error_msg
+        assert "linux" in error_msg
+
+
+def test_solve_linear_system_pardiso_produces_same_result_as_direct() -> None:
+    """Test that PARDISO produces identical results to the default direct solver."""
+
+    # Create a simple SPD system
+    A = sparse.csr_matrix(np.array([[4.0, -1.0, 0.0], [-1.0, 4.0, -1.0], [0.0, -1.0, 4.0]]))
+    b = np.array([1.0, 2.0, 3.0])
+
+    # Solve with direct
+    x_direct, _ = solve_linear_system(A, b, method="direct")
+
+    # Try PARDISO
+    try:
+        x_pardiso, info = solve_linear_system(A, b, method="pardiso")
+        # Results should match to machine precision
+        assert np.allclose(x_pardiso, x_direct, rtol=1e-12, atol=1e-14)
+        assert info["method"] == "pardiso"
+    except ImportError:
+        # Expected on non-Linux platforms
+        pytest.skip("PARDISO solver not available on this platform")
 
 
 def test_project_and_examples_paths_use_env_overrides(monkeypatch, tmp_path: Path) -> None:
