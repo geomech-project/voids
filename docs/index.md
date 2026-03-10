@@ -9,6 +9,7 @@
 [![Supported OS](https://img.shields.io/badge/OS-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/geomech-project/voids/actions/workflows/tests.yml)
 [![PyPI version](https://img.shields.io/pypi/v/voids)](https://pypi.org/project/voids/)
 [![pip install voids](https://img.shields.io/badge/pip%20install-voids-3775A9?logo=pypi&logoColor=white)](https://pypi.org/project/voids/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18937647.svg)](https://doi.org/10.5281/zenodo.18937647)
 
 **`voids`** is a scientific Python package for pore network modeling (PNM) aimed at
 research workflows where reproducibility, explicit assumptions, and validation matter.
