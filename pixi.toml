@@ -24,6 +24,9 @@ pyamg = ">=5.3"
 pyvista = ">=0.43"
 kaleido = ">=0.2.1"
 
+[target.linux-64.dependencies]
+mkl = ">=2023"
+
 [target.linux-64.pypi-dependencies]
 pypardiso = ">=0.4"
 
