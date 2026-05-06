@@ -46,6 +46,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import porespy as ps
+import plotly.graph_objects as go
 
 from voids.geom import characteristic_size
 from voids.graph.metrics import connectivity_metrics, coordination_numbers
@@ -116,11 +117,10 @@ viscosity_model = TabulatedWaterViscosityModel.from_backend(
 )
 
 
-# %%
 def raw_to_void_image(raw_image: np.ndarray, *, void_value: int) -> np.ndarray:
     """Convert raw segmented image to void=1, solid=0 convention."""
     raw_arr = np.asarray(raw_image, dtype=np.uint8)
-    return (raw_arr == np.uint8(void_value)).astype(np.int8)
+    return np.asarray(raw_arr == np.uint8(void_value), dtype=np.int8)
 
 
 def prepare_axis_image(
@@ -137,15 +137,26 @@ def prepare_axis_image(
         np.asarray(image, dtype=bool),
         axis=axis_index,
     )
-    return trimmed.astype(np.int8)
+    return np.asarray(trimmed, dtype=np.int8)
 
 
 # %%
 examples_data = data_path()
 raw_path = examples_data / raw_relpath
 
+if not raw_path.exists():
+    raise FileNotFoundError(
+        "Missing DRP-10 RAW volume at "
+        f"{raw_path}. Place `estaillades.raw` under examples/data/drp-10 or set "
+        "VOIDS_DATA_PATH to a directory that contains it."
+    )
+
 im_full_raw = np.memmap(
-    raw_path, mode="r", dtype=raw_dtype, shape=raw_shape, order=raw_order
+    filename=str(raw_path),
+    dtype=np.dtype(raw_dtype),
+    mode="r",
+    shape=raw_shape,
+    order=raw_order,
 )
 im_full = raw_to_void_image(im_full_raw, void_value=raw_void_value)
 phi_image_full = float(np.mean(im_full))
@@ -197,6 +208,236 @@ axes[2].set_xlabel("y")
 axes[2].set_ylabel("x")
 
 fig.tight_layout()
+
+# %%
+# 3D rock render (solid phase, not PNM)
+# The full 500 x 500 x 500 solid phase is expensive to render directly, so
+# this preview downsamples the binary image and renders the outer rock surface.
+# A Plotly point-cloud is shown interactively in the notebook and exported to
+# HTML for later inspection.
+
+
+def _rock_surface_boundary_voxels(rock_volume: np.ndarray) -> np.ndarray:
+    """Return indices of boundary voxels in a binary solid image."""
+    rock = np.asarray(rock_volume, dtype=bool)
+    padded = np.pad(rock, 1, mode="constant", constant_values=False)
+    interior = (
+        padded[1:-1, 1:-1, 1:-1]
+        & padded[:-2, 1:-1, 1:-1]
+        & padded[2:, 1:-1, 1:-1]
+        & padded[1:-1, :-2, 1:-1]
+        & padded[1:-1, 2:, 1:-1]
+        & padded[1:-1, 1:-1, :-2]
+        & padded[1:-1, 1:-1, 2:]
+    )
+    return np.argwhere(rock & ~interior)
+
+
+def rock_surface_point_cloud(
+    image_void: np.ndarray,
+    *,
+    voxel_size: float,
+    stride: int = 4,
+    max_points: int = 50000,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Return a downsampled solid-phase boundary point cloud in metric units."""
+    if stride < 1:
+        raise ValueError("stride must be >= 1")
+
+    rock = np.asarray(image_void[::stride, ::stride, ::stride] == 0, dtype=bool)
+    boundary = _rock_surface_boundary_voxels(rock)
+    if boundary.size == 0:
+        raise RuntimeError(
+            "No solid-phase boundary voxels were found in the downsampled volume."
+        )
+
+    raw_boundary_points = int(boundary.shape[0])
+    if raw_boundary_points > max_points:
+        step = int(np.ceil(raw_boundary_points / max_points))
+        boundary = boundary[::step]
+
+    spacing = float(stride) * float(voxel_size)
+    xyz = spacing * boundary.astype(float)
+    meta = {
+        "downsampled_shape": rock.shape,
+        "stride": int(stride),
+        "raw_surface_points": raw_boundary_points,
+        "plotted_surface_points": int(boundary.shape[0]),
+    }
+    return xyz, meta
+
+
+def plot_rock_surface_plotly(
+    image_void: np.ndarray,
+    *,
+    voxel_size: float,
+    stride: int = 4,
+    max_points: int = 50000,
+) -> tuple[go.Figure, dict[str, object]]:
+    """Build an interactive Plotly rock-surface figure."""
+    xyz, meta = rock_surface_point_cloud(
+        image_void,
+        voxel_size=voxel_size,
+        stride=stride,
+        max_points=max_points,
+    )
+
+    fig = go.Figure(
+        data=[
+            go.Scatter3d(
+                x=xyz[:, 0],
+                y=xyz[:, 1],
+                z=xyz[:, 2],
+                mode="markers",
+                marker=dict(
+                    size=2,
+                    color=xyz[:, 2],
+                    colorscale="Earth",
+                    opacity=0.10,
+                    showscale=False,
+                ),
+                hovertemplate=(
+                    "x=%{x:.3e} m<br>" "y=%{y:.3e} m<br>" "z=%{z:.3e} m<extra></extra>"
+                ),
+                name="rock surface",
+            )
+        ]
+    )
+    fig.update_layout(
+        title="DRP-10 Estaillades v2 rock surface (solid phase)",
+        template="plotly_white",
+        scene=dict(
+            xaxis_title="x [m]",
+            yaxis_title="y [m]",
+            zaxis_title="z [m]",
+            aspectmode="data",
+            camera=dict(eye=dict(x=1.6, y=1.6, z=1.1)),
+        ),
+        margin=dict(l=0, r=0, b=0, t=40),
+    )
+    meta["backend"] = "plotly"
+    return fig, meta
+
+
+def plot_rock_surface_preview(
+    image_void: np.ndarray,
+    *,
+    voxel_size: float,
+    stride: int = 4,
+    max_points: int = 50000,
+    screenshot_path: Path | None = None,
+) -> dict[str, object]:
+    """Render the solid phase of a binary void image.
+
+    Uses PyVista when available and falls back to a Matplotlib surface-point
+    preview otherwise.
+    """
+    xyz, meta = rock_surface_point_cloud(
+        image_void,
+        voxel_size=voxel_size,
+        stride=stride,
+        max_points=max_points,
+    )
+    rock_shape = tuple(int(v) for v in meta["downsampled_shape"])
+    spacing = float(stride) * float(voxel_size)
+
+    try:
+        import pyvista as pv
+
+        rock = np.asarray(image_void[::stride, ::stride, ::stride] == 0, dtype=np.uint8)
+        grid = pv.ImageData(
+            dimensions=[int(dim) + 1 for dim in rock.shape],
+            spacing=(spacing, spacing, spacing),
+            origin=(0.0, 0.0, 0.0),
+        )
+        grid.cell_data["rock"] = rock.ravel(order="F")
+        surface = (
+            grid.threshold(0.5, scalars="rock")
+            .extract_surface(algorithm="dataset_surface")
+            .triangulate()
+        )
+
+        plotter = pv.Plotter(off_screen=True)
+        plotter.add_mesh(surface, color="tan", smooth_shading=True, specular=0.05)
+        plotter.view_isometric()
+        if screenshot_path is not None:
+            screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+            plotter.screenshot(str(screenshot_path), scale=2)
+        plotter.close()
+        meta["backend"] = "pyvista"
+        meta["surface_cells"] = int(surface.n_cells)
+        return meta
+    except ImportError:
+        fig_r = plt.figure(figsize=(8, 8))
+        ax_r = fig_r.add_subplot(projection="3d")
+        ax_r.scatter(
+            xyz[:, 0],
+            xyz[:, 1],
+            xyz[:, 2],
+            s=0.8,
+            c="tan",
+            alpha=0.08,
+            linewidths=0,
+        )
+        ax_r.set_xlabel("x [m]")
+        ax_r.set_ylabel("y [m]")
+        ax_r.set_zlabel("z [m]")
+        ax_r.set_box_aspect(rock_shape)
+        ax_r.view_init(elev=25, azim=40)
+        ax_r.set_title("DRP-10 Estaillades v2 rock surface (solid phase)")
+        fig_r.tight_layout()
+        if screenshot_path is not None:
+            screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+            fig_r.savefig(screenshot_path, dpi=180)
+        meta["backend"] = "matplotlib"
+        return meta
+
+
+rock_render_stride = 4
+out_rock_png = examples_data / "drp-10" / "Estaillades_v2_rock_surface.png"
+out_rock_html = examples_data / "drp-10" / "Estaillades_v2_rock_surface_plotly.html"
+rock_render_error: Exception | None = None
+rock_render_meta: dict[str, object] | None = None
+fig_rock_plotly: go.Figure | None = None
+
+try:
+    rock_render_meta = plot_rock_surface_preview(
+        im_full,
+        voxel_size=voxel_size_m,
+        stride=rock_render_stride,
+        screenshot_path=out_rock_png if save_outputs else None,
+    )
+    fig_rock_plotly, rock_plotly_meta = plot_rock_surface_plotly(
+        im_full,
+        voxel_size=voxel_size_m,
+        stride=rock_render_stride,
+        max_points=40000,
+    )
+    if save_outputs:
+        fig_rock_plotly.write_html(out_rock_html, include_plotlyjs="cdn")
+    print(f"Rock render backend: {rock_render_meta['backend']}")
+    print(f"Rock render stride: {rock_render_stride}")
+    print(f"Downsampled shape: {rock_render_meta['downsampled_shape']}")
+    print(f"Interactive plotted points: {rock_plotly_meta['plotted_surface_points']}")
+    if save_outputs and out_rock_png.exists():
+        rock_preview = plt.imread(out_rock_png)
+        fig_r, ax_r = plt.subplots(figsize=(8, 8))
+        ax_r.imshow(rock_preview)
+        ax_r.axis("off")
+        ax_r.set_title("DRP-10 Estaillades v2 rock surface (solid phase)")
+        fig_r.tight_layout()
+        print(f"Saved rock render: {out_rock_png}")
+    if save_outputs:
+        print(f"Saved interactive rock HTML: {out_rock_html}")
+except Exception as exc:
+    rock_render_error = exc
+    print(
+        "3D rock rendering skipped. Install `pyvista` for surface rendering or use "
+        "the Matplotlib fallback, and ensure the RAW volume is available. "
+        f"Original error: {exc}"
+    )
+
+fig_rock_plotly
 
 
 # %%
