@@ -200,6 +200,9 @@ class MaximalBallExtractionDiagnostics:
 
 
 _CIRCULAR_SHAPE_FACTOR = 1.0 / (4.0 * np.pi)
+_RADIUS_SUPPORT_MODE_ANY = 0
+_RADIUS_SUPPORT_MODE_STRICTLY_LARGER = 1
+_RADIUS_SUPPORT_MODE_GREATER_OR_EQUAL = 2
 
 
 def _resolve_edt_parallel_threads(edt_parallel_threads: int | None) -> int:
@@ -1233,7 +1236,7 @@ def _normalize_radius_support_mode(
     return normalized_mode
 
 
-def _neighbor_satisfies_radius_support(
+def _neighbor_satisfies_radius_support(  # pragma: no cover
     neighbor_radius: float,
     current_radius: float,
     *,
@@ -1250,7 +1253,401 @@ def _neighbor_satisfies_radius_support(
     raise ValueError(f"Unsupported radius_support_mode={radius_support_mode!r}")
 
 
-def _count_supporting_neighbor_labels(
+def _encode_radius_support_mode(radius_support_mode: str) -> int:
+    """Encode a normalized radius-support mode for compiled kernels."""
+
+    if radius_support_mode == "any":
+        return _RADIUS_SUPPORT_MODE_ANY
+    if radius_support_mode == "strictly_larger":
+        return _RADIUS_SUPPORT_MODE_STRICTLY_LARGER
+    if radius_support_mode == "greater_or_equal":
+        return _RADIUS_SUPPORT_MODE_GREATER_OR_EQUAL
+    raise ValueError(f"Unsupported radius_support_mode={radius_support_mode!r}")
+
+
+@njit(cache=True)
+def _compiled_neighbor_satisfies_radius_support(
+    neighbor_radius: float,
+    current_radius: float,
+    radius_support_mode_code: int,
+) -> bool:  # pragma: no cover
+    """Return whether a neighboring voxel may support assignment."""
+
+    if radius_support_mode_code == _RADIUS_SUPPORT_MODE_ANY:
+        return True
+    if radius_support_mode_code == _RADIUS_SUPPORT_MODE_STRICTLY_LARGER:
+        return neighbor_radius > current_radius
+    return neighbor_radius >= current_radius
+
+
+@njit(cache=True)
+def _compiled_accumulate_label_count(
+    supporting_labels: np.ndarray,
+    supporting_counts: np.ndarray,
+    supporting_label_count: int,
+    neighbor_label: int,
+) -> int:  # pragma: no cover
+    """Accumulate one label count into fixed-size support arrays."""
+
+    for label_index in range(supporting_label_count):
+        if supporting_labels[label_index] == neighbor_label:
+            supporting_counts[label_index] += 1
+            return supporting_label_count
+    supporting_labels[supporting_label_count] = neighbor_label
+    supporting_counts[supporting_label_count] = 1
+    return supporting_label_count + 1
+
+
+@njit(cache=True)
+def _compiled_select_best_label(
+    supporting_labels: np.ndarray,
+    supporting_counts: np.ndarray,
+    supporting_label_count: int,
+) -> tuple[int, int]:  # pragma: no cover
+    """Select the strongest label with the same tie-break as the Python path."""
+
+    best_label = -1
+    best_support = 0
+    for label_index in range(supporting_label_count):
+        candidate_label = int(supporting_labels[label_index])
+        candidate_support = int(supporting_counts[label_index])
+        if candidate_support > best_support or (
+            candidate_support == best_support and (best_label < 0 or candidate_label < best_label)
+        ):
+            best_label = candidate_label
+            best_support = candidate_support
+    return best_label, best_support
+
+
+@njit(cache=True)
+def _grow_root_regions_by_radius_compiled_2d(
+    previous_labels_flat: np.ndarray,
+    label_image_flat: np.ndarray,
+    working_distance_map_flat: np.ndarray,
+    void_indices: np.ndarray,
+    *,
+    shape0: int,
+    shape1: int,
+    unassigned_label: int,
+    minimum_supporting_neighbors: int,
+    radius_support_mode_code: int,
+) -> bool:  # pragma: no cover
+    """Compiled 2D radius-aware voxel growth."""
+
+    changed_any_voxel = False
+    for voxel_row in range(void_indices.shape[0]):
+        index0 = int(void_indices[voxel_row, 0])
+        index1 = int(void_indices[voxel_row, 1])
+        linear_index = index0 * shape1 + index1
+        if int(previous_labels_flat[linear_index]) != unassigned_label:
+            continue
+
+        current_radius = float(working_distance_map_flat[linear_index])
+        supporting_labels = np.empty(4, dtype=np.int64)
+        supporting_counts = np.zeros(4, dtype=np.int64)
+        supporting_label_count = 0
+
+        for axis_index in range(2):
+            for direction in (-1, 1):
+                neighbor0 = index0
+                neighbor1 = index1
+                if axis_index == 0:
+                    neighbor0 += direction
+                    if neighbor0 < 0 or neighbor0 >= shape0:
+                        continue
+                else:
+                    neighbor1 += direction
+                    if neighbor1 < 0 or neighbor1 >= shape1:
+                        continue
+
+                neighbor_linear_index = neighbor0 * shape1 + neighbor1
+                neighbor_label = int(previous_labels_flat[neighbor_linear_index])
+                if neighbor_label < 0:
+                    continue
+                neighbor_radius = float(working_distance_map_flat[neighbor_linear_index])
+                if not _compiled_neighbor_satisfies_radius_support(
+                    neighbor_radius,
+                    current_radius,
+                    radius_support_mode_code,
+                ):
+                    continue
+                supporting_label_count = _compiled_accumulate_label_count(
+                    supporting_labels,
+                    supporting_counts,
+                    supporting_label_count,
+                    neighbor_label,
+                )
+
+        if supporting_label_count == 0:
+            continue
+
+        best_label, best_support = _compiled_select_best_label(
+            supporting_labels,
+            supporting_counts,
+            supporting_label_count,
+        )
+        if best_support >= minimum_supporting_neighbors:
+            label_image_flat[linear_index] = best_label
+            changed_any_voxel = True
+
+    return changed_any_voxel
+
+
+@njit(cache=True)
+def _grow_root_regions_by_radius_compiled_3d(
+    previous_labels_flat: np.ndarray,
+    label_image_flat: np.ndarray,
+    working_distance_map_flat: np.ndarray,
+    void_indices: np.ndarray,
+    *,
+    shape0: int,
+    shape1: int,
+    shape2: int,
+    unassigned_label: int,
+    minimum_supporting_neighbors: int,
+    radius_support_mode_code: int,
+) -> bool:  # pragma: no cover
+    """Compiled 3D radius-aware voxel growth."""
+
+    changed_any_voxel = False
+    plane_size = shape1 * shape2
+    for voxel_row in range(void_indices.shape[0]):
+        index0 = int(void_indices[voxel_row, 0])
+        index1 = int(void_indices[voxel_row, 1])
+        index2 = int(void_indices[voxel_row, 2])
+        linear_index = index0 * plane_size + index1 * shape2 + index2
+        if int(previous_labels_flat[linear_index]) != unassigned_label:
+            continue
+
+        current_radius = float(working_distance_map_flat[linear_index])
+        supporting_labels = np.empty(6, dtype=np.int64)
+        supporting_counts = np.zeros(6, dtype=np.int64)
+        supporting_label_count = 0
+
+        for axis_index in range(3):
+            for direction in (-1, 1):
+                neighbor0 = index0
+                neighbor1 = index1
+                neighbor2 = index2
+                if axis_index == 0:
+                    neighbor0 += direction
+                    if neighbor0 < 0 or neighbor0 >= shape0:
+                        continue
+                elif axis_index == 1:
+                    neighbor1 += direction
+                    if neighbor1 < 0 or neighbor1 >= shape1:
+                        continue
+                else:
+                    neighbor2 += direction
+                    if neighbor2 < 0 or neighbor2 >= shape2:
+                        continue
+
+                neighbor_linear_index = neighbor0 * plane_size + neighbor1 * shape2 + neighbor2
+                neighbor_label = int(previous_labels_flat[neighbor_linear_index])
+                if neighbor_label < 0:
+                    continue
+                neighbor_radius = float(working_distance_map_flat[neighbor_linear_index])
+                if not _compiled_neighbor_satisfies_radius_support(
+                    neighbor_radius,
+                    current_radius,
+                    radius_support_mode_code,
+                ):
+                    continue
+                supporting_label_count = _compiled_accumulate_label_count(
+                    supporting_labels,
+                    supporting_counts,
+                    supporting_label_count,
+                    neighbor_label,
+                )
+
+        if supporting_label_count == 0:
+            continue
+
+        best_label, best_support = _compiled_select_best_label(
+            supporting_labels,
+            supporting_counts,
+            supporting_label_count,
+        )
+        if best_support >= minimum_supporting_neighbors:
+            label_image_flat[linear_index] = best_label
+            changed_any_voxel = True
+
+    return changed_any_voxel
+
+
+@njit(cache=True)
+def _reassign_region_boundary_voxels_by_majority_compiled_2d(
+    previous_labels_flat: np.ndarray,
+    label_image_flat: np.ndarray,
+    working_distance_map_flat: np.ndarray,
+    void_indices: np.ndarray,
+    *,
+    shape0: int,
+    shape1: int,
+    radius_support_mode_code: int,
+) -> bool:  # pragma: no cover
+    """Compiled 2D weak-boundary majority reassignment."""
+
+    changed_any_voxel = False
+    for voxel_row in range(void_indices.shape[0]):
+        index0 = int(void_indices[voxel_row, 0])
+        index1 = int(void_indices[voxel_row, 1])
+        linear_index = index0 * shape1 + index1
+        current_label = int(previous_labels_flat[linear_index])
+        if current_label < 0:
+            continue
+
+        current_radius = float(working_distance_map_flat[linear_index])
+        same_label_neighbor_count = 0
+        different_label_neighbor_count = 0
+        supporting_labels = np.empty(4, dtype=np.int64)
+        supporting_counts = np.zeros(4, dtype=np.int64)
+        supporting_label_count = 0
+
+        for axis_index in range(2):
+            for direction in (-1, 1):
+                neighbor0 = index0
+                neighbor1 = index1
+                if axis_index == 0:
+                    neighbor0 += direction
+                    if neighbor0 < 0 or neighbor0 >= shape0:
+                        continue
+                else:
+                    neighbor1 += direction
+                    if neighbor1 < 0 or neighbor1 >= shape1:
+                        continue
+
+                neighbor_linear_index = neighbor0 * shape1 + neighbor1
+                neighbor_label = int(previous_labels_flat[neighbor_linear_index])
+                if neighbor_label < 0:
+                    continue
+                if neighbor_label == current_label:
+                    same_label_neighbor_count += 1
+                    continue
+
+                different_label_neighbor_count += 1
+                neighbor_radius = float(working_distance_map_flat[neighbor_linear_index])
+                if not _compiled_neighbor_satisfies_radius_support(
+                    neighbor_radius,
+                    current_radius,
+                    radius_support_mode_code,
+                ):
+                    continue
+                supporting_label_count = _compiled_accumulate_label_count(
+                    supporting_labels,
+                    supporting_counts,
+                    supporting_label_count,
+                    neighbor_label,
+                )
+
+        if different_label_neighbor_count <= same_label_neighbor_count:
+            continue
+        if supporting_label_count == 0:
+            continue
+
+        best_label, best_support = _compiled_select_best_label(
+            supporting_labels,
+            supporting_counts,
+            supporting_label_count,
+        )
+        if best_support > same_label_neighbor_count:
+            label_image_flat[linear_index] = best_label
+            changed_any_voxel = True
+
+    return changed_any_voxel
+
+
+@njit(cache=True)
+def _reassign_region_boundary_voxels_by_majority_compiled_3d(
+    previous_labels_flat: np.ndarray,
+    label_image_flat: np.ndarray,
+    working_distance_map_flat: np.ndarray,
+    void_indices: np.ndarray,
+    *,
+    shape0: int,
+    shape1: int,
+    shape2: int,
+    radius_support_mode_code: int,
+) -> bool:  # pragma: no cover
+    """Compiled 3D weak-boundary majority reassignment."""
+
+    changed_any_voxel = False
+    plane_size = shape1 * shape2
+    for voxel_row in range(void_indices.shape[0]):
+        index0 = int(void_indices[voxel_row, 0])
+        index1 = int(void_indices[voxel_row, 1])
+        index2 = int(void_indices[voxel_row, 2])
+        linear_index = index0 * plane_size + index1 * shape2 + index2
+        current_label = int(previous_labels_flat[linear_index])
+        if current_label < 0:
+            continue
+
+        current_radius = float(working_distance_map_flat[linear_index])
+        same_label_neighbor_count = 0
+        different_label_neighbor_count = 0
+        supporting_labels = np.empty(6, dtype=np.int64)
+        supporting_counts = np.zeros(6, dtype=np.int64)
+        supporting_label_count = 0
+
+        for axis_index in range(3):
+            for direction in (-1, 1):
+                neighbor0 = index0
+                neighbor1 = index1
+                neighbor2 = index2
+                if axis_index == 0:
+                    neighbor0 += direction
+                    if neighbor0 < 0 or neighbor0 >= shape0:
+                        continue
+                elif axis_index == 1:
+                    neighbor1 += direction
+                    if neighbor1 < 0 or neighbor1 >= shape1:
+                        continue
+                else:
+                    neighbor2 += direction
+                    if neighbor2 < 0 or neighbor2 >= shape2:
+                        continue
+
+                neighbor_linear_index = neighbor0 * plane_size + neighbor1 * shape2 + neighbor2
+                neighbor_label = int(previous_labels_flat[neighbor_linear_index])
+                if neighbor_label < 0:
+                    continue
+                if neighbor_label == current_label:
+                    same_label_neighbor_count += 1
+                    continue
+
+                different_label_neighbor_count += 1
+                neighbor_radius = float(working_distance_map_flat[neighbor_linear_index])
+                if not _compiled_neighbor_satisfies_radius_support(
+                    neighbor_radius,
+                    current_radius,
+                    radius_support_mode_code,
+                ):
+                    continue
+                supporting_label_count = _compiled_accumulate_label_count(
+                    supporting_labels,
+                    supporting_counts,
+                    supporting_label_count,
+                    neighbor_label,
+                )
+
+        if different_label_neighbor_count <= same_label_neighbor_count:
+            continue
+        if supporting_label_count == 0:
+            continue
+
+        best_label, best_support = _compiled_select_best_label(
+            supporting_labels,
+            supporting_counts,
+            supporting_label_count,
+        )
+        if best_support > same_label_neighbor_count:
+            label_image_flat[linear_index] = best_label
+            changed_any_voxel = True
+
+    return changed_any_voxel
+
+
+def _count_supporting_neighbor_labels(  # pragma: no cover
     previous_labels: np.ndarray,
     working_distance_map: np.ndarray,
     voxel_index: np.ndarray,
@@ -1310,34 +1707,40 @@ def grow_root_regions_by_radius(
         radius_support_mode=radius_support_mode,
         require_strictly_larger_radius=require_strictly_larger_radius,
     )
-    neighbor_offsets = _neighbor_offsets(mask.ndim)
+    void_indices = np.argwhere(mask).astype(np.int64, copy=False)
     image_shape = np.asarray(mask.shape, dtype=np.int64)
+    radius_support_mode_code = _encode_radius_support_mode(normalized_radius_support_mode)
+
     for _ in range(iterations):
         previous_labels = label_image.copy()
-        changed_any_voxel = False
-        unassigned_indices = np.argwhere(mask & (previous_labels == voxel_regions.unassigned_label))
-        for voxel_index in unassigned_indices:
-            voxel_index_tuple = tuple(int(value) for value in voxel_index)
-            voxel_radius = float(working_distance_map[voxel_index_tuple])
-            supporting_label_counts = _count_supporting_neighbor_labels(
-                previous_labels,
-                working_distance_map,
-                voxel_index,
-                image_shape=image_shape,
-                neighbor_offsets=neighbor_offsets,
-                current_label=None,
-                current_radius=voxel_radius,
-                radius_support_mode=normalized_radius_support_mode,
+        previous_labels_flat = previous_labels.reshape(-1)
+        label_image_flat = label_image.reshape(-1)
+        working_distance_map_flat = working_distance_map.reshape(-1)
+        if mask.ndim == 2:
+            changed_any_voxel = _grow_root_regions_by_radius_compiled_2d(
+                previous_labels_flat,
+                label_image_flat,
+                working_distance_map_flat,
+                void_indices,
+                shape0=int(image_shape[0]),
+                shape1=int(image_shape[1]),
+                unassigned_label=int(voxel_regions.unassigned_label),
+                minimum_supporting_neighbors=int(minimum_supporting_neighbors),
+                radius_support_mode_code=int(radius_support_mode_code),
             )
-            if not supporting_label_counts:
-                continue
-            best_label, best_support = max(
-                supporting_label_counts.items(),
-                key=lambda item: (item[1], -item[0]),
+        else:
+            changed_any_voxel = _grow_root_regions_by_radius_compiled_3d(
+                previous_labels_flat,
+                label_image_flat,
+                working_distance_map_flat,
+                void_indices,
+                shape0=int(image_shape[0]),
+                shape1=int(image_shape[1]),
+                shape2=int(image_shape[2]),
+                unassigned_label=int(voxel_regions.unassigned_label),
+                minimum_supporting_neighbors=int(minimum_supporting_neighbors),
+                radius_support_mode_code=int(radius_support_mode_code),
             )
-            if best_support >= minimum_supporting_neighbors:
-                label_image[voxel_index_tuple] = int(best_label)
-                changed_any_voxel = True
         if not changed_any_voxel:
             break
 
@@ -1380,56 +1783,36 @@ def reassign_region_boundary_voxels_by_majority(
         radius_support_mode=radius_support_mode,
         require_strictly_larger_radius=None,
     )
-    neighbor_offsets = _neighbor_offsets(mask.ndim)
+    void_indices = np.argwhere(mask).astype(np.int64, copy=False)
     image_shape = np.asarray(mask.shape, dtype=np.int64)
+    radius_support_mode_code = _encode_radius_support_mode(normalized_radius_support_mode)
 
     for _ in range(iterations):
         previous_labels = label_image.copy()
-        changed_any_voxel = False
-        assigned_indices = np.argwhere(mask & (previous_labels >= 0))
-        for voxel_index in assigned_indices:
-            voxel_index_tuple = tuple(int(value) for value in voxel_index)
-            current_label = int(previous_labels[voxel_index_tuple])
-            current_radius = float(working_distance_map[voxel_index_tuple])
-
-            same_label_neighbor_count = 0
-            different_label_neighbor_count = 0
-            for neighbor_offset in neighbor_offsets:
-                neighbor_index = voxel_index + np.asarray(neighbor_offset, dtype=np.int64)
-                if np.any(neighbor_index < 0) or np.any(neighbor_index >= image_shape):
-                    continue
-                neighbor_index_tuple = tuple(int(value) for value in neighbor_index)
-                neighbor_label = int(previous_labels[neighbor_index_tuple])
-                if neighbor_label < 0:
-                    continue
-                if neighbor_label == current_label:
-                    same_label_neighbor_count += 1
-                else:
-                    different_label_neighbor_count += 1
-
-            if different_label_neighbor_count <= same_label_neighbor_count:
-                continue
-
-            supporting_label_counts = _count_supporting_neighbor_labels(
-                previous_labels,
-                working_distance_map,
-                voxel_index,
-                image_shape=image_shape,
-                neighbor_offsets=neighbor_offsets,
-                current_label=current_label,
-                current_radius=current_radius,
-                radius_support_mode=normalized_radius_support_mode,
+        previous_labels_flat = previous_labels.reshape(-1)
+        label_image_flat = label_image.reshape(-1)
+        working_distance_map_flat = working_distance_map.reshape(-1)
+        if mask.ndim == 2:
+            changed_any_voxel = _reassign_region_boundary_voxels_by_majority_compiled_2d(
+                previous_labels_flat,
+                label_image_flat,
+                working_distance_map_flat,
+                void_indices,
+                shape0=int(image_shape[0]),
+                shape1=int(image_shape[1]),
+                radius_support_mode_code=int(radius_support_mode_code),
             )
-            if not supporting_label_counts:
-                continue
-            best_label, best_support = max(
-                supporting_label_counts.items(),
-                key=lambda item: (item[1], -item[0]),
+        else:
+            changed_any_voxel = _reassign_region_boundary_voxels_by_majority_compiled_3d(
+                previous_labels_flat,
+                label_image_flat,
+                working_distance_map_flat,
+                void_indices,
+                shape0=int(image_shape[0]),
+                shape1=int(image_shape[1]),
+                shape2=int(image_shape[2]),
+                radius_support_mode_code=int(radius_support_mode_code),
             )
-            if best_support > same_label_neighbor_count:
-                label_image[voxel_index_tuple] = int(best_label)
-                changed_any_voxel = True
-
         if not changed_any_voxel:
             break
 

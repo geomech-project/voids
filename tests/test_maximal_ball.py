@@ -34,6 +34,170 @@ from voids.image.maximal_ball import (
 )
 
 
+def _grow_root_regions_by_radius_reference(
+    void_phase_mask: np.ndarray,
+    distance_map: np.ndarray,
+    voxel_regions: MaximalBallVoxelRegions,
+    *,
+    minimum_supporting_neighbors: int,
+    radius_support_mode: str,
+    iterations: int,
+) -> MaximalBallVoxelRegions:
+    """Reference copy of the pre-Numba radius-growth rule for exact comparison tests."""
+
+    mask = np.asarray(void_phase_mask, dtype=bool)
+    working_distance_map = np.asarray(distance_map, dtype=float)
+    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    image_shape = np.asarray(mask.shape, dtype=np.int64)
+    neighbor_offsets: list[tuple[int, ...]] = []
+    for axis_index in range(mask.ndim):
+        negative_offset = [0] * mask.ndim
+        positive_offset = [0] * mask.ndim
+        negative_offset[axis_index] = -1
+        positive_offset[axis_index] = 1
+        neighbor_offsets.append(tuple(negative_offset))
+        neighbor_offsets.append(tuple(positive_offset))
+
+    def neighbor_supports(neighbor_radius: float, current_radius: float) -> bool:
+        if radius_support_mode == "any":
+            return True
+        if radius_support_mode == "strictly_larger":
+            return neighbor_radius > current_radius
+        if radius_support_mode == "greater_or_equal":
+            return neighbor_radius >= current_radius
+        raise ValueError(f"Unsupported radius_support_mode={radius_support_mode!r}")
+
+    for _ in range(iterations):
+        previous_labels = label_image.copy()
+        changed_any_voxel = False
+        unassigned_indices = np.argwhere(mask & (previous_labels == voxel_regions.unassigned_label))
+        for voxel_index in unassigned_indices:
+            voxel_index_tuple = tuple(int(value) for value in voxel_index)
+            voxel_radius = float(working_distance_map[voxel_index_tuple])
+            supporting_label_counts: dict[int, int] = {}
+            for neighbor_offset in neighbor_offsets:
+                neighbor_index = voxel_index + np.asarray(neighbor_offset, dtype=np.int64)
+                if np.any(neighbor_index < 0) or np.any(neighbor_index >= image_shape):
+                    continue
+                neighbor_index_tuple = tuple(int(value) for value in neighbor_index)
+                neighbor_label = int(previous_labels[neighbor_index_tuple])
+                if neighbor_label < 0:
+                    continue
+                neighbor_radius = float(working_distance_map[neighbor_index_tuple])
+                if not neighbor_supports(neighbor_radius, voxel_radius):
+                    continue
+                supporting_label_counts[neighbor_label] = (
+                    supporting_label_counts.get(neighbor_label, 0) + 1
+                )
+            if not supporting_label_counts:
+                continue
+            best_label, best_support = max(
+                supporting_label_counts.items(),
+                key=lambda item: (item[1], -item[0]),
+            )
+            if best_support >= minimum_supporting_neighbors:
+                label_image[voxel_index_tuple] = int(best_label)
+                changed_any_voxel = True
+        if not changed_any_voxel:
+            break
+
+    return MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=voxel_regions.root_ball_indices,
+        root_labels=voxel_regions.root_labels,
+        root_center_indices=voxel_regions.root_center_indices,
+        root_radii_voxels=voxel_regions.root_radii_voxels,
+        root_of_ball_index=voxel_regions.root_of_ball_index,
+        unassigned_label=voxel_regions.unassigned_label,
+    )
+
+
+def _reassign_region_boundary_voxels_by_majority_reference(
+    void_phase_mask: np.ndarray,
+    distance_map: np.ndarray,
+    voxel_regions: MaximalBallVoxelRegions,
+    *,
+    radius_support_mode: str,
+    iterations: int,
+) -> MaximalBallVoxelRegions:
+    """Reference copy of the pre-Numba majority-reassignment rule."""
+
+    mask = np.asarray(void_phase_mask, dtype=bool)
+    working_distance_map = np.asarray(distance_map, dtype=float)
+    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    image_shape = np.asarray(mask.shape, dtype=np.int64)
+    neighbor_offsets: list[tuple[int, ...]] = []
+    for axis_index in range(mask.ndim):
+        negative_offset = [0] * mask.ndim
+        positive_offset = [0] * mask.ndim
+        negative_offset[axis_index] = -1
+        positive_offset[axis_index] = 1
+        neighbor_offsets.append(tuple(negative_offset))
+        neighbor_offsets.append(tuple(positive_offset))
+
+    def neighbor_supports(neighbor_radius: float, current_radius: float) -> bool:
+        if radius_support_mode == "any":
+            return True
+        if radius_support_mode == "strictly_larger":
+            return neighbor_radius > current_radius
+        if radius_support_mode == "greater_or_equal":
+            return neighbor_radius >= current_radius
+        raise ValueError(f"Unsupported radius_support_mode={radius_support_mode!r}")
+
+    for _ in range(iterations):
+        previous_labels = label_image.copy()
+        changed_any_voxel = False
+        assigned_indices = np.argwhere(mask & (previous_labels >= 0))
+        for voxel_index in assigned_indices:
+            voxel_index_tuple = tuple(int(value) for value in voxel_index)
+            current_label = int(previous_labels[voxel_index_tuple])
+            current_radius = float(working_distance_map[voxel_index_tuple])
+            same_label_neighbor_count = 0
+            different_label_neighbor_count = 0
+            supporting_label_counts: dict[int, int] = {}
+            for neighbor_offset in neighbor_offsets:
+                neighbor_index = voxel_index + np.asarray(neighbor_offset, dtype=np.int64)
+                if np.any(neighbor_index < 0) or np.any(neighbor_index >= image_shape):
+                    continue
+                neighbor_index_tuple = tuple(int(value) for value in neighbor_index)
+                neighbor_label = int(previous_labels[neighbor_index_tuple])
+                if neighbor_label < 0:
+                    continue
+                if neighbor_label == current_label:
+                    same_label_neighbor_count += 1
+                    continue
+                different_label_neighbor_count += 1
+                neighbor_radius = float(working_distance_map[neighbor_index_tuple])
+                if not neighbor_supports(neighbor_radius, current_radius):
+                    continue
+                supporting_label_counts[neighbor_label] = (
+                    supporting_label_counts.get(neighbor_label, 0) + 1
+                )
+            if different_label_neighbor_count <= same_label_neighbor_count:
+                continue
+            if not supporting_label_counts:
+                continue
+            best_label, best_support = max(
+                supporting_label_counts.items(),
+                key=lambda item: (item[1], -item[0]),
+            )
+            if best_support > same_label_neighbor_count:
+                label_image[voxel_index_tuple] = int(best_label)
+                changed_any_voxel = True
+        if not changed_any_voxel:
+            break
+
+    return MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=voxel_regions.root_ball_indices,
+        root_labels=voxel_regions.root_labels,
+        root_center_indices=voxel_regions.root_center_indices,
+        root_radii_voxels=voxel_regions.root_radii_voxels,
+        root_of_ball_index=voxel_regions.root_of_ball_index,
+        unassigned_label=voxel_regions.unassigned_label,
+    )
+
+
 def test_compute_void_distance_map_matches_expected_center_radius() -> None:
     """A centered cubic void should yield the expected Euclidean center radius."""
 
@@ -535,6 +699,49 @@ def test_grow_root_regions_by_radius_assigns_supported_unassigned_voxel() -> Non
     assert voxel_regions.label_image[2, 2, 2] == 0
 
 
+def test_grow_root_regions_by_radius_matches_reference_rule_on_small_3d_case() -> None:
+    """The compiled radius-growth kernel should match the pre-Numba rule exactly."""
+
+    void_phase_mask = np.ones((4, 4, 4), dtype=bool)
+    distance_map = np.ones((4, 4, 4), dtype=float)
+    distance_map[1:3, 1:3, 1:3] = 2.0
+    distance_map[2, 2, 2] = 3.0
+    label_image = np.full((4, 4, 4), -1, dtype=np.int64)
+    label_image[1, 1, 1] = 0
+    label_image[1, 2, 1] = 0
+    label_image[2, 1, 1] = 1
+    label_image[2, 2, 1] = 1
+
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0, 1], dtype=np.int64),
+        root_labels=np.array([0, 1], dtype=np.int64),
+        root_center_indices=np.array([[1, 1, 1], [2, 1, 1]], dtype=np.int64),
+        root_radii_voxels=np.array([2.0, 2.0], dtype=float),
+        root_of_ball_index=np.array([0, 1], dtype=np.int64),
+        unassigned_label=-1,
+    )
+
+    grown_regions = grow_root_regions_by_radius(
+        void_phase_mask,
+        distance_map,
+        voxel_regions,
+        minimum_supporting_neighbors=1,
+        radius_support_mode="greater_or_equal",
+        iterations=2,
+    )
+    reference_regions = _grow_root_regions_by_radius_reference(
+        void_phase_mask,
+        distance_map,
+        voxel_regions,
+        minimum_supporting_neighbors=1,
+        radius_support_mode="greater_or_equal",
+        iterations=2,
+    )
+
+    assert np.array_equal(grown_regions.label_image, reference_regions.label_image)
+
+
 def test_assign_voxel_regions_from_hierarchy_expands_beyond_root_centers() -> None:
     """The staged voxel assignment should grow labels beyond the root-center seeds."""
 
@@ -586,6 +793,48 @@ def test_reassign_region_boundary_voxels_by_majority_switches_weak_boundary_labe
     )
 
     assert reassigned_regions.label_image[2, 2, 0] == 1
+
+
+def test_reassign_region_boundary_voxels_by_majority_matches_reference_rule() -> None:
+    """The compiled majority-reassignment kernel should match the pre-Numba rule exactly."""
+
+    void_phase_mask = np.ones((4, 4, 2), dtype=bool)
+    distance_map = np.ones((4, 4, 2), dtype=float)
+    distance_map[1:3, 1:3, :] = 2.0
+    label_image = np.full((4, 4, 2), -1, dtype=np.int64)
+    label_image[1, 1, 0] = 0
+    label_image[2, 1, 0] = 1
+    label_image[1, 2, 0] = 1
+    label_image[2, 2, 0] = 1
+    label_image[1, 1, 1] = 0
+    label_image[2, 1, 1] = 1
+
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0, 1], dtype=np.int64),
+        root_labels=np.array([0, 1], dtype=np.int64),
+        root_center_indices=np.array([[1, 1, 0], [2, 1, 0]], dtype=np.int64),
+        root_radii_voxels=np.array([1.0, 1.0], dtype=float),
+        root_of_ball_index=np.array([0, 1], dtype=np.int64),
+        unassigned_label=-1,
+    )
+
+    reassigned_regions = reassign_region_boundary_voxels_by_majority(
+        void_phase_mask,
+        distance_map,
+        voxel_regions,
+        radius_support_mode="any",
+        iterations=2,
+    )
+    reference_regions = _reassign_region_boundary_voxels_by_majority_reference(
+        void_phase_mask,
+        distance_map,
+        voxel_regions,
+        radius_support_mode="any",
+        iterations=2,
+    )
+
+    assert np.array_equal(reassigned_regions.label_image, reference_regions.label_image)
 
 
 def test_retreat_mixed_region_boundary_voxels_unassigns_mixed_interface_voxel() -> None:
