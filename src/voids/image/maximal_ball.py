@@ -90,6 +90,7 @@ class MaximalBallHierarchy:
     """
 
     center_indices: np.ndarray
+    center_coordinates: np.ndarray
     radii_voxels: np.ndarray
     parent_indices: np.ndarray
     master_indices: np.ndarray
@@ -151,6 +152,8 @@ class MaximalBallRegionAdjacency:
     throat_centroid_indices: np.ndarray
     throat_max_touch_radius_side1_voxels: np.ndarray
     throat_max_touch_radius_side2_voxels: np.ndarray
+    throat_max_touch_index_side1: np.ndarray
+    throat_max_touch_index_side2: np.ndarray
     boundary_face_counts: np.ndarray
 
 
@@ -186,6 +189,8 @@ class MaximalBallExtractionDiagnostics:
     boundary_zero_throat_region_count: int
     throat_touch_radius_side1_mean_voxels: float
     throat_touch_radius_side2_mean_voxels: float
+    throat_refined_support_radius_side1_mean_voxels: float
+    throat_refined_support_radius_side2_mean_voxels: float
 
 
 _CIRCULAR_SHAPE_FACTOR = 1.0 / (4.0 * np.pi)
@@ -461,6 +466,214 @@ def suppress_overlapping_maximal_balls(
     return retained_mask
 
 
+def _sample_radius_at_integer_index(
+    distance_map: np.ndarray,
+    integer_index: np.ndarray,
+) -> float:
+    """Return the radius value at one integer voxel index."""
+
+    return float(distance_map[tuple(int(value) for value in integer_index)])
+
+
+def _refine_ball_center_subvoxel(
+    distance_map: np.ndarray,
+    integer_center_index: np.ndarray,
+    *,
+    displacement_limit: float,
+    radius_gain_factor: float,
+) -> tuple[np.ndarray, float]:
+    """Apply the Imperial-style subvoxel uphill interpolation in one voxel."""
+
+    image_shape = np.asarray(distance_map.shape, dtype=np.int64)
+    base_index = np.asarray(integer_center_index, dtype=np.int64)
+    base_radius = _sample_radius_at_integer_index(distance_map, base_index)
+    displacement = np.zeros(base_index.size, dtype=float)
+
+    for axis_index in range(base_index.size):
+        lower_index = base_index.copy()
+        lower_index[axis_index] -= 1
+        upper_index = base_index.copy()
+        upper_index[axis_index] += 1
+        if np.any(lower_index < 0) or np.any(upper_index >= image_shape):
+            continue
+        lower_radius = _sample_radius_at_integer_index(distance_map, lower_index)
+        upper_radius = _sample_radius_at_integer_index(distance_map, upper_index)
+        gradient_plus = upper_radius - base_radius
+        gradient_minus = base_radius - lower_radius
+        if abs(gradient_plus - gradient_minus) <= 0.01:
+            continue
+        displacement[axis_index] = np.clip(
+            -0.5 * (gradient_plus + gradient_minus) / (gradient_plus - gradient_minus),
+            -displacement_limit,
+            displacement_limit,
+        )
+
+    refined_center_coordinate = base_index.astype(float) - 0.5 + displacement
+    refined_radius = base_radius + radius_gain_factor * float(np.linalg.norm(displacement))
+    return refined_center_coordinate, refined_radius
+
+
+def _refine_ball_center_relocation(
+    distance_map: np.ndarray,
+    integer_center_index: np.ndarray,
+    occupied_center_lookup: set[tuple[int, ...]],
+) -> tuple[np.ndarray, float]:
+    """Apply the Imperial uphill relocation step to a retained ball."""
+
+    image_shape = np.asarray(distance_map.shape, dtype=np.int64)
+    base_index = np.asarray(integer_center_index, dtype=np.int64)
+    base_radius = _sample_radius_at_integer_index(distance_map, base_index)
+    displacement = np.zeros(base_index.size, dtype=float)
+    gradient = np.zeros(base_index.size, dtype=float)
+
+    for axis_index in range(base_index.size):
+        lower_index = base_index.copy()
+        lower_index[axis_index] -= 1
+        upper_index = base_index.copy()
+        upper_index[axis_index] += 1
+        if np.any(lower_index < 0) or np.any(upper_index >= image_shape):
+            continue
+        lower_radius = _sample_radius_at_integer_index(distance_map, lower_index)
+        upper_radius = _sample_radius_at_integer_index(distance_map, upper_index)
+        gradient_plus = upper_radius - base_radius
+        gradient_minus = base_radius - lower_radius
+        gradient[axis_index] = 0.5 * (gradient_plus + gradient_minus)
+        if abs(gradient_plus - gradient_minus) <= 0.01:
+            continue
+        displacement[axis_index] = np.clip(
+            -0.5 * (gradient_plus + gradient_minus) / (gradient_plus - gradient_minus),
+            -0.59,
+            0.59,
+        )
+
+    displacement += 1.4 * gradient
+    displacement_norm = float(np.linalg.norm(displacement))
+    if displacement_norm <= 1.0e-12:
+        return base_index, base_radius
+    displacement /= 0.55 * displacement_norm + 0.05
+
+    target_index = np.rint(base_index.astype(float) - 0.5 + displacement).astype(np.int64)
+    if np.any(target_index < 0) or np.any(target_index >= image_shape):
+        return base_index, base_radius
+    target_index_tuple = tuple(int(value) for value in target_index)
+    if target_index_tuple in occupied_center_lookup and not np.array_equal(
+        target_index, base_index
+    ):
+        return base_index, base_radius
+
+    target_radius = _sample_radius_at_integer_index(distance_map, target_index)
+    if target_radius <= base_radius:
+        return base_index, base_radius
+    return target_index, target_radius
+
+
+def refine_retained_ball_coordinates(
+    maximal_ball_candidates: MaximalBallCandidates,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Apply Imperial-style uphill refinements to retained maximal balls.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        Refined integer voxel indices, refined floating-point center
+        coordinates, and refined radii.
+    """
+
+    retained_center_indices = np.asarray(
+        maximal_ball_candidates.retained_center_indices,
+        dtype=np.int64,
+    )
+    retained_radii_voxels = np.asarray(
+        maximal_ball_candidates.retained_radii_voxels,
+        dtype=float,
+    )
+    retained_count = retained_radii_voxels.size
+    if retained_count == 0:
+        ndim = maximal_ball_candidates.center_indices.shape[1]
+        return (
+            np.zeros((0, ndim), dtype=np.int64),
+            np.zeros((0, ndim), dtype=float),
+            np.zeros(0, dtype=float),
+        )
+
+    distance_map = np.asarray(maximal_ball_candidates.distance_map, dtype=float)
+    refined_integer_indices = retained_center_indices.copy()
+    refined_center_coordinates = retained_center_indices.astype(float) - 0.5
+    refined_radii_voxels = retained_radii_voxels.copy()
+
+    for ball_index in range(retained_count):
+        refined_center_coordinates[ball_index], refined_radii_voxels[ball_index] = (
+            _refine_ball_center_subvoxel(
+                distance_map,
+                refined_integer_indices[ball_index],
+                displacement_limit=0.49,
+                radius_gain_factor=0.95,
+            )
+        )
+
+    occupied_center_lookup = {
+        tuple(int(value) for value in integer_index) for integer_index in refined_integer_indices
+    }
+    for ball_index in range(retained_count):
+        original_index_tuple = tuple(int(value) for value in refined_integer_indices[ball_index])
+        occupied_center_lookup.discard(original_index_tuple)
+        relocated_index, relocated_radius = _refine_ball_center_relocation(
+            distance_map,
+            refined_integer_indices[ball_index],
+            occupied_center_lookup,
+        )
+        refined_integer_indices[ball_index] = relocated_index
+        occupied_center_lookup.add(tuple(int(value) for value in relocated_index))
+        refined_radii_voxels[ball_index] = relocated_radius
+
+    for ball_index in range(retained_count):
+        refined_center_coordinates[ball_index], refined_radii_voxels[ball_index] = (
+            _refine_ball_center_subvoxel(
+                distance_map,
+                refined_integer_indices[ball_index],
+                displacement_limit=0.49,
+                radius_gain_factor=0.95,
+            )
+        )
+
+    return refined_integer_indices, refined_center_coordinates, refined_radii_voxels
+
+
+def refine_ball_from_seed_index(
+    distance_map: np.ndarray,
+    seed_index: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Refine one voxel-centered ball seed with the Imperial uphill sequence."""
+
+    working_distance_map = np.asarray(distance_map, dtype=float)
+    integer_seed_index = np.asarray(seed_index, dtype=np.int64)
+    refined_center_coordinate, refined_radius_voxels = _refine_ball_center_subvoxel(
+        working_distance_map,
+        integer_seed_index,
+        displacement_limit=0.49,
+        radius_gain_factor=0.95,
+    )
+    relocated_index, relocated_radius_voxels = _refine_ball_center_relocation(
+        working_distance_map,
+        integer_seed_index,
+        occupied_center_lookup=set(),
+    )
+    refined_center_coordinate, refined_radius_voxels = _refine_ball_center_subvoxel(
+        working_distance_map,
+        relocated_index,
+        displacement_limit=0.49,
+        radius_gain_factor=0.95,
+    )
+    return (
+        relocated_index,
+        refined_center_coordinate,
+        max(
+            float(refined_radius_voxels),
+            float(relocated_radius_voxels),
+        ),
+    )
+
+
 def _find_root_index(parent_indices: np.ndarray, ball_index: int) -> int:
     """Return the root/master index of one retained ball with path compression."""
 
@@ -515,9 +728,9 @@ def _weighted_midpoint_index(
 
 
 def _pair_has_supported_midpoint(
-    first_center_index: np.ndarray,
+    first_center_coordinate: np.ndarray,
     first_radius_voxels: float,
-    second_center_index: np.ndarray,
+    second_center_coordinate: np.ndarray,
     second_radius_voxels: float,
     *,
     distance_map: np.ndarray,
@@ -526,16 +739,18 @@ def _pair_has_supported_midpoint(
     """Return whether two balls satisfy the Imperial midpoint support test."""
 
     midpoint_index = _weighted_midpoint_index(
-        first_center_index,
+        first_center_coordinate,
         first_radius_voxels,
-        second_center_index,
+        second_center_coordinate,
         second_radius_voxels,
         image_shape=distance_map.shape,
     )
     midpoint_radius_voxels = float(distance_map[midpoint_index])
     smaller_radius_voxels = min(first_radius_voxels, second_radius_voxels)
     center_distance_voxels = float(
-        np.linalg.norm(first_center_index.astype(float) - second_center_index.astype(float))
+        np.linalg.norm(
+            first_center_coordinate.astype(float) - second_center_coordinate.astype(float)
+        )
     )
     midpoint_supported = midpoint_radius_voxels > (
         settings.medial_surface_mid_radius_fraction * smaller_radius_voxels - 0.5
@@ -587,19 +802,15 @@ def build_maximal_ball_hierarchy(
     and throat-construction stages are not yet included here.
     """
 
-    retained_center_indices = np.asarray(
-        maximal_ball_candidates.retained_center_indices,
-        dtype=np.int64,
-    )
-    retained_radii_voxels = np.asarray(
-        maximal_ball_candidates.retained_radii_voxels,
-        dtype=float,
+    retained_center_indices, retained_center_coordinates, retained_radii_voxels = (
+        refine_retained_ball_coordinates(maximal_ball_candidates)
     )
     retained_count = retained_radii_voxels.size
     parent_indices = np.arange(retained_count, dtype=np.int64)
     if retained_count == 0:
         return MaximalBallHierarchy(
             center_indices=retained_center_indices,
+            center_coordinates=retained_center_coordinates,
             radii_voxels=retained_radii_voxels,
             parent_indices=parent_indices,
             master_indices=parent_indices.copy(),
@@ -609,11 +820,11 @@ def build_maximal_ball_hierarchy(
         )
 
     settings = maximal_ball_candidates.settings
-    center_tree = cKDTree(retained_center_indices.astype(float))
+    center_tree = cKDTree(retained_center_coordinates.astype(float))
     distance_map = np.asarray(maximal_ball_candidates.distance_map, dtype=float)
 
     for first_ball_index in range(retained_count):
-        first_center_index = retained_center_indices[first_ball_index]
+        first_center_coordinate = retained_center_coordinates[first_ball_index]
         first_radius_voxels = float(retained_radii_voxels[first_ball_index])
         neighbor_search_radius_voxels = (
             settings.hierarchy_length_factor * first_radius_voxels
@@ -621,18 +832,18 @@ def build_maximal_ball_hierarchy(
             + 2.0
         )
         nearby_ball_indices = center_tree.query_ball_point(
-            first_center_index.astype(float),
+            first_center_coordinate.astype(float),
             r=neighbor_search_radius_voxels,
         )
         for second_ball_index in nearby_ball_indices:
             if second_ball_index <= first_ball_index:
                 continue
-            second_center_index = retained_center_indices[second_ball_index]
+            second_center_coordinate = retained_center_coordinates[second_ball_index]
             second_radius_voxels = float(retained_radii_voxels[second_ball_index])
             if not _pair_has_supported_midpoint(
-                first_center_index,
+                first_center_coordinate,
                 first_radius_voxels,
-                second_center_index,
+                second_center_coordinate,
                 second_radius_voxels,
                 distance_map=distance_map,
                 settings=settings,
@@ -661,8 +872,8 @@ def build_maximal_ball_hierarchy(
 
             first_root_radius_voxels = float(retained_radii_voxels[first_root_index])
             second_root_radius_voxels = float(retained_radii_voxels[second_root_index])
-            first_root_center_index = retained_center_indices[first_root_index]
-            second_root_center_index = retained_center_indices[second_root_index]
+            first_root_center_index = retained_center_coordinates[first_root_index]
+            second_root_center_index = retained_center_coordinates[second_root_index]
             root_distance_voxels = float(
                 np.linalg.norm(
                     first_root_center_index.astype(float) - second_root_center_index.astype(float)
@@ -709,6 +920,7 @@ def build_maximal_ball_hierarchy(
 
     return MaximalBallHierarchy(
         center_indices=retained_center_indices,
+        center_coordinates=retained_center_coordinates,
         radii_voxels=retained_radii_voxels,
         parent_indices=parent_indices,
         master_indices=master_indices,
@@ -1364,6 +1576,8 @@ def measure_region_adjacency(
     pair_centroid_sums: dict[tuple[int, int], np.ndarray] = {}
     pair_max_touch_radius_side1: dict[tuple[int, int], float] = {}
     pair_max_touch_radius_side2: dict[tuple[int, int], float] = {}
+    pair_max_touch_index_side1: dict[tuple[int, int], np.ndarray] = {}
+    pair_max_touch_index_side2: dict[tuple[int, int], np.ndarray] = {}
 
     image_shape = np.asarray(mask.shape, dtype=np.int64)
     for axis_index in range(mask.ndim):
@@ -1455,6 +1669,9 @@ def measure_region_adjacency(
         for face_index in range(interface_indices.shape[0]):
             first_label = int(lower_interface_labels[face_index])
             second_label = int(upper_interface_labels[face_index])
+            lower_voxel_index = interface_indices[face_index].astype(np.int64, copy=False)
+            upper_voxel_index = lower_voxel_index.copy()
+            upper_voxel_index[axis_index] += 1
             if first_label < second_label:
                 ordered_pair = (first_label, second_label)
                 orientation_sign = 1.0
@@ -1468,6 +1685,8 @@ def measure_region_adjacency(
                     if upper_touch_radii is not None
                     else float("nan")
                 )
+                side1_touch_index = lower_voxel_index
+                side2_touch_index = upper_voxel_index
             else:
                 ordered_pair = (second_label, first_label)
                 orientation_sign = -1.0
@@ -1481,6 +1700,8 @@ def measure_region_adjacency(
                     if lower_touch_radii is not None
                     else float("nan")
                 )
+                side1_touch_index = upper_voxel_index
+                side2_touch_index = lower_voxel_index
 
             pair_face_counts[ordered_pair] = pair_face_counts.get(ordered_pair, 0) + 1
             if ordered_pair not in pair_axis_face_balance:
@@ -1490,15 +1711,15 @@ def measure_region_adjacency(
             pair_axis_face_balance[ordered_pair][axis_index] += orientation_sign
             pair_centroid_sums[ordered_pair] += face_midpoint_indices[face_index]
             if np.isfinite(side1_touch_radius):
-                pair_max_touch_radius_side1[ordered_pair] = max(
-                    pair_max_touch_radius_side1.get(ordered_pair, -np.inf),
-                    side1_touch_radius,
-                )
+                previous_side1_radius = pair_max_touch_radius_side1.get(ordered_pair, -np.inf)
+                if side1_touch_radius > previous_side1_radius:
+                    pair_max_touch_radius_side1[ordered_pair] = side1_touch_radius
+                    pair_max_touch_index_side1[ordered_pair] = side1_touch_index.copy()
             if np.isfinite(side2_touch_radius):
-                pair_max_touch_radius_side2[ordered_pair] = max(
-                    pair_max_touch_radius_side2.get(ordered_pair, -np.inf),
-                    side2_touch_radius,
-                )
+                previous_side2_radius = pair_max_touch_radius_side2.get(ordered_pair, -np.inf)
+                if side2_touch_radius > previous_side2_radius:
+                    pair_max_touch_radius_side2[ordered_pair] = side2_touch_radius
+                    pair_max_touch_index_side2[ordered_pair] = side2_touch_index.copy()
 
     occupied_region_mask = region_volume_voxels > 0
     occupied_region_indices = np.flatnonzero(occupied_region_mask).astype(np.int64)
@@ -1517,6 +1738,8 @@ def measure_region_adjacency(
         remapped_pair_centroid_sums: dict[tuple[int, int], np.ndarray] = {}
         remapped_pair_max_touch_radius_side1: dict[tuple[int, int], float] = {}
         remapped_pair_max_touch_radius_side2: dict[tuple[int, int], float] = {}
+        remapped_pair_max_touch_index_side1: dict[tuple[int, int], np.ndarray] = {}
+        remapped_pair_max_touch_index_side2: dict[tuple[int, int], np.ndarray] = {}
         for ordered_pair, face_count in pair_face_counts.items():
             first_region = int(compact_label_of_region[ordered_pair[0]])
             second_region = int(compact_label_of_region[ordered_pair[1]])
@@ -1530,15 +1753,23 @@ def measure_region_adjacency(
                 remapped_pair_max_touch_radius_side1[remapped_pair] = pair_max_touch_radius_side1[
                     ordered_pair
                 ]
+                remapped_pair_max_touch_index_side1[remapped_pair] = pair_max_touch_index_side1[
+                    ordered_pair
+                ].copy()
             if ordered_pair in pair_max_touch_radius_side2:
                 remapped_pair_max_touch_radius_side2[remapped_pair] = pair_max_touch_radius_side2[
                     ordered_pair
                 ]
+                remapped_pair_max_touch_index_side2[remapped_pair] = pair_max_touch_index_side2[
+                    ordered_pair
+                ].copy()
         pair_face_counts = remapped_pair_face_counts
         pair_axis_face_balance = remapped_pair_axis_face_balance
         pair_centroid_sums = remapped_pair_centroid_sums
         pair_max_touch_radius_side1 = remapped_pair_max_touch_radius_side1
         pair_max_touch_radius_side2 = remapped_pair_max_touch_radius_side2
+        pair_max_touch_index_side1 = remapped_pair_max_touch_index_side1
+        pair_max_touch_index_side2 = remapped_pair_max_touch_index_side2
 
     ordered_pairs = sorted(pair_face_counts)
     throat_region_pairs = np.asarray(ordered_pairs, dtype=np.int64)
@@ -1548,6 +1779,8 @@ def measure_region_adjacency(
     throat_centroid_indices = np.zeros((throat_count, mask.ndim), dtype=float)
     throat_max_touch_radius_side1_voxels = np.full(throat_count, np.nan, dtype=float)
     throat_max_touch_radius_side2_voxels = np.full(throat_count, np.nan, dtype=float)
+    throat_max_touch_index_side1 = np.full((throat_count, mask.ndim), -1, dtype=np.int64)
+    throat_max_touch_index_side2 = np.full((throat_count, mask.ndim), -1, dtype=np.int64)
     for throat_index, ordered_pair in enumerate(ordered_pairs):
         face_count = int(pair_face_counts[ordered_pair])
         throat_face_counts[throat_index] = face_count
@@ -1559,10 +1792,12 @@ def measure_region_adjacency(
             throat_max_touch_radius_side1_voxels[throat_index] = pair_max_touch_radius_side1[
                 ordered_pair
             ]
+            throat_max_touch_index_side1[throat_index] = pair_max_touch_index_side1[ordered_pair]
         if ordered_pair in pair_max_touch_radius_side2:
             throat_max_touch_radius_side2_voxels[throat_index] = pair_max_touch_radius_side2[
                 ordered_pair
             ]
+            throat_max_touch_index_side2[throat_index] = pair_max_touch_index_side2[ordered_pair]
 
     return MaximalBallRegionAdjacency(
         region_labels=region_labels,
@@ -1574,6 +1809,8 @@ def measure_region_adjacency(
         throat_centroid_indices=throat_centroid_indices,
         throat_max_touch_radius_side1_voxels=throat_max_touch_radius_side1_voxels,
         throat_max_touch_radius_side2_voxels=throat_max_touch_radius_side2_voxels,
+        throat_max_touch_index_side1=throat_max_touch_index_side1,
+        throat_max_touch_index_side2=throat_max_touch_index_side2,
         boundary_face_counts=boundary_face_counts,
     )
 
@@ -1628,6 +1865,10 @@ def summarize_maximal_ball_extraction_diagnostics(
     assigned_void_mask = mask & (label_image >= 0)
     unassigned_void_voxel_count = int(np.count_nonzero(mask & (label_image < 0)))
     region_adjacency = extraction_result.region_adjacency
+    (
+        refined_support_radius_side1_voxels,
+        refined_support_radius_side2_voxels,
+    ) = _select_interface_supporting_ball_radii(extraction_result)
     occupied_region_count = int(region_adjacency.region_volume_voxels.size)
     neighbor_counts = np.zeros(occupied_region_count, dtype=np.int64)
     throat_region_pairs = np.asarray(region_adjacency.throat_region_pairs, dtype=np.int64)
@@ -1663,13 +1904,23 @@ def summarize_maximal_ball_extraction_diagnostics(
             if region_adjacency.throat_max_touch_radius_side2_voxels.size
             else np.nan
         ),
+        throat_refined_support_radius_side1_mean_voxels=float(
+            np.nanmean(refined_support_radius_side1_voxels)
+            if refined_support_radius_side1_voxels.size
+            else np.nan
+        ),
+        throat_refined_support_radius_side2_mean_voxels=float(
+            np.nanmean(refined_support_radius_side2_voxels)
+            if refined_support_radius_side2_voxels.size
+            else np.nan
+        ),
     )
 
 
-def _select_interface_supporting_ball_radii(
+def _select_interface_supporting_ball_data(
     extraction_result: MaximalBallExtractionResult,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return side-specific throat-supporting maximal-ball radii in voxel units."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return side-specific throat-supporting ball centers and radii in voxel units."""
 
     hierarchy = extraction_result.hierarchy
     voxel_regions = extraction_result.voxel_regions
@@ -1685,7 +1936,9 @@ def _select_interface_supporting_ball_radii(
         region_adjacency.throat_max_touch_radius_side2_voxels,
         dtype=float,
     )
-    retained_center_indices = np.asarray(hierarchy.center_indices, dtype=float)
+    touch_index_side1 = np.asarray(region_adjacency.throat_max_touch_index_side1, dtype=np.int64)
+    touch_index_side2 = np.asarray(region_adjacency.throat_max_touch_index_side2, dtype=np.int64)
+    retained_center_coordinates = np.asarray(hierarchy.center_coordinates, dtype=float)
     retained_radii_voxels = np.asarray(hierarchy.radii_voxels, dtype=float)
     root_label_of_ball = np.asarray(voxel_regions.root_of_ball_index, dtype=np.int64)
     image_ndim = (
@@ -1698,13 +1951,59 @@ def _select_interface_supporting_ball_radii(
     throat_count = int(throat_region_pairs.shape[0])
     first_side_radii = np.asarray(touch_radius_side1_voxels, dtype=float).copy()
     second_side_radii = np.asarray(touch_radius_side2_voxels, dtype=float).copy()
-    if throat_count == 0 or retained_center_indices.size == 0:
-        return first_side_radii, second_side_radii
+    first_side_center_coordinates = np.full((throat_count, image_ndim), np.nan, dtype=float)
+    second_side_center_coordinates = np.full((throat_count, image_ndim), np.nan, dtype=float)
+    if throat_count == 0:
+        return (
+            first_side_center_coordinates,
+            first_side_radii,
+            second_side_center_coordinates,
+            second_side_radii,
+        )
+
+    refined_touch_seed_cache: dict[tuple[int, ...], tuple[np.ndarray, float]] = {}
+
+    def _lookup_refined_touch_seed(seed_index: np.ndarray) -> tuple[np.ndarray, float]:
+        seed_index_tuple = tuple(int(value) for value in seed_index)
+        if any(value < 0 for value in seed_index_tuple):
+            return np.full(image_ndim, np.nan, dtype=float), float("nan")
+        if seed_index_tuple not in refined_touch_seed_cache:
+            _, refined_center_coordinate, refined_radius_voxels = refine_ball_from_seed_index(
+                hierarchy.distance_map,
+                np.asarray(seed_index, dtype=np.int64),
+            )
+            refined_touch_seed_cache[seed_index_tuple] = (
+                np.asarray(refined_center_coordinate, dtype=float),
+                float(refined_radius_voxels),
+            )
+        return refined_touch_seed_cache[seed_index_tuple]
 
     for throat_index, region_pair in enumerate(throat_region_pairs):
+        side1_seed_center_coordinate, side1_seed_radius = _lookup_refined_touch_seed(
+            touch_index_side1[throat_index]
+        )
+        side2_seed_center_coordinate, side2_seed_radius = _lookup_refined_touch_seed(
+            touch_index_side2[throat_index]
+        )
+        if np.isfinite(side1_seed_radius):
+            first_side_center_coordinates[throat_index] = side1_seed_center_coordinate
+            first_side_radii[throat_index] = max(
+                float(np.nan_to_num(first_side_radii[throat_index], nan=-np.inf)),
+                side1_seed_radius,
+            )
+        if np.isfinite(side2_seed_radius):
+            second_side_center_coordinates[throat_index] = side2_seed_center_coordinate
+            second_side_radii[throat_index] = max(
+                float(np.nan_to_num(second_side_radii[throat_index], nan=-np.inf)),
+                side2_seed_radius,
+            )
+
+        if retained_center_coordinates.size == 0:
+            continue
+
         throat_centroid_index = throat_centroid_indices[throat_index]
         distances_to_centroid = np.linalg.norm(
-            retained_center_indices - throat_centroid_index,
+            retained_center_coordinates - throat_centroid_index,
             axis=1,
         )
         centroid_supported_mask = distances_to_centroid <= (
@@ -1718,16 +2017,42 @@ def _select_interface_supporting_ball_radii(
         first_region_mask = centroid_supported_mask & (root_label_of_ball == first_region_label)
         second_region_mask = centroid_supported_mask & (root_label_of_ball == second_region_label)
         if np.any(first_region_mask):
+            first_region_best_index = int(np.argmax(retained_radii_voxels[first_region_mask]))
+            first_region_best_ball = np.flatnonzero(first_region_mask)[first_region_best_index]
+            first_side_center_coordinates[throat_index] = retained_center_coordinates[
+                first_region_best_ball
+            ]
             first_side_radii[throat_index] = max(
                 float(np.nan_to_num(first_side_radii[throat_index], nan=-np.inf)),
                 float(np.max(retained_radii_voxels[first_region_mask])),
             )
         if np.any(second_region_mask):
+            second_region_best_index = int(np.argmax(retained_radii_voxels[second_region_mask]))
+            second_region_best_ball = np.flatnonzero(second_region_mask)[second_region_best_index]
+            second_side_center_coordinates[throat_index] = retained_center_coordinates[
+                second_region_best_ball
+            ]
             second_side_radii[throat_index] = max(
                 float(np.nan_to_num(second_side_radii[throat_index], nan=-np.inf)),
                 float(np.max(retained_radii_voxels[second_region_mask])),
             )
 
+    return (
+        first_side_center_coordinates,
+        first_side_radii,
+        second_side_center_coordinates,
+        second_side_radii,
+    )
+
+
+def _select_interface_supporting_ball_radii(
+    extraction_result: MaximalBallExtractionResult,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return side-specific throat-supporting maximal-ball radii in voxel units."""
+
+    _, first_side_radii, _, second_side_radii = _select_interface_supporting_ball_data(
+        extraction_result
+    )
     return first_side_radii, second_side_radii
 
 
@@ -1879,10 +2204,17 @@ def build_network_dict_from_maximal_ball_regions(
     ):
         raise ValueError("region_adjacency.region_labels must index the root-region arrays")
 
-    root_center_indices = all_root_center_indices[retained_region_labels]
+    all_root_center_coordinates = np.asarray(
+        hierarchy.center_coordinates[voxel_regions.root_ball_indices],
+        dtype=float,
+    )
+    if all_root_center_coordinates.ndim != 2 or all_root_center_coordinates.shape[1] != image_ndim:
+        raise ValueError("root center coordinates must have shape (n_roots, image_ndim)")
+
+    root_center_coordinates = all_root_center_coordinates[retained_region_labels]
     root_radii_voxels = all_root_radii_voxels[retained_region_labels]
 
-    pore_coords = root_center_indices * float(voxel_size)
+    pore_coords = root_center_coordinates * float(voxel_size)
     if pore_coords.shape[1] == 2:
         pore_coords = np.column_stack([pore_coords, np.zeros(region_count, dtype=float)])
     pore_radius = root_radii_voxels * float(voxel_size)
@@ -1910,9 +2242,12 @@ def build_network_dict_from_maximal_ball_regions(
             [throat_centroid_coords, np.zeros(throat_count, dtype=float)]
         )
 
-    first_side_radius_voxels, second_side_radius_voxels = _select_interface_supporting_ball_radii(
-        extraction_result
-    )
+    (
+        first_side_center_indices,
+        first_side_radius_voxels,
+        second_side_center_indices,
+        second_side_radius_voxels,
+    ) = _select_interface_supporting_ball_data(extraction_result)
     pore_radius_by_region = root_radii_voxels
     equivalent_interface_radius = np.sqrt(np.maximum(throat_area, 0.0) / np.pi) / float(voxel_size)
     throat_support_radius_voxels = np.empty(throat_count, dtype=float)
@@ -1948,34 +2283,50 @@ def build_network_dict_from_maximal_ball_regions(
         throat_radius,
     )
 
-    minimum_segment_length = 0.5 * float(voxel_size)
+    minimum_pore_segment_length = 0.5 * float(voxel_size)
+    minimum_total_length = 3.01 * float(voxel_size)
+    minimum_throat_core_length = 1.0 * float(voxel_size)
     if throat_count:
         first_pore_coordinates = pore_coords[throat_region_pairs[:, 0]]
         second_pore_coordinates = pore_coords[throat_region_pairs[:, 1]]
-        pore1_to_interface_length = np.linalg.norm(
-            throat_centroid_coords - first_pore_coordinates, axis=1
+        throat_anchor_center_indices = np.where(
+            (first_side_radius_voxels >= second_side_radius_voxels)[:, np.newaxis],
+            first_side_center_indices,
+            second_side_center_indices,
         )
-        pore2_to_interface_length = np.linalg.norm(
-            second_pore_coordinates - throat_centroid_coords, axis=1
+        invalid_anchor_mask = ~np.isfinite(throat_anchor_center_indices).all(axis=1)
+        throat_anchor_center_indices[invalid_anchor_mask] = throat_centroid_indices[
+            invalid_anchor_mask
+        ]
+        throat_anchor_coordinates = throat_anchor_center_indices * float(voxel_size)
+        if throat_anchor_coordinates.shape[1] == 2:
+            throat_anchor_coordinates = np.column_stack(
+                [throat_anchor_coordinates, np.zeros(throat_count, dtype=float)]
+            )
+        pore1_to_anchor_length = np.linalg.norm(
+            throat_anchor_coordinates - first_pore_coordinates,
+            axis=1,
         )
-        pore1_length = np.maximum(
-            pore1_to_interface_length - minimum_segment_length, minimum_segment_length
+        pore2_to_anchor_length = np.linalg.norm(
+            second_pore_coordinates - throat_anchor_coordinates,
+            axis=1,
         )
-        pore2_length = np.maximum(
-            pore2_to_interface_length - minimum_segment_length, minimum_segment_length
+        throat_total_length = np.maximum(
+            pore1_to_anchor_length + pore2_to_anchor_length,
+            minimum_total_length,
         )
-        direct_center_distance = np.linalg.norm(
-            second_pore_coordinates - first_pore_coordinates, axis=1
-        )
+        pore1_length = np.maximum(0.67 * pore1_to_anchor_length, minimum_pore_segment_length)
+        pore2_length = np.maximum(0.67 * pore2_to_anchor_length, minimum_pore_segment_length)
         core_length = np.maximum(
-            direct_center_distance - pore1_length - pore2_length,
-            minimum_segment_length,
+            throat_total_length - pore1_length - pore2_length,
+            minimum_throat_core_length,
         )
+        throat_total_length = pore1_length + core_length + pore2_length
     else:
         pore1_length = np.zeros(0, dtype=float)
         pore2_length = np.zeros(0, dtype=float)
         core_length = np.zeros(0, dtype=float)
-    throat_total_length = pore1_length + core_length + pore2_length
+        throat_total_length = np.zeros(0, dtype=float)
 
     pore_data: dict[str, np.ndarray] = {
         "radius_inscribed": pore_radius.copy(),

@@ -332,6 +332,12 @@ def _maximal_ball_step_diagnostics_metrics(
         "maxball_diag_touch_radius_side2_mean_voxels": float(
             diagnostics.throat_touch_radius_side2_mean_voxels
         ),
+        "maxball_diag_refined_support_radius_side1_mean_voxels": float(
+            diagnostics.throat_refined_support_radius_side1_mean_voxels
+        ),
+        "maxball_diag_refined_support_radius_side2_mean_voxels": float(
+            diagnostics.throat_refined_support_radius_side2_mean_voxels
+        ),
     }
 
 
@@ -788,6 +794,8 @@ maxball_step_diagnostic_columns = [
     "maxball_diag_boundary_zero_throat_region_count",
     "maxball_diag_touch_radius_side1_mean_voxels",
     "maxball_diag_touch_radius_side2_mean_voxels",
+    "maxball_diag_refined_support_radius_side1_mean_voxels",
+    "maxball_diag_refined_support_radius_side2_mean_voxels",
 ]
 summary_df.loc[:, maxball_step_diagnostic_columns].to_csv(
     maxball_diagnostics_csv,

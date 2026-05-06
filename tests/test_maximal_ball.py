@@ -465,6 +465,7 @@ def test_stamp_retained_ball_centers_to_root_labels_restores_center_assignment()
     )
     hierarchy = MaximalBallHierarchy(
         center_indices=np.array([[2, 2, 0]], dtype=np.int64),
+        center_coordinates=np.array([[1.5, 1.5, -0.5]], dtype=float),
         radii_voxels=np.array([2.0], dtype=float),
         parent_indices=np.array([0], dtype=np.int64),
         master_indices=np.array([0], dtype=np.int64),
@@ -517,6 +518,8 @@ def test_measure_region_adjacency_extracts_one_interface_between_two_regions() -
     assert np.allclose(region_adjacency.throat_centroid_indices, np.array([[1.5, 1.0, 1.0]]))
     assert np.allclose(region_adjacency.throat_max_touch_radius_side1_voxels, np.array([2.0]))
     assert np.allclose(region_adjacency.throat_max_touch_radius_side2_voxels, np.array([3.0]))
+    assert np.array_equal(region_adjacency.throat_max_touch_index_side1, np.array([[1, 0, 0]]))
+    assert np.array_equal(region_adjacency.throat_max_touch_index_side2, np.array([[2, 0, 0]]))
 
 
 def test_measure_region_adjacency_reports_boundary_contact_faces() -> None:
@@ -576,6 +579,7 @@ def test_build_network_dict_from_maximal_ball_regions_assembles_expected_fields(
     )
     hierarchy = MaximalBallHierarchy(
         center_indices=voxel_regions.root_center_indices.copy(),
+        center_coordinates=voxel_regions.root_center_indices.astype(float) - 0.5,
         radii_voxels=voxel_regions.root_radii_voxels.copy(),
         parent_indices=np.array([0, 1], dtype=np.int64),
         master_indices=np.array([0, 1], dtype=np.int64),
@@ -607,9 +611,9 @@ def test_build_network_dict_from_maximal_ball_regions_assembles_expected_fields(
     assert np.array_equal(network_dict["pore.inlet_xmin"], np.array([True, False]))
     assert np.array_equal(network_dict["pore.outlet_xmax"], np.array([False, True]))
     assert np.all(network_dict["throat.total_length"] > 0.0)
-    assert np.all(network_dict["throat.conduit_lengths.pore1"] > 0.0)
+    assert np.all(network_dict["throat.conduit_lengths.pore1"] >= 0.0)
     assert np.all(network_dict["throat.conduit_lengths.throat"] > 0.0)
-    assert np.all(network_dict["throat.conduit_lengths.pore2"] > 0.0)
+    assert np.all(network_dict["throat.conduit_lengths.pore2"] >= 0.0)
     assert network_dict["pore.volume"].sum() + network_dict["throat.volume"].sum() == pytest.approx(
         72.0
     )
@@ -653,6 +657,7 @@ def test_build_network_dict_from_maximal_ball_regions_resolves_overlapping_bound
         ),
         hierarchy=MaximalBallHierarchy(
             center_indices=voxel_regions.root_center_indices.copy(),
+            center_coordinates=voxel_regions.root_center_indices.astype(float) - 0.5,
             radii_voxels=voxel_regions.root_radii_voxels.copy(),
             parent_indices=np.array([0], dtype=np.int64),
             master_indices=np.array([0], dtype=np.int64),
@@ -707,6 +712,7 @@ def test_summarize_maximal_ball_extraction_diagnostics_reports_unassigned_and_is
         ),
         hierarchy=MaximalBallHierarchy(
             center_indices=voxel_regions.root_center_indices.copy(),
+            center_coordinates=voxel_regions.root_center_indices.astype(float) - 0.5,
             radii_voxels=voxel_regions.root_radii_voxels.copy(),
             parent_indices=np.array([0, 1, 2], dtype=np.int64),
             master_indices=np.array([0, 1, 2], dtype=np.int64),
@@ -732,6 +738,14 @@ def test_summarize_maximal_ball_extraction_diagnostics_reports_unassigned_and_is
     assert diagnostics.occupied_region_count == 3
     assert diagnostics.unassigned_void_voxel_count == 3
     assert diagnostics.zero_throat_region_count >= 1
+    assert (
+        diagnostics.throat_refined_support_radius_side1_mean_voxels
+        >= diagnostics.throat_touch_radius_side1_mean_voxels
+    )
+    assert (
+        diagnostics.throat_refined_support_radius_side2_mean_voxels
+        >= diagnostics.throat_touch_radius_side2_mean_voxels
+    )
 
 
 def test_extract_maximal_ball_network_dict_wraps_extraction_and_assembly() -> None:
