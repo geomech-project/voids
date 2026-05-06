@@ -130,6 +130,16 @@ class MaximalBallVoxelRegions:
         return self.label_image >= 0
 
 
+def _label_dtype_for_region_count(region_count: int) -> np.dtype[np.signedinteger]:
+    """Return the narrowest signed integer dtype that can store region labels."""
+
+    if region_count <= np.iinfo(np.int16).max:
+        return np.dtype(np.int16)
+    if region_count <= np.iinfo(np.int32).max:
+        return np.dtype(np.int32)
+    return np.dtype(np.int64)
+
+
 @dataclass(slots=True)
 class MaximalBallRegionAdjacency:
     """Region-wise geometric summaries derived from voxel ownership labels.
@@ -544,19 +554,22 @@ def suppress_overlapping_maximal_balls(
     if radii.ndim != 1 or radii.shape[0] != centers.shape[0]:
         raise ValueError("radii_voxels must have shape (count,) matching center_indices")
     return np.asarray(
-        _suppress_overlapping_maximal_balls_compiled(
+        _suppress_overlapping_maximal_balls_spatial_compiled(
             centers=centers,
             radii=radii,
             retention_radius_factor=float(settings.retention_radius_factor),
             retention_radius_offset_voxels=float(settings.retention_radius_offset_voxels),
             medial_surface_noise_voxels=float(settings.medial_surface_noise_voxels),
+            cell_size_voxels=max(
+                4.0, min(12.0, 8.0 * float(settings.retention_radius_offset_voxels))
+            ),
         ),
         dtype=bool,
     )
 
 
 @njit(cache=True)
-def _suppress_overlapping_maximal_balls_compiled(
+def _suppress_overlapping_maximal_balls_compiled(  # pragma: no cover
     centers: np.ndarray,
     radii: np.ndarray,
     retention_radius_factor: float,
@@ -611,6 +624,132 @@ def _suppress_overlapping_maximal_balls_compiled(
     return retained_mask
 
 
+@njit(cache=True)
+def _suppress_overlapping_maximal_balls_spatial_compiled(  # pragma: no cover
+    centers: np.ndarray,
+    radii: np.ndarray,
+    retention_radius_factor: float,
+    retention_radius_offset_voxels: float,
+    medial_surface_noise_voxels: float,
+    cell_size_voxels: float,
+) -> np.ndarray:
+    """Compiled exact overlap suppression using linked lists in spatial bins."""
+
+    candidate_count = radii.shape[0]
+    retained_mask = np.zeros(candidate_count, dtype=np.bool_)
+    if candidate_count == 0:
+        return retained_mask
+
+    ndim = centers.shape[1]
+    grid_shape0 = int(np.floor(np.max(centers[:, 0]) / cell_size_voxels)) + 1
+    grid_shape1 = int(np.floor(np.max(centers[:, 1]) / cell_size_voxels)) + 1
+    grid_shape2 = 1
+    if ndim == 3:
+        grid_shape2 = int(np.floor(np.max(centers[:, 2]) / cell_size_voxels)) + 1
+    cell_count = grid_shape0 * grid_shape1 * grid_shape2
+    cell_heads = np.full(cell_count, -1, dtype=np.int64)
+    retained_next = np.full(candidate_count, -1, dtype=np.int64)
+
+    retained_count = 0
+    maximum_retained_radius = 0.0
+    for candidate_index in range(candidate_count):
+        candidate_radius = float(radii[candidate_index])
+        should_retain = True
+
+        if retained_count > 0:
+            too_close_search_radius = (
+                retention_radius_factor * maximum_retained_radius + retention_radius_offset_voxels
+            )
+            covered_search_radius = (
+                maximum_retained_radius + medial_surface_noise_voxels - candidate_radius
+            )
+            maximum_search_radius = too_close_search_radius
+            if covered_search_radius > maximum_search_radius:
+                maximum_search_radius = covered_search_radius
+            if maximum_search_radius < 0.0:
+                maximum_search_radius = 0.0
+
+            center0 = float(centers[candidate_index, 0])
+            center1 = float(centers[candidate_index, 1])
+            lower0 = int(np.floor((center0 - maximum_search_radius) / cell_size_voxels))
+            upper0 = int(np.floor((center0 + maximum_search_radius) / cell_size_voxels))
+            lower1 = int(np.floor((center1 - maximum_search_radius) / cell_size_voxels))
+            upper1 = int(np.floor((center1 + maximum_search_radius) / cell_size_voxels))
+            if lower0 < 0:
+                lower0 = 0
+            if lower1 < 0:
+                lower1 = 0
+            if upper0 >= grid_shape0:
+                upper0 = grid_shape0 - 1
+            if upper1 >= grid_shape1:
+                upper1 = grid_shape1 - 1
+
+            lower2 = 0
+            upper2 = 0
+            center2 = 0.0
+            if ndim == 3:
+                center2 = float(centers[candidate_index, 2])
+                lower2 = int(np.floor((center2 - maximum_search_radius) / cell_size_voxels))
+                upper2 = int(np.floor((center2 + maximum_search_radius) / cell_size_voxels))
+                if lower2 < 0:
+                    lower2 = 0
+                if upper2 >= grid_shape2:
+                    upper2 = grid_shape2 - 1
+
+            for cell0 in range(lower0, upper0 + 1):
+                if not should_retain:
+                    break
+                for cell1 in range(lower1, upper1 + 1):
+                    if not should_retain:
+                        break
+                    for cell2 in range(lower2, upper2 + 1):
+                        cell_index = (cell0 * grid_shape1 + cell1) * grid_shape2 + cell2
+                        retained_index = int(cell_heads[cell_index])
+                        while retained_index >= 0:
+                            offset0 = float(centers[retained_index, 0]) - center0
+                            offset1 = float(centers[retained_index, 1]) - center1
+                            squared_distance = offset0 * offset0 + offset1 * offset1
+                            if ndim == 3:
+                                offset2 = float(centers[retained_index, 2]) - center2
+                                squared_distance += offset2 * offset2
+                            center_distance = np.sqrt(squared_distance)
+                            retained_radius = float(radii[retained_index])
+
+                            if center_distance < (
+                                retention_radius_factor * retained_radius
+                                + retention_radius_offset_voxels
+                            ):
+                                should_retain = False
+                                break
+                            if center_distance + candidate_radius < (
+                                retained_radius + medial_surface_noise_voxels
+                            ):
+                                should_retain = False
+                                break
+                            retained_index = int(retained_next[retained_index])
+                        if not should_retain:
+                            break
+
+        if not should_retain:
+            continue
+
+        retained_mask[candidate_index] = True
+        retained_count += 1
+        if candidate_radius > maximum_retained_radius:
+            maximum_retained_radius = candidate_radius
+
+        cell0 = int(np.floor(float(centers[candidate_index, 0]) / cell_size_voxels))
+        cell1 = int(np.floor(float(centers[candidate_index, 1]) / cell_size_voxels))
+        cell2 = 0
+        if ndim == 3:
+            cell2 = int(np.floor(float(centers[candidate_index, 2]) / cell_size_voxels))
+        cell_index = (cell0 * grid_shape1 + cell1) * grid_shape2 + cell2
+        retained_next[candidate_index] = cell_heads[cell_index]
+        cell_heads[cell_index] = candidate_index
+
+    return retained_mask
+
+
 def _sample_radius_at_integer_index(
     distance_map: np.ndarray,
     integer_index: np.ndarray,
@@ -623,7 +762,6 @@ def _sample_radius_at_integer_index(
 def _refine_ball_center_subvoxel(
     distance_map: np.ndarray,
     integer_center_index: np.ndarray,
-    *,
     displacement_limit: float,
     radius_gain_factor: float,
 ) -> tuple[np.ndarray, float]:
@@ -712,6 +850,520 @@ def _refine_ball_center_relocation(
     return target_index, target_radius
 
 
+@njit(cache=True)
+def _linear_index_from_center_index(  # pragma: no cover
+    center_index: np.ndarray,
+    shape0: int,
+    shape1: int,
+    shape2: int,
+) -> int:  # pragma: no cover
+    """Return the flattened image index for a 2D or 3D center index."""
+
+    if center_index.shape[0] == 2:
+        return int(center_index[0]) * shape1 + int(center_index[1])
+    return (
+        int(center_index[0]) * shape1 * shape2
+        + int(center_index[1]) * shape2
+        + int(center_index[2])
+    )
+
+
+@njit(cache=True)
+def _subvoxel_refined_center_and_radius_compiled(  # pragma: no cover
+    distance_map: np.ndarray,
+    center_index: np.ndarray,
+    refined_center_coordinate: np.ndarray,
+    displacement_limit: float,
+    radius_gain_factor: float,
+) -> float:  # pragma: no cover
+    """Compiled subvoxel refinement for one ball center."""
+
+    ndim = center_index.shape[0]
+    shape0 = distance_map.shape[0]
+    shape1 = distance_map.shape[1]
+    shape2 = 1
+    if ndim == 3:
+        shape2 = distance_map.shape[2]
+
+    index0 = int(center_index[0])
+    index1 = int(center_index[1])
+    index2 = 0
+    if ndim == 3:
+        index2 = int(center_index[2])
+
+    base_radius = (
+        float(distance_map[index0, index1])
+        if ndim == 2
+        else float(distance_map[index0, index1, index2])
+    )
+    displacement_norm_squared = 0.0
+    for axis_index in range(ndim):
+        lower0 = index0
+        lower1 = index1
+        lower2 = index2
+        upper0 = index0
+        upper1 = index1
+        upper2 = index2
+        if axis_index == 0:
+            lower0 -= 1
+            upper0 += 1
+            if lower0 < 0 or upper0 >= shape0:
+                refined_center_coordinate[axis_index] = float(center_index[axis_index]) - 0.5
+                continue
+        elif axis_index == 1:
+            lower1 -= 1
+            upper1 += 1
+            if lower1 < 0 or upper1 >= shape1:
+                refined_center_coordinate[axis_index] = float(center_index[axis_index]) - 0.5
+                continue
+        else:
+            lower2 -= 1
+            upper2 += 1
+            if lower2 < 0 or upper2 >= shape2:
+                refined_center_coordinate[axis_index] = float(center_index[axis_index]) - 0.5
+                continue
+
+        lower_radius = (
+            float(distance_map[lower0, lower1])
+            if ndim == 2
+            else float(distance_map[lower0, lower1, lower2])
+        )
+        upper_radius = (
+            float(distance_map[upper0, upper1])
+            if ndim == 2
+            else float(distance_map[upper0, upper1, upper2])
+        )
+        gradient_plus = upper_radius - base_radius
+        gradient_minus = base_radius - lower_radius
+        displacement = 0.0
+        if abs(gradient_plus - gradient_minus) > 0.01:
+            displacement = (
+                -0.5 * (gradient_plus + gradient_minus) / (gradient_plus - gradient_minus)
+            )
+            if displacement < -displacement_limit:
+                displacement = -displacement_limit
+            elif displacement > displacement_limit:
+                displacement = displacement_limit
+        refined_center_coordinate[axis_index] = float(center_index[axis_index]) - 0.5 + displacement
+        displacement_norm_squared += displacement * displacement
+
+    return float(base_radius + radius_gain_factor * np.sqrt(displacement_norm_squared))
+
+
+@njit(cache=True)
+def _relocate_ball_center_compiled(  # pragma: no cover
+    distance_map: np.ndarray,
+    center_index: np.ndarray,
+    occupied_centers_flat: np.ndarray,
+    relocated_index: np.ndarray,
+    shape0: int,
+    shape1: int,
+    shape2: int,
+) -> float:  # pragma: no cover
+    """Compiled uphill relocation for one ball center."""
+
+    ndim = center_index.shape[0]
+    index0 = int(center_index[0])
+    index1 = int(center_index[1])
+    index2 = 0
+    if ndim == 3:
+        index2 = int(center_index[2])
+
+    base_radius = (
+        float(distance_map[index0, index1])
+        if ndim == 2
+        else float(distance_map[index0, index1, index2])
+    )
+    displacement = np.zeros(ndim, dtype=np.float64)
+    gradient = np.zeros(ndim, dtype=np.float64)
+
+    for axis_index in range(ndim):
+        lower0 = index0
+        lower1 = index1
+        lower2 = index2
+        upper0 = index0
+        upper1 = index1
+        upper2 = index2
+        if axis_index == 0:
+            lower0 -= 1
+            upper0 += 1
+            if lower0 < 0 or upper0 >= shape0:
+                continue
+        elif axis_index == 1:
+            lower1 -= 1
+            upper1 += 1
+            if lower1 < 0 or upper1 >= shape1:
+                continue
+        else:
+            lower2 -= 1
+            upper2 += 1
+            if lower2 < 0 or upper2 >= shape2:
+                continue
+
+        lower_radius = (
+            float(distance_map[lower0, lower1])
+            if ndim == 2
+            else float(distance_map[lower0, lower1, lower2])
+        )
+        upper_radius = (
+            float(distance_map[upper0, upper1])
+            if ndim == 2
+            else float(distance_map[upper0, upper1, upper2])
+        )
+        gradient_plus = upper_radius - base_radius
+        gradient_minus = base_radius - lower_radius
+        gradient[axis_index] = 0.5 * (gradient_plus + gradient_minus)
+        if abs(gradient_plus - gradient_minus) > 0.01:
+            displacement[axis_index] = (
+                -0.5 * (gradient_plus + gradient_minus) / (gradient_plus - gradient_minus)
+            )
+            if displacement[axis_index] < -0.59:
+                displacement[axis_index] = -0.59
+            elif displacement[axis_index] > 0.59:
+                displacement[axis_index] = 0.59
+
+    displacement_norm_squared = 0.0
+    for axis_index in range(ndim):
+        displacement[axis_index] += 1.4 * gradient[axis_index]
+        displacement_norm_squared += displacement[axis_index] * displacement[axis_index]
+    displacement_norm = np.sqrt(displacement_norm_squared)
+    if displacement_norm <= 1.0e-12:
+        for axis_index in range(ndim):
+            relocated_index[axis_index] = center_index[axis_index]
+        return base_radius
+
+    scale = 0.55 * displacement_norm + 0.05
+    for axis_index in range(ndim):
+        relocated_index[axis_index] = int(
+            np.rint(float(center_index[axis_index]) - 0.5 + displacement[axis_index] / scale)
+        )
+
+    if int(relocated_index[0]) < 0 or int(relocated_index[0]) >= shape0:
+        for axis_index in range(ndim):
+            relocated_index[axis_index] = center_index[axis_index]
+        return base_radius
+    if int(relocated_index[1]) < 0 or int(relocated_index[1]) >= shape1:
+        for axis_index in range(ndim):
+            relocated_index[axis_index] = center_index[axis_index]
+        return base_radius
+    if ndim == 3 and (int(relocated_index[2]) < 0 or int(relocated_index[2]) >= shape2):
+        for axis_index in range(ndim):
+            relocated_index[axis_index] = center_index[axis_index]
+        return base_radius
+
+    target_linear_index = _linear_index_from_center_index(
+        relocated_index,
+        shape0,
+        shape1,
+        shape2,
+    )
+    original_linear_index = _linear_index_from_center_index(
+        center_index,
+        shape0,
+        shape1,
+        shape2,
+    )
+    if target_linear_index != original_linear_index and occupied_centers_flat[target_linear_index]:
+        for axis_index in range(ndim):
+            relocated_index[axis_index] = center_index[axis_index]
+        return base_radius
+
+    target_radius = (
+        float(distance_map[int(relocated_index[0]), int(relocated_index[1])])
+        if ndim == 2
+        else float(
+            distance_map[
+                int(relocated_index[0]),
+                int(relocated_index[1]),
+                int(relocated_index[2]),
+            ]
+        )
+    )
+    if target_radius <= base_radius:
+        for axis_index in range(ndim):
+            relocated_index[axis_index] = center_index[axis_index]
+        return base_radius
+    return target_radius
+
+
+@njit(cache=True)
+def _refine_retained_ball_coordinates_compiled(  # pragma: no cover
+    distance_map: np.ndarray,
+    retained_center_indices: np.ndarray,
+    retained_radii_voxels: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:  # pragma: no cover
+    """Compiled retained-ball coordinate refinement with flat occupancy checks."""
+
+    retained_count = retained_radii_voxels.shape[0]
+    ndim = retained_center_indices.shape[1]
+    refined_integer_indices = retained_center_indices.copy()
+    refined_center_coordinates = np.empty((retained_count, ndim), dtype=np.float64)
+    refined_radii = retained_radii_voxels.copy()
+
+    shape0 = distance_map.shape[0]
+    shape1 = distance_map.shape[1]
+    shape2 = 1
+    if ndim == 3:
+        shape2 = distance_map.shape[2]
+    occupied_centers_flat = np.zeros(shape0 * shape1 * shape2, dtype=np.bool_)
+    for ball_index in range(retained_count):
+        occupied_centers_flat[
+            _linear_index_from_center_index(
+                refined_integer_indices[ball_index],
+                shape0,
+                shape1,
+                shape2,
+            )
+        ] = True
+
+    for ball_index in range(retained_count):
+        refined_radii[ball_index] = _subvoxel_refined_center_and_radius_compiled(
+            distance_map,
+            refined_integer_indices[ball_index],
+            refined_center_coordinates[ball_index],
+            0.49,
+            0.95,
+        )
+
+    relocated_index = np.empty(ndim, dtype=np.int64)
+    for ball_index in range(retained_count):
+        original_linear_index = _linear_index_from_center_index(
+            refined_integer_indices[ball_index],
+            shape0,
+            shape1,
+            shape2,
+        )
+        occupied_centers_flat[original_linear_index] = False
+        relocated_radius = _relocate_ball_center_compiled(
+            distance_map,
+            refined_integer_indices[ball_index],
+            occupied_centers_flat,
+            relocated_index,
+            shape0,
+            shape1,
+            shape2,
+        )
+        for axis_index in range(ndim):
+            refined_integer_indices[ball_index, axis_index] = relocated_index[axis_index]
+        occupied_centers_flat[
+            _linear_index_from_center_index(
+                refined_integer_indices[ball_index],
+                shape0,
+                shape1,
+                shape2,
+            )
+        ] = True
+        refined_radii[ball_index] = relocated_radius
+
+    for ball_index in range(retained_count):
+        refined_radii[ball_index] = _subvoxel_refined_center_and_radius_compiled(
+            distance_map,
+            refined_integer_indices[ball_index],
+            refined_center_coordinates[ball_index],
+            0.49,
+            0.95,
+        )
+
+    return refined_integer_indices, refined_center_coordinates, refined_radii
+
+
+@njit(cache=True)
+def _subvoxel_refined_center_and_radius_compiled_3d(  # pragma: no cover
+    distance_map: np.ndarray,
+    center_index: np.ndarray,
+    refined_center_coordinate: np.ndarray,
+    displacement_limit: float,
+    radius_gain_factor: float,
+) -> float:  # pragma: no cover
+    """Compiled 3D subvoxel refinement for one ball center."""
+
+    shape0 = distance_map.shape[0]
+    shape1 = distance_map.shape[1]
+    shape2 = distance_map.shape[2]
+    index0 = int(center_index[0])
+    index1 = int(center_index[1])
+    index2 = int(center_index[2])
+    base_radius = float(distance_map[index0, index1, index2])
+    displacement_norm_squared = 0.0
+
+    for axis_index in range(3):
+        lower0 = index0
+        lower1 = index1
+        lower2 = index2
+        upper0 = index0
+        upper1 = index1
+        upper2 = index2
+        if axis_index == 0:
+            lower0 -= 1
+            upper0 += 1
+            if lower0 < 0 or upper0 >= shape0:
+                refined_center_coordinate[axis_index] = float(center_index[axis_index]) - 0.5
+                continue
+        elif axis_index == 1:
+            lower1 -= 1
+            upper1 += 1
+            if lower1 < 0 or upper1 >= shape1:
+                refined_center_coordinate[axis_index] = float(center_index[axis_index]) - 0.5
+                continue
+        else:
+            lower2 -= 1
+            upper2 += 1
+            if lower2 < 0 or upper2 >= shape2:
+                refined_center_coordinate[axis_index] = float(center_index[axis_index]) - 0.5
+                continue
+
+        lower_radius = float(distance_map[lower0, lower1, lower2])
+        upper_radius = float(distance_map[upper0, upper1, upper2])
+        gradient_plus = upper_radius - base_radius
+        gradient_minus = base_radius - lower_radius
+        displacement = 0.0
+        if abs(gradient_plus - gradient_minus) > 0.01:
+            displacement = (
+                -0.5 * (gradient_plus + gradient_minus) / (gradient_plus - gradient_minus)
+            )
+            if displacement < -displacement_limit:
+                displacement = -displacement_limit
+            elif displacement > displacement_limit:
+                displacement = displacement_limit
+        refined_center_coordinate[axis_index] = float(center_index[axis_index]) - 0.5 + displacement
+        displacement_norm_squared += displacement * displacement
+
+    return float(base_radius + radius_gain_factor * np.sqrt(displacement_norm_squared))
+
+
+@njit(cache=True)
+def _refine_retained_ball_coordinates_compiled_3d(  # pragma: no cover
+    distance_map: np.ndarray,
+    retained_center_indices: np.ndarray,
+    retained_radii_voxels: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:  # pragma: no cover
+    """Compiled 3D retained-ball coordinate refinement with flat occupancy checks."""
+
+    retained_count = retained_radii_voxels.shape[0]
+    refined_integer_indices = retained_center_indices.copy()
+    refined_center_coordinates = np.empty((retained_count, 3), dtype=np.float64)
+    refined_radii = retained_radii_voxels.copy()
+    shape0 = distance_map.shape[0]
+    shape1 = distance_map.shape[1]
+    shape2 = distance_map.shape[2]
+    plane_size = shape1 * shape2
+    occupied_centers_flat = np.zeros(shape0 * plane_size, dtype=np.bool_)
+
+    for ball_index in range(retained_count):
+        linear_index = (
+            int(refined_integer_indices[ball_index, 0]) * plane_size
+            + int(refined_integer_indices[ball_index, 1]) * shape2
+            + int(refined_integer_indices[ball_index, 2])
+        )
+        occupied_centers_flat[linear_index] = True
+
+    for ball_index in range(retained_count):
+        refined_radii[ball_index] = _subvoxel_refined_center_and_radius_compiled_3d(
+            distance_map,
+            refined_integer_indices[ball_index],
+            refined_center_coordinates[ball_index],
+            0.49,
+            0.95,
+        )
+
+    displacement = np.empty(3, dtype=np.float64)
+    gradient = np.empty(3, dtype=np.float64)
+    for ball_index in range(retained_count):
+        index0 = int(refined_integer_indices[ball_index, 0])
+        index1 = int(refined_integer_indices[ball_index, 1])
+        index2 = int(refined_integer_indices[ball_index, 2])
+        base_radius = float(distance_map[index0, index1, index2])
+        original_linear_index = index0 * plane_size + index1 * shape2 + index2
+        occupied_centers_flat[original_linear_index] = False
+
+        for axis_index in range(3):
+            displacement[axis_index] = 0.0
+            gradient[axis_index] = 0.0
+
+        for axis_index in range(3):
+            lower0 = index0
+            lower1 = index1
+            lower2 = index2
+            upper0 = index0
+            upper1 = index1
+            upper2 = index2
+            if axis_index == 0:
+                lower0 -= 1
+                upper0 += 1
+                if lower0 < 0 or upper0 >= shape0:
+                    continue
+            elif axis_index == 1:
+                lower1 -= 1
+                upper1 += 1
+                if lower1 < 0 or upper1 >= shape1:
+                    continue
+            else:
+                lower2 -= 1
+                upper2 += 1
+                if lower2 < 0 or upper2 >= shape2:
+                    continue
+
+            lower_radius = float(distance_map[lower0, lower1, lower2])
+            upper_radius = float(distance_map[upper0, upper1, upper2])
+            gradient_plus = upper_radius - base_radius
+            gradient_minus = base_radius - lower_radius
+            gradient[axis_index] = 0.5 * (gradient_plus + gradient_minus)
+            if abs(gradient_plus - gradient_minus) > 0.01:
+                displacement[axis_index] = (
+                    -0.5 * (gradient_plus + gradient_minus) / (gradient_plus - gradient_minus)
+                )
+                if displacement[axis_index] < -0.59:
+                    displacement[axis_index] = -0.59
+                elif displacement[axis_index] > 0.59:
+                    displacement[axis_index] = 0.59
+
+        displacement_norm_squared = 0.0
+        for axis_index in range(3):
+            displacement[axis_index] += 1.4 * gradient[axis_index]
+            displacement_norm_squared += displacement[axis_index] * displacement[axis_index]
+        displacement_norm = np.sqrt(displacement_norm_squared)
+
+        target0 = index0
+        target1 = index1
+        target2 = index2
+        if displacement_norm > 1.0e-12:
+            scale = 0.55 * displacement_norm + 0.05
+            target0 = int(np.rint(float(index0) - 0.5 + displacement[0] / scale))
+            target1 = int(np.rint(float(index1) - 0.5 + displacement[1] / scale))
+            target2 = int(np.rint(float(index2) - 0.5 + displacement[2] / scale))
+
+        accepted_relocation = False
+        if 0 <= target0 < shape0 and 0 <= target1 < shape1 and 0 <= target2 < shape2:
+            target_linear_index = target0 * plane_size + target1 * shape2 + target2
+            if (
+                target_linear_index == original_linear_index
+                or not occupied_centers_flat[target_linear_index]
+            ):
+                target_radius = float(distance_map[target0, target1, target2])
+                if target_radius > base_radius:
+                    refined_integer_indices[ball_index, 0] = target0
+                    refined_integer_indices[ball_index, 1] = target1
+                    refined_integer_indices[ball_index, 2] = target2
+                    refined_radii[ball_index] = target_radius
+                    occupied_centers_flat[target_linear_index] = True
+                    accepted_relocation = True
+
+        if not accepted_relocation:
+            occupied_centers_flat[original_linear_index] = True
+            refined_radii[ball_index] = base_radius
+
+    for ball_index in range(retained_count):
+        refined_radii[ball_index] = _subvoxel_refined_center_and_radius_compiled_3d(
+            distance_map,
+            refined_integer_indices[ball_index],
+            refined_center_coordinates[ball_index],
+            0.49,
+            0.95,
+        )
+
+    return refined_integer_indices, refined_center_coordinates, refined_radii
+
+
 def refine_retained_ball_coordinates(
     maximal_ball_candidates: MaximalBallCandidates,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -742,6 +1394,16 @@ def refine_retained_ball_coordinates(
         )
 
     distance_map = np.asarray(maximal_ball_candidates.distance_map, dtype=float)
+    if distance_map.ndim == 3 and retained_center_indices.shape[1] == 3:
+        return cast(
+            tuple[np.ndarray, np.ndarray, np.ndarray],
+            _refine_retained_ball_coordinates_compiled_3d(
+                distance_map,
+                retained_center_indices,
+                retained_radii_voxels,
+            ),
+        )
+
     refined_integer_indices = retained_center_indices.copy()
     refined_center_coordinates = retained_center_indices.astype(float) - 0.5
     refined_radii_voxels = retained_radii_voxels.copy()
@@ -859,17 +1521,20 @@ def _weighted_midpoint_index(
 
     first_radius_squared = float(first_radius_voxels) ** 2
     second_radius_squared = float(second_radius_voxels) ** 2
-    weight_sum = first_radius_squared + second_radius_squared
-    weighted_midpoint = (
-        first_center_index.astype(float) * second_radius_squared
-        + second_center_index.astype(float) * first_radius_squared
-    ) / max(weight_sum, 1.0e-30)
-    clipped_midpoint = np.clip(
-        np.rint(weighted_midpoint).astype(np.int64),
-        0,
-        np.asarray(image_shape, dtype=np.int64) - 1,
-    )
-    return tuple(int(value) for value in clipped_midpoint)
+    inverse_weight_sum = 1.0 / max(first_radius_squared + second_radius_squared, 1.0e-30)
+    midpoint_indices = []
+    for axis_index, axis_size in enumerate(image_shape):
+        weighted_coordinate = (
+            float(first_center_index[axis_index]) * second_radius_squared
+            + float(second_center_index[axis_index]) * first_radius_squared
+        ) * inverse_weight_sum
+        midpoint_index = int(np.rint(weighted_coordinate))
+        if midpoint_index < 0:
+            midpoint_index = 0
+        elif midpoint_index >= axis_size:
+            midpoint_index = int(axis_size - 1)
+        midpoint_indices.append(midpoint_index)
+    return tuple(midpoint_indices)
 
 
 def _pair_has_supported_midpoint(
@@ -892,11 +1557,13 @@ def _pair_has_supported_midpoint(
     )
     midpoint_radius_voxels = float(distance_map[midpoint_index])
     smaller_radius_voxels = min(first_radius_voxels, second_radius_voxels)
-    center_distance_voxels = float(
-        np.linalg.norm(
-            first_center_coordinate.astype(float) - second_center_coordinate.astype(float)
+    squared_center_distance_voxels = 0.0
+    for axis_index in range(first_center_coordinate.size):
+        coordinate_offset = float(first_center_coordinate[axis_index]) - float(
+            second_center_coordinate[axis_index]
         )
-    )
+        squared_center_distance_voxels += coordinate_offset * coordinate_offset
+    center_distance_voxels = float(np.sqrt(squared_center_distance_voxels))
     midpoint_supported = midpoint_radius_voxels > (
         settings.medial_surface_mid_radius_fraction * smaller_radius_voxels - 0.5
     )
@@ -965,22 +1632,25 @@ def build_maximal_ball_hierarchy(
         )
 
     settings = maximal_ball_candidates.settings
-    center_tree = cKDTree(retained_center_coordinates.astype(float))
+    retained_center_coordinates_float = retained_center_coordinates.astype(float, copy=False)
+    center_tree = cKDTree(retained_center_coordinates_float)
     distance_map = np.asarray(maximal_ball_candidates.distance_map, dtype=float)
+    neighbor_search_radii_voxels = (
+        settings.hierarchy_length_factor * retained_radii_voxels
+        + 2.0 * settings.medial_surface_noise_voxels
+        + 2.0
+    )
+    nearby_ball_indices_by_ball = center_tree.query_ball_point(
+        retained_center_coordinates_float,
+        r=neighbor_search_radii_voxels,
+        workers=-1,
+        return_sorted=False,
+    )
 
     for first_ball_index in range(retained_count):
         first_center_coordinate = retained_center_coordinates[first_ball_index]
         first_radius_voxels = float(retained_radii_voxels[first_ball_index])
-        neighbor_search_radius_voxels = (
-            settings.hierarchy_length_factor * first_radius_voxels
-            + 2.0 * settings.medial_surface_noise_voxels
-            + 2.0
-        )
-        nearby_ball_indices = center_tree.query_ball_point(
-            first_center_coordinate.astype(float),
-            r=neighbor_search_radius_voxels,
-        )
-        for second_ball_index in nearby_ball_indices:
+        for second_ball_index in nearby_ball_indices_by_ball[first_ball_index]:
             if second_ball_index <= first_ball_index:
                 continue
             second_center_coordinate = retained_center_coordinates[second_ball_index]
@@ -1096,7 +1766,11 @@ def initialize_root_region_labels(
 
     root_ball_indices = np.flatnonzero(maximal_ball_hierarchy.root_mask).astype(np.int64)
     root_labels = np.arange(root_ball_indices.size, dtype=np.int64)
-    label_image = np.full(mask.shape, unassigned_label, dtype=np.int64)
+    label_image = np.full(
+        mask.shape,
+        unassigned_label,
+        dtype=_label_dtype_for_region_count(int(root_ball_indices.size)),
+    )
     if root_ball_indices.size == 0:
         return MaximalBallVoxelRegions(
             label_image=label_image,
@@ -1140,7 +1814,7 @@ def seed_root_region_ball_interiors(
     """Assign small interior neighborhoods around retained balls to their root regions."""
 
     mask = np.asarray(void_phase_mask, dtype=bool)
-    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    label_image = np.asarray(voxel_regions.label_image).copy()
     retained_center_indices = maximal_ball_hierarchy.center_indices
     retained_radii_voxels = maximal_ball_hierarchy.radii_voxels
 
@@ -1266,7 +1940,7 @@ def _encode_radius_support_mode(radius_support_mode: str) -> int:
 
 
 @njit(cache=True)
-def _compiled_neighbor_satisfies_radius_support(
+def _compiled_neighbor_satisfies_radius_support(  # pragma: no cover
     neighbor_radius: float,
     current_radius: float,
     radius_support_mode_code: int,
@@ -1281,7 +1955,7 @@ def _compiled_neighbor_satisfies_radius_support(
 
 
 @njit(cache=True)
-def _compiled_accumulate_label_count(
+def _compiled_accumulate_label_count(  # pragma: no cover
     supporting_labels: np.ndarray,
     supporting_counts: np.ndarray,
     supporting_label_count: int,
@@ -1299,7 +1973,7 @@ def _compiled_accumulate_label_count(
 
 
 @njit(cache=True)
-def _compiled_select_best_label(
+def _compiled_select_best_label(  # pragma: no cover
     supporting_labels: np.ndarray,
     supporting_counts: np.ndarray,
     supporting_label_count: int,
@@ -1320,7 +1994,7 @@ def _compiled_select_best_label(
 
 
 @njit(cache=True)
-def _grow_root_regions_by_radius_compiled_2d(
+def _grow_root_regions_by_radius_compiled_2d(  # pragma: no cover
     previous_labels_flat: np.ndarray,
     label_image_flat: np.ndarray,
     working_distance_map_flat: np.ndarray,
@@ -1394,12 +2068,11 @@ def _grow_root_regions_by_radius_compiled_2d(
 
 
 @njit(cache=True)
-def _grow_root_regions_by_radius_compiled_3d(
+def _grow_root_regions_by_radius_compiled_3d(  # pragma: no cover
     previous_labels_flat: np.ndarray,
     label_image_flat: np.ndarray,
     working_distance_map_flat: np.ndarray,
     void_indices: np.ndarray,
-    *,
     shape0: int,
     shape1: int,
     shape2: int,
@@ -1476,7 +2149,7 @@ def _grow_root_regions_by_radius_compiled_3d(
 
 
 @njit(cache=True)
-def _reassign_region_boundary_voxels_by_majority_compiled_2d(
+def _reassign_region_boundary_voxels_by_majority_compiled_2d(  # pragma: no cover
     previous_labels_flat: np.ndarray,
     label_image_flat: np.ndarray,
     working_distance_map_flat: np.ndarray,
@@ -1558,12 +2231,11 @@ def _reassign_region_boundary_voxels_by_majority_compiled_2d(
 
 
 @njit(cache=True)
-def _reassign_region_boundary_voxels_by_majority_compiled_3d(
+def _reassign_region_boundary_voxels_by_majority_compiled_3d(  # pragma: no cover
     previous_labels_flat: np.ndarray,
     label_image_flat: np.ndarray,
     working_distance_map_flat: np.ndarray,
     void_indices: np.ndarray,
-    *,
     shape0: int,
     shape1: int,
     shape2: int,
@@ -1647,6 +2319,232 @@ def _reassign_region_boundary_voxels_by_majority_compiled_3d(
     return changed_any_voxel
 
 
+@njit(cache=True)
+def _retreat_mixed_region_boundary_voxels_compiled_2d(  # pragma: no cover
+    previous_labels_flat: np.ndarray,
+    label_image_flat: np.ndarray,
+    void_indices: np.ndarray,
+    *,
+    shape0: int,
+    shape1: int,
+    unassigned_label: int,
+) -> None:  # pragma: no cover
+    """Compiled 2D retreat of mixed-label boundary voxels."""
+
+    for voxel_row in range(void_indices.shape[0]):
+        index0 = int(void_indices[voxel_row, 0])
+        index1 = int(void_indices[voxel_row, 1])
+        linear_index = index0 * shape1 + index1
+        current_label = int(previous_labels_flat[linear_index])
+        if current_label < 0:
+            continue
+
+        same_label_neighbor_count = 0
+        different_label_neighbor_count = 0
+        for axis_index in range(2):
+            for direction in (-1, 1):
+                neighbor0 = index0
+                neighbor1 = index1
+                if axis_index == 0:
+                    neighbor0 += direction
+                    if neighbor0 < 0 or neighbor0 >= shape0:
+                        continue
+                else:
+                    neighbor1 += direction
+                    if neighbor1 < 0 or neighbor1 >= shape1:
+                        continue
+
+                neighbor_linear_index = neighbor0 * shape1 + neighbor1
+                neighbor_label = int(previous_labels_flat[neighbor_linear_index])
+                if neighbor_label < 0:
+                    continue
+                if neighbor_label == current_label:
+                    same_label_neighbor_count += 1
+                else:
+                    different_label_neighbor_count += 1
+
+        if same_label_neighbor_count > 0 and different_label_neighbor_count > 0:
+            label_image_flat[linear_index] = unassigned_label
+
+
+@njit(cache=True)
+def _retreat_mixed_region_boundary_voxels_compiled_3d(  # pragma: no cover
+    previous_labels_flat: np.ndarray,
+    label_image_flat: np.ndarray,
+    void_indices: np.ndarray,
+    shape0: int,
+    shape1: int,
+    shape2: int,
+    unassigned_label: int,
+) -> None:  # pragma: no cover
+    """Compiled 3D retreat of mixed-label boundary voxels."""
+
+    plane_size = shape1 * shape2
+    for voxel_row in range(void_indices.shape[0]):
+        index0 = int(void_indices[voxel_row, 0])
+        index1 = int(void_indices[voxel_row, 1])
+        index2 = int(void_indices[voxel_row, 2])
+        linear_index = index0 * plane_size + index1 * shape2 + index2
+        current_label = int(previous_labels_flat[linear_index])
+        if current_label < 0:
+            continue
+
+        same_label_neighbor_count = 0
+        different_label_neighbor_count = 0
+        for axis_index in range(3):
+            for direction in (-1, 1):
+                neighbor0 = index0
+                neighbor1 = index1
+                neighbor2 = index2
+                if axis_index == 0:
+                    neighbor0 += direction
+                    if neighbor0 < 0 or neighbor0 >= shape0:
+                        continue
+                elif axis_index == 1:
+                    neighbor1 += direction
+                    if neighbor1 < 0 or neighbor1 >= shape1:
+                        continue
+                else:
+                    neighbor2 += direction
+                    if neighbor2 < 0 or neighbor2 >= shape2:
+                        continue
+
+                neighbor_linear_index = neighbor0 * plane_size + neighbor1 * shape2 + neighbor2
+                neighbor_label = int(previous_labels_flat[neighbor_linear_index])
+                if neighbor_label < 0:
+                    continue
+                if neighbor_label == current_label:
+                    same_label_neighbor_count += 1
+                else:
+                    different_label_neighbor_count += 1
+
+        if same_label_neighbor_count > 0 and different_label_neighbor_count > 0:
+            label_image_flat[linear_index] = unassigned_label
+
+
+@njit(cache=True)
+def _grow_root_regions_by_neighbor_priority_compiled_2d(  # pragma: no cover
+    label_image_flat: np.ndarray,
+    forward_indices: np.ndarray,
+    backward_indices: np.ndarray,
+    *,
+    shape0: int,
+    shape1: int,
+    unassigned_label: int,
+    iterations: int,
+) -> bool:  # pragma: no cover
+    """Compiled 2D neighbor-priority growth."""
+
+    changed_in_any_iteration = False
+    for _ in range(iterations):
+        changed_any_voxel = False
+        for traversal_id in range(2):
+            traversal_indices = forward_indices if traversal_id == 0 else backward_indices
+            for voxel_row in range(traversal_indices.shape[0]):
+                index0 = int(traversal_indices[voxel_row, 0])
+                index1 = int(traversal_indices[voxel_row, 1])
+                linear_index = index0 * shape1 + index1
+                if int(label_image_flat[linear_index]) != unassigned_label:
+                    continue
+
+                # Growth-priority order is +axis, then -axis, for each axis.
+                assigned_label = -1
+                for axis_index in range(2):
+                    for direction in (1, -1):
+                        neighbor0 = index0
+                        neighbor1 = index1
+                        if axis_index == 0:
+                            neighbor0 += direction
+                            if neighbor0 < 0 or neighbor0 >= shape0:
+                                continue
+                        else:
+                            neighbor1 += direction
+                            if neighbor1 < 0 or neighbor1 >= shape1:
+                                continue
+
+                        neighbor_linear_index = neighbor0 * shape1 + neighbor1
+                        neighbor_label = int(label_image_flat[neighbor_linear_index])
+                        if neighbor_label < 0:
+                            continue
+                        assigned_label = neighbor_label
+                        break
+                    if assigned_label >= 0:
+                        break
+                if assigned_label >= 0:
+                    label_image_flat[linear_index] = assigned_label
+                    changed_any_voxel = True
+                    changed_in_any_iteration = True
+        if not changed_any_voxel:
+            break
+    return changed_in_any_iteration
+
+
+@njit(cache=True)
+def _grow_root_regions_by_neighbor_priority_compiled_3d(  # pragma: no cover
+    label_image_flat: np.ndarray,
+    forward_indices: np.ndarray,
+    backward_indices: np.ndarray,
+    shape0: int,
+    shape1: int,
+    shape2: int,
+    unassigned_label: int,
+    iterations: int,
+) -> bool:  # pragma: no cover
+    """Compiled 3D neighbor-priority growth."""
+
+    changed_in_any_iteration = False
+    plane_size = shape1 * shape2
+    for _ in range(iterations):
+        changed_any_voxel = False
+        for traversal_id in range(2):
+            traversal_indices = forward_indices if traversal_id == 0 else backward_indices
+            for voxel_row in range(traversal_indices.shape[0]):
+                index0 = int(traversal_indices[voxel_row, 0])
+                index1 = int(traversal_indices[voxel_row, 1])
+                index2 = int(traversal_indices[voxel_row, 2])
+                linear_index = index0 * plane_size + index1 * shape2 + index2
+                if int(label_image_flat[linear_index]) != unassigned_label:
+                    continue
+
+                # Growth-priority order is +axis, then -axis, for each axis.
+                assigned_label = -1
+                for axis_index in range(3):
+                    for direction in (1, -1):
+                        neighbor0 = index0
+                        neighbor1 = index1
+                        neighbor2 = index2
+                        if axis_index == 0:
+                            neighbor0 += direction
+                            if neighbor0 < 0 or neighbor0 >= shape0:
+                                continue
+                        elif axis_index == 1:
+                            neighbor1 += direction
+                            if neighbor1 < 0 or neighbor1 >= shape1:
+                                continue
+                        else:
+                            neighbor2 += direction
+                            if neighbor2 < 0 or neighbor2 >= shape2:
+                                continue
+
+                        neighbor_linear_index = (
+                            neighbor0 * plane_size + neighbor1 * shape2 + neighbor2
+                        )
+                        neighbor_label = int(label_image_flat[neighbor_linear_index])
+                        if neighbor_label < 0:
+                            continue
+                        assigned_label = neighbor_label
+                        break
+                    if assigned_label >= 0:
+                        break
+                if assigned_label >= 0:
+                    label_image_flat[linear_index] = assigned_label
+                    changed_any_voxel = True
+                    changed_in_any_iteration = True
+        if not changed_any_voxel:
+            break
+    return changed_in_any_iteration
+
+
 def _count_supporting_neighbor_labels(  # pragma: no cover
     previous_labels: np.ndarray,
     working_distance_map: np.ndarray,
@@ -1689,6 +2587,7 @@ def grow_root_regions_by_radius(
     radius_support_mode: str | None = None,
     require_strictly_larger_radius: bool | None = None,
     iterations: int = 1,
+    void_indices: np.ndarray | None = None,
 ) -> MaximalBallVoxelRegions:
     """Grow root regions across unassigned void voxels using local radius rules."""
 
@@ -1699,7 +2598,7 @@ def grow_root_regions_by_radius(
 
     mask = np.asarray(void_phase_mask, dtype=bool)
     working_distance_map = np.asarray(distance_map, dtype=float)
-    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    label_image = np.asarray(voxel_regions.label_image).copy()
     if mask.shape != label_image.shape or mask.shape != working_distance_map.shape:
         raise ValueError("void_phase_mask, distance_map, and voxel_regions.label_image must match")
 
@@ -1707,7 +2606,10 @@ def grow_root_regions_by_radius(
         radius_support_mode=radius_support_mode,
         require_strictly_larger_radius=require_strictly_larger_radius,
     )
-    void_indices = np.argwhere(mask).astype(np.int64, copy=False)
+    if void_indices is None:
+        resolved_void_indices = np.argwhere(mask).astype(np.int64, copy=False)
+    else:
+        resolved_void_indices = np.asarray(void_indices, dtype=np.int64)
     image_shape = np.asarray(mask.shape, dtype=np.int64)
     radius_support_mode_code = _encode_radius_support_mode(normalized_radius_support_mode)
 
@@ -1721,7 +2623,7 @@ def grow_root_regions_by_radius(
                 previous_labels_flat,
                 label_image_flat,
                 working_distance_map_flat,
-                void_indices,
+                resolved_void_indices,
                 shape0=int(image_shape[0]),
                 shape1=int(image_shape[1]),
                 unassigned_label=int(voxel_regions.unassigned_label),
@@ -1733,7 +2635,7 @@ def grow_root_regions_by_radius(
                 previous_labels_flat,
                 label_image_flat,
                 working_distance_map_flat,
-                void_indices,
+                resolved_void_indices,
                 shape0=int(image_shape[0]),
                 shape1=int(image_shape[1]),
                 shape2=int(image_shape[2]),
@@ -1762,6 +2664,7 @@ def reassign_region_boundary_voxels_by_majority(
     *,
     radius_support_mode: str = "any",
     iterations: int = 1,
+    void_indices: np.ndarray | None = None,
 ) -> MaximalBallVoxelRegions:
     """Reassign weakly supported labeled voxels using a neighbor majority rule.
 
@@ -1775,7 +2678,7 @@ def reassign_region_boundary_voxels_by_majority(
 
     mask = np.asarray(void_phase_mask, dtype=bool)
     working_distance_map = np.asarray(distance_map, dtype=float)
-    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    label_image = np.asarray(voxel_regions.label_image).copy()
     if mask.shape != label_image.shape or mask.shape != working_distance_map.shape:
         raise ValueError("void_phase_mask, distance_map, and voxel_regions.label_image must match")
 
@@ -1783,7 +2686,10 @@ def reassign_region_boundary_voxels_by_majority(
         radius_support_mode=radius_support_mode,
         require_strictly_larger_radius=None,
     )
-    void_indices = np.argwhere(mask).astype(np.int64, copy=False)
+    if void_indices is None:
+        resolved_void_indices = np.argwhere(mask).astype(np.int64, copy=False)
+    else:
+        resolved_void_indices = np.asarray(void_indices, dtype=np.int64)
     image_shape = np.asarray(mask.shape, dtype=np.int64)
     radius_support_mode_code = _encode_radius_support_mode(normalized_radius_support_mode)
 
@@ -1797,7 +2703,7 @@ def reassign_region_boundary_voxels_by_majority(
                 previous_labels_flat,
                 label_image_flat,
                 working_distance_map_flat,
-                void_indices,
+                resolved_void_indices,
                 shape0=int(image_shape[0]),
                 shape1=int(image_shape[1]),
                 radius_support_mode_code=int(radius_support_mode_code),
@@ -1807,7 +2713,7 @@ def reassign_region_boundary_voxels_by_majority(
                 previous_labels_flat,
                 label_image_flat,
                 working_distance_map_flat,
-                void_indices,
+                resolved_void_indices,
                 shape0=int(image_shape[0]),
                 shape1=int(image_shape[1]),
                 shape2=int(image_shape[2]),
@@ -1830,6 +2736,8 @@ def reassign_region_boundary_voxels_by_majority(
 def retreat_mixed_region_boundary_voxels(
     void_phase_mask: np.ndarray,
     voxel_regions: MaximalBallVoxelRegions,
+    *,
+    void_indices: np.ndarray | None = None,
 ) -> MaximalBallVoxelRegions:
     """Retreat mixed boundary voxels back to the unassigned state.
 
@@ -1839,33 +2747,37 @@ def retreat_mixed_region_boundary_voxels(
     """
 
     mask = np.asarray(void_phase_mask, dtype=bool)
-    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    label_image = np.asarray(voxel_regions.label_image).copy()
     if mask.shape != label_image.shape:
         raise ValueError("void_phase_mask and voxel_regions.label_image must match")
 
-    neighbor_offsets = _neighbor_offsets(mask.ndim)
     image_shape = np.asarray(mask.shape, dtype=np.int64)
     previous_labels = label_image.copy()
-    assigned_indices = np.argwhere(mask & (previous_labels >= 0))
-    for voxel_index in assigned_indices:
-        voxel_index_tuple = tuple(int(value) for value in voxel_index)
-        current_label = int(previous_labels[voxel_index_tuple])
-        same_label_neighbor_count = 0
-        different_label_neighbor_count = 0
-        for neighbor_offset in neighbor_offsets:
-            neighbor_index = voxel_index + np.asarray(neighbor_offset, dtype=np.int64)
-            if np.any(neighbor_index < 0) or np.any(neighbor_index >= image_shape):
-                continue
-            neighbor_index_tuple = tuple(int(value) for value in neighbor_index)
-            neighbor_label = int(previous_labels[neighbor_index_tuple])
-            if neighbor_label < 0:
-                continue
-            if neighbor_label == current_label:
-                same_label_neighbor_count += 1
-            else:
-                different_label_neighbor_count += 1
-        if same_label_neighbor_count > 0 and different_label_neighbor_count > 0:
-            label_image[voxel_index_tuple] = voxel_regions.unassigned_label
+    if void_indices is None:
+        resolved_void_indices = np.argwhere(mask).astype(np.int64, copy=False)
+    else:
+        resolved_void_indices = np.asarray(void_indices, dtype=np.int64)
+    previous_labels_flat = previous_labels.reshape(-1)
+    label_image_flat = label_image.reshape(-1)
+    if mask.ndim == 2:
+        _retreat_mixed_region_boundary_voxels_compiled_2d(
+            previous_labels_flat,
+            label_image_flat,
+            resolved_void_indices,
+            shape0=int(image_shape[0]),
+            shape1=int(image_shape[1]),
+            unassigned_label=int(voxel_regions.unassigned_label),
+        )
+    else:
+        _retreat_mixed_region_boundary_voxels_compiled_3d(
+            previous_labels_flat,
+            label_image_flat,
+            resolved_void_indices,
+            shape0=int(image_shape[0]),
+            shape1=int(image_shape[1]),
+            shape2=int(image_shape[2]),
+            unassigned_label=int(voxel_regions.unassigned_label),
+        )
 
     return MaximalBallVoxelRegions(
         label_image=label_image,
@@ -1884,7 +2796,7 @@ def stamp_retained_ball_centers_to_root_labels(
 ) -> MaximalBallVoxelRegions:
     """Restore retained-ball centers to their hierarchy-root region labels."""
 
-    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    label_image = np.asarray(voxel_regions.label_image).copy()
     for ball_index, center_index in enumerate(maximal_ball_hierarchy.center_indices):
         root_label = int(voxel_regions.root_of_ball_index[ball_index])
         center_index_tuple = tuple(int(value) for value in center_index)
@@ -1906,6 +2818,7 @@ def grow_root_regions_by_neighbor_priority(
     voxel_regions: MaximalBallVoxelRegions,
     *,
     iterations: int = 1,
+    void_indices: np.ndarray | None = None,
 ) -> MaximalBallVoxelRegions:
     """Grow unassigned voxels by direct neighbor propagation in sweep order.
 
@@ -1917,35 +2830,38 @@ def grow_root_regions_by_neighbor_priority(
         raise ValueError("iterations must be at least 1")
 
     mask = np.asarray(void_phase_mask, dtype=bool)
-    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    label_image = np.asarray(voxel_regions.label_image).copy()
     if mask.shape != label_image.shape:
         raise ValueError("void_phase_mask and voxel_regions.label_image must match")
 
     image_shape = np.asarray(mask.shape, dtype=np.int64)
-    neighbor_offsets = _neighbor_offsets_with_growth_priority(mask.ndim)
-    forward_indices = np.argwhere(mask)
+    if void_indices is None:
+        forward_indices = np.argwhere(mask).astype(np.int64, copy=False)
+    else:
+        forward_indices = np.asarray(void_indices, dtype=np.int64)
     backward_indices = forward_indices[::-1].copy()
-
-    for _ in range(iterations):
-        changed_any_voxel = False
-        for traversal_indices in (forward_indices, backward_indices):
-            for voxel_index in traversal_indices:
-                voxel_index_tuple = tuple(int(value) for value in voxel_index)
-                if label_image[voxel_index_tuple] != voxel_regions.unassigned_label:
-                    continue
-                for neighbor_offset in neighbor_offsets:
-                    neighbor_index = voxel_index + np.asarray(neighbor_offset, dtype=np.int64)
-                    if np.any(neighbor_index < 0) or np.any(neighbor_index >= image_shape):
-                        continue
-                    neighbor_index_tuple = tuple(int(value) for value in neighbor_index)
-                    neighbor_label = int(label_image[neighbor_index_tuple])
-                    if neighbor_label < 0:
-                        continue
-                    label_image[voxel_index_tuple] = neighbor_label
-                    changed_any_voxel = True
-                    break
-        if not changed_any_voxel:
-            break
+    label_image_flat = label_image.reshape(-1)
+    if mask.ndim == 2:
+        _grow_root_regions_by_neighbor_priority_compiled_2d(
+            label_image_flat,
+            forward_indices,
+            backward_indices,
+            shape0=int(image_shape[0]),
+            shape1=int(image_shape[1]),
+            unassigned_label=int(voxel_regions.unassigned_label),
+            iterations=int(iterations),
+        )
+    else:
+        _grow_root_regions_by_neighbor_priority_compiled_3d(
+            label_image_flat,
+            forward_indices,
+            backward_indices,
+            shape0=int(image_shape[0]),
+            shape1=int(image_shape[1]),
+            shape2=int(image_shape[2]),
+            unassigned_label=int(voxel_regions.unassigned_label),
+            iterations=int(iterations),
+        )
 
     return MaximalBallVoxelRegions(
         label_image=label_image,
@@ -1964,12 +2880,14 @@ def assign_voxel_regions_from_hierarchy(
 ) -> MaximalBallVoxelRegions:
     """Assign voxel ownership using an Imperial-inspired staged growth schedule."""
 
+    mask = np.asarray(void_phase_mask, dtype=bool)
+    void_indices = np.argwhere(mask).astype(np.int64, copy=False)
     voxel_regions = initialize_root_region_labels(
-        void_phase_mask,
+        mask,
         maximal_ball_hierarchy,
     )
     voxel_regions = seed_root_region_ball_interiors(
-        void_phase_mask,
+        mask,
         maximal_ball_hierarchy,
         voxel_regions,
     )
@@ -1980,24 +2898,27 @@ def assign_voxel_regions_from_hierarchy(
     ]
     for minimum_supporting_neighbors, radius_support_mode, iterations in initial_growth_schedule:
         voxel_regions = grow_root_regions_by_radius(
-            void_phase_mask,
+            mask,
             maximal_ball_hierarchy.distance_map,
             voxel_regions,
             minimum_supporting_neighbors=minimum_supporting_neighbors,
             radius_support_mode=radius_support_mode,
             iterations=iterations,
+            void_indices=void_indices,
         )
 
     voxel_regions = reassign_region_boundary_voxels_by_majority(
-        void_phase_mask,
+        mask,
         maximal_ball_hierarchy.distance_map,
         voxel_regions,
         radius_support_mode="any",
         iterations=2,
+        void_indices=void_indices,
     )
     voxel_regions = retreat_mixed_region_boundary_voxels(
-        void_phase_mask,
+        mask,
         voxel_regions,
+        void_indices=void_indices,
     )
     voxel_regions = stamp_retained_ball_centers_to_root_labels(
         voxel_regions,
@@ -2011,25 +2932,28 @@ def assign_voxel_regions_from_hierarchy(
     ]
     for minimum_supporting_neighbors, radius_support_mode, iterations in late_growth_schedule:
         voxel_regions = grow_root_regions_by_radius(
-            void_phase_mask,
+            mask,
             maximal_ball_hierarchy.distance_map,
             voxel_regions,
             minimum_supporting_neighbors=minimum_supporting_neighbors,
             radius_support_mode=radius_support_mode,
             iterations=iterations,
+            void_indices=void_indices,
         )
 
     voxel_regions = reassign_region_boundary_voxels_by_majority(
-        void_phase_mask,
+        mask,
         maximal_ball_hierarchy.distance_map,
         voxel_regions,
         radius_support_mode="any",
         iterations=2,
+        void_indices=void_indices,
     )
     voxel_regions = grow_root_regions_by_neighbor_priority(
-        void_phase_mask,
+        mask,
         voxel_regions,
-        iterations=max(16, 2 * max(void_phase_mask.shape)),
+        iterations=max(16, 2 * max(mask.shape)),
+        void_indices=void_indices,
     )
     return voxel_regions
 
@@ -2069,7 +2993,7 @@ def measure_region_adjacency(
     """
 
     mask = np.asarray(void_phase_mask, dtype=bool)
-    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64)
+    label_image = np.asarray(voxel_regions.label_image)
     if mask.shape != label_image.shape:
         raise ValueError("void_phase_mask and voxel_regions.label_image must match")
     working_distance_map: np.ndarray | None = None
@@ -2385,7 +3309,7 @@ def summarize_maximal_ball_extraction_diagnostics(
     """Summarize intermediate maximal-ball extraction behavior for comparison work."""
 
     mask = np.asarray(void_phase_mask, dtype=bool)
-    label_image = np.asarray(extraction_result.voxel_regions.label_image, dtype=np.int64)
+    label_image = np.asarray(extraction_result.voxel_regions.label_image)
     if mask.shape != label_image.shape:
         raise ValueError("void_phase_mask must match extraction_result voxel-region labels")
 
@@ -2675,7 +3599,7 @@ def _max_boundary_touch_radii_by_side(
 ) -> np.ndarray:
     """Return max boundary-contact radius for each compact region and side."""
 
-    labels = np.asarray(label_image, dtype=np.int64)
+    labels = np.asarray(label_image)
     radii = np.asarray(distance_map, dtype=float)
     if labels.shape != radii.shape:
         raise ValueError("label_image and distance_map must have the same shape")
@@ -2683,20 +3607,40 @@ def _max_boundary_touch_radii_by_side(
     retained_region_labels = np.asarray(region_labels, dtype=np.int64)
     boundary_touch_radii = np.full(
         (retained_region_labels.size, 2 * labels.ndim),
-        np.nan,
+        -np.inf,
         dtype=float,
     )
-    for compact_region_index, original_region_label in enumerate(retained_region_labels):
-        for axis_index in range(labels.ndim):
-            for side_offset, side_index in enumerate((0, labels.shape[axis_index] - 1)):
-                boundary_selector = [slice(None)] * labels.ndim
-                boundary_selector[axis_index] = side_index
-                selector_tuple = tuple(boundary_selector)
-                side_region_mask = labels[selector_tuple] == int(original_region_label)
-                if np.any(side_region_mask):
-                    boundary_touch_radii[compact_region_index, 2 * axis_index + side_offset] = (
-                        float(np.max(radii[selector_tuple][side_region_mask]))
-                    )
+    if retained_region_labels.size == 0:
+        return boundary_touch_radii
+
+    max_region_label = int(np.max(retained_region_labels))
+    compact_index_by_region_label = np.full(max_region_label + 1, -1, dtype=np.int64)
+    compact_index_by_region_label[retained_region_labels] = np.arange(
+        retained_region_labels.size,
+        dtype=np.int64,
+    )
+
+    for axis_index in range(labels.ndim):
+        for side_offset, side_index in enumerate((0, labels.shape[axis_index] - 1)):
+            boundary_selector = [slice(None)] * labels.ndim
+            boundary_selector[axis_index] = side_index
+            selector_tuple = tuple(boundary_selector)
+            side_labels = labels[selector_tuple].reshape(-1)
+            valid_label_mask = (side_labels >= 0) & (side_labels <= max_region_label)
+            if not np.any(valid_label_mask):
+                continue
+            side_compact_indices = compact_index_by_region_label[side_labels[valid_label_mask]]
+            retained_mask = side_compact_indices >= 0
+            if not np.any(retained_mask):
+                continue
+            side_radii = radii[selector_tuple].reshape(-1)[valid_label_mask][retained_mask]
+            np.maximum.at(
+                boundary_touch_radii[:, 2 * axis_index + side_offset],
+                side_compact_indices[retained_mask],
+                side_radii,
+            )
+
+    boundary_touch_radii[~np.isfinite(boundary_touch_radii)] = np.nan
     return boundary_touch_radii
 
 
