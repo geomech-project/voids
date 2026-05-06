@@ -100,6 +100,64 @@ class MaximalBallHierarchy:
         return self.parent_indices == np.arange(self.parent_indices.size, dtype=np.int64)
 
 
+@dataclass(slots=True)
+class MaximalBallVoxelRegions:
+    """Voxel ownership assignment grown from maximal-ball hierarchy roots."""
+
+    label_image: np.ndarray
+    root_ball_indices: np.ndarray
+    root_labels: np.ndarray
+    root_center_indices: np.ndarray
+    root_radii_voxels: np.ndarray
+    root_of_ball_index: np.ndarray
+    unassigned_label: int
+
+    @property
+    def assigned_void_mask(self) -> np.ndarray:
+        """Return a mask of voxels assigned to some pore/root region."""
+
+        return self.label_image >= 0
+
+
+@dataclass(slots=True)
+class MaximalBallRegionAdjacency:
+    """Region-wise geometric summaries derived from voxel ownership labels.
+
+    Notes
+    -----
+    The fields here are deliberately close to the intermediate quantities that
+    the Imperial extractor builds before CNM export:
+
+    - per-region occupied voxel counts
+    - per-region exposed face counts
+    - region-to-region interface face counts
+    - interface centroids in voxel-index coordinates
+    - boundary-face contact counts on each sample side
+
+    This is still an intermediate voxel-geometry product, not yet a final
+    ``voids.Network``.
+    """
+
+    region_labels: np.ndarray
+    region_volume_voxels: np.ndarray
+    region_surface_face_counts: np.ndarray
+    throat_region_pairs: np.ndarray
+    throat_face_counts: np.ndarray
+    throat_axis_face_balance: np.ndarray
+    throat_centroid_indices: np.ndarray
+    boundary_face_counts: np.ndarray
+
+
+@dataclass(slots=True)
+class MaximalBallExtractionResult:
+    """Staged native maximal-ball extraction outputs before CNM assembly."""
+
+    candidates: MaximalBallCandidates
+    hierarchy: MaximalBallHierarchy
+    voxel_regions: MaximalBallVoxelRegions
+    region_adjacency: MaximalBallRegionAdjacency
+
+
 def compute_void_distance_map(
     void_phase_mask: np.ndarray,
     *,
@@ -580,6 +638,450 @@ def build_maximal_ball_hierarchy(
     )
 
 
+def initialize_root_region_labels(
+    void_phase_mask: np.ndarray,
+    maximal_ball_hierarchy: MaximalBallHierarchy,
+    *,
+    unassigned_label: int = -1,
+) -> MaximalBallVoxelRegions:
+    """Seed voxel-region labels from hierarchy root balls.
+
+    Notes
+    -----
+    This stage mirrors the first pore-element seeding in the Imperial code:
+    each root/master maximal ball defines an initial pore region, and each
+    retained non-root ball maps to the region of its hierarchy root.
+    """
+
+    mask = np.asarray(void_phase_mask, dtype=bool)
+    if mask.shape != maximal_ball_hierarchy.distance_map.shape:
+        raise ValueError("void_phase_mask must match the hierarchy distance-map shape")
+
+    root_ball_indices = np.flatnonzero(maximal_ball_hierarchy.root_mask).astype(np.int64)
+    root_labels = np.arange(root_ball_indices.size, dtype=np.int64)
+    label_image = np.full(mask.shape, unassigned_label, dtype=np.int64)
+    if root_ball_indices.size == 0:
+        return MaximalBallVoxelRegions(
+            label_image=label_image,
+            root_ball_indices=root_ball_indices,
+            root_labels=root_labels,
+            root_center_indices=np.zeros((0, mask.ndim), dtype=np.int64),
+            root_radii_voxels=np.zeros(0, dtype=float),
+            root_of_ball_index=np.zeros(0, dtype=np.int64),
+            unassigned_label=int(unassigned_label),
+        )
+
+    root_center_indices = maximal_ball_hierarchy.center_indices[root_ball_indices]
+    root_radii_voxels = maximal_ball_hierarchy.radii_voxels[root_ball_indices]
+    root_lookup = {
+        int(ball_index): int(label) for label, ball_index in enumerate(root_ball_indices)
+    }
+    root_of_ball_index = np.array(
+        [root_lookup[int(root_index)] for root_index in maximal_ball_hierarchy.master_indices],
+        dtype=np.int64,
+    )
+
+    for root_label, root_center_index in zip(root_labels, root_center_indices, strict=False):
+        label_image[tuple(int(value) for value in root_center_index)] = int(root_label)
+
+    return MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=root_ball_indices,
+        root_labels=root_labels,
+        root_center_indices=root_center_indices,
+        root_radii_voxels=root_radii_voxels,
+        root_of_ball_index=root_of_ball_index,
+        unassigned_label=int(unassigned_label),
+    )
+
+
+def seed_root_region_ball_interiors(
+    void_phase_mask: np.ndarray,
+    maximal_ball_hierarchy: MaximalBallHierarchy,
+    voxel_regions: MaximalBallVoxelRegions,
+) -> MaximalBallVoxelRegions:
+    """Assign small interior neighborhoods around retained balls to their root regions."""
+
+    mask = np.asarray(void_phase_mask, dtype=bool)
+    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    retained_center_indices = maximal_ball_hierarchy.center_indices
+    retained_radii_voxels = maximal_ball_hierarchy.radii_voxels
+
+    for ball_index, center_index in enumerate(retained_center_indices):
+        root_label = int(voxel_regions.root_of_ball_index[ball_index])
+        radius_voxels = float(retained_radii_voxels[ball_index])
+        seeding_radius_voxels = max(radius_voxels * 0.25 - 1.0, 1.001)
+        radius_squared = seeding_radius_voxels * seeding_radius_voxels
+
+        lower_bounds = np.maximum(
+            np.floor(center_index - seeding_radius_voxels).astype(np.int64),
+            0,
+        )
+        upper_bounds = np.minimum(
+            np.ceil(center_index + seeding_radius_voxels).astype(np.int64) + 1,
+            np.asarray(mask.shape, dtype=np.int64),
+        )
+        index_slices = tuple(
+            slice(int(lower), int(upper)) for lower, upper in zip(lower_bounds, upper_bounds)
+        )
+        candidate_offsets = np.indices(
+            tuple(int(upper - lower) for lower, upper in zip(lower_bounds, upper_bounds))
+        )
+        for axis_index, lower_bound in enumerate(lower_bounds):
+            candidate_offsets[axis_index] = (
+                candidate_offsets[axis_index] + int(lower_bound) - int(center_index[axis_index])
+            )
+        candidate_distance_squared = np.sum(candidate_offsets.astype(float) ** 2, axis=0)
+        local_mask = candidate_distance_squared <= radius_squared
+        local_void_mask = mask[index_slices]
+        assignable_mask = local_mask & local_void_mask
+        local_labels = label_image[index_slices]
+        local_labels[assignable_mask] = root_label
+        label_image[index_slices] = local_labels
+
+    return MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=voxel_regions.root_ball_indices,
+        root_labels=voxel_regions.root_labels,
+        root_center_indices=voxel_regions.root_center_indices,
+        root_radii_voxels=voxel_regions.root_radii_voxels,
+        root_of_ball_index=voxel_regions.root_of_ball_index,
+        unassigned_label=voxel_regions.unassigned_label,
+    )
+
+
+def _neighbor_offsets(ndim: int) -> list[tuple[int, ...]]:
+    """Return 6-connectivity offsets in 3D or 4-connectivity offsets in 2D."""
+
+    offsets: list[tuple[int, ...]] = []
+    for axis_index in range(ndim):
+        negative_offset = [0] * ndim
+        positive_offset = [0] * ndim
+        negative_offset[axis_index] = -1
+        positive_offset[axis_index] = 1
+        offsets.append(tuple(negative_offset))
+        offsets.append(tuple(positive_offset))
+    return offsets
+
+
+def grow_root_regions_by_radius(
+    void_phase_mask: np.ndarray,
+    distance_map: np.ndarray,
+    voxel_regions: MaximalBallVoxelRegions,
+    *,
+    minimum_supporting_neighbors: int,
+    require_strictly_larger_radius: bool,
+    iterations: int = 1,
+) -> MaximalBallVoxelRegions:
+    """Grow root regions across unassigned void voxels using local radius rules."""
+
+    if minimum_supporting_neighbors < 1:
+        raise ValueError("minimum_supporting_neighbors must be at least 1")
+    if iterations < 1:
+        raise ValueError("iterations must be at least 1")
+
+    mask = np.asarray(void_phase_mask, dtype=bool)
+    working_distance_map = np.asarray(distance_map, dtype=float)
+    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    if mask.shape != label_image.shape or mask.shape != working_distance_map.shape:
+        raise ValueError("void_phase_mask, distance_map, and voxel_regions.label_image must match")
+
+    neighbor_offsets = _neighbor_offsets(mask.ndim)
+    image_shape = np.asarray(mask.shape, dtype=np.int64)
+    for _ in range(iterations):
+        previous_labels = label_image.copy()
+        changed_any_voxel = False
+        unassigned_indices = np.argwhere(mask & (previous_labels == voxel_regions.unassigned_label))
+        for voxel_index in unassigned_indices:
+            voxel_index_tuple = tuple(int(value) for value in voxel_index)
+            voxel_radius = float(working_distance_map[voxel_index_tuple])
+            supporting_label_counts: dict[int, int] = {}
+            for neighbor_offset in neighbor_offsets:
+                neighbor_index = voxel_index + np.asarray(neighbor_offset, dtype=np.int64)
+                if np.any(neighbor_index < 0) or np.any(neighbor_index >= image_shape):
+                    continue
+                neighbor_index_tuple = tuple(int(value) for value in neighbor_index)
+                neighbor_label = int(previous_labels[neighbor_index_tuple])
+                if neighbor_label < 0:
+                    continue
+                neighbor_radius = float(working_distance_map[neighbor_index_tuple])
+                supports_voxel = (
+                    neighbor_radius > voxel_radius
+                    if require_strictly_larger_radius
+                    else neighbor_radius >= voxel_radius
+                )
+                if not supports_voxel:
+                    continue
+                supporting_label_counts[neighbor_label] = (
+                    supporting_label_counts.get(neighbor_label, 0) + 1
+                )
+
+            if not supporting_label_counts:
+                continue
+            best_label, best_support = max(
+                supporting_label_counts.items(),
+                key=lambda item: (item[1], -item[0]),
+            )
+            if best_support >= minimum_supporting_neighbors:
+                label_image[voxel_index_tuple] = int(best_label)
+                changed_any_voxel = True
+        if not changed_any_voxel:
+            break
+
+    return MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=voxel_regions.root_ball_indices,
+        root_labels=voxel_regions.root_labels,
+        root_center_indices=voxel_regions.root_center_indices,
+        root_radii_voxels=voxel_regions.root_radii_voxels,
+        root_of_ball_index=voxel_regions.root_of_ball_index,
+        unassigned_label=voxel_regions.unassigned_label,
+    )
+
+
+def assign_voxel_regions_from_hierarchy(
+    void_phase_mask: np.ndarray,
+    maximal_ball_hierarchy: MaximalBallHierarchy,
+) -> MaximalBallVoxelRegions:
+    """Assign voxel ownership from a maximal-ball hierarchy using staged growth passes."""
+
+    voxel_regions = initialize_root_region_labels(
+        void_phase_mask,
+        maximal_ball_hierarchy,
+    )
+    voxel_regions = seed_root_region_ball_interiors(
+        void_phase_mask,
+        maximal_ball_hierarchy,
+        voxel_regions,
+    )
+    growth_schedule = [
+        (3, True, 4),
+        (2, True, 6),
+        (2, False, 8),
+        (1, False, 8),
+    ]
+    for minimum_supporting_neighbors, require_strictly_larger_radius, iterations in growth_schedule:
+        voxel_regions = grow_root_regions_by_radius(
+            void_phase_mask,
+            maximal_ball_hierarchy.distance_map,
+            voxel_regions,
+            minimum_supporting_neighbors=minimum_supporting_neighbors,
+            require_strictly_larger_radius=require_strictly_larger_radius,
+            iterations=iterations,
+        )
+    return voxel_regions
+
+
+def measure_region_adjacency(
+    void_phase_mask: np.ndarray,
+    voxel_regions: MaximalBallVoxelRegions,
+) -> MaximalBallRegionAdjacency:
+    """Measure pore-region volumes, interfaces, and boundary contacts.
+
+    Parameters
+    ----------
+    void_phase_mask :
+        Boolean void-domain mask used for extraction.
+    voxel_regions :
+        Labeled pore/root ownership image.
+
+    Returns
+    -------
+    MaximalBallRegionAdjacency
+        Region-wise voxel volumes and region-pair interface measurements.
+
+    Notes
+    -----
+    This stage converts the voxel partition into the basic discrete geometry we
+    need for a native `pnextract`-like network assembly:
+
+    - region voxel counts become pore-region volumes
+    - region-pair contact faces become throat candidates
+    - boundary-face contacts expose inlet/outlet touching regions
+
+    The centroid coordinates are reported in voxel-index units, using face
+    midpoint locations such as ``i + 0.5`` along the axis normal to the
+    interface.
+    """
+
+    mask = np.asarray(void_phase_mask, dtype=bool)
+    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64)
+    if mask.shape != label_image.shape:
+        raise ValueError("void_phase_mask and voxel_regions.label_image must match")
+
+    region_labels = np.asarray(voxel_regions.root_labels, dtype=np.int64)
+    region_count = int(region_labels.size)
+    region_volume_voxels = np.zeros(region_count, dtype=np.int64)
+    region_surface_face_counts = np.zeros(region_count, dtype=np.int64)
+    boundary_face_counts = np.zeros((region_count, 2 * mask.ndim), dtype=np.int64)
+
+    assigned_void_mask = mask & (label_image >= 0)
+    if np.any(label_image[assigned_void_mask] >= region_count):
+        raise ValueError("voxel region labels must be contiguous root labels starting at zero")
+
+    if np.any(assigned_void_mask):
+        region_volume_voxels += np.bincount(
+            label_image[assigned_void_mask],
+            minlength=region_count,
+        ).astype(np.int64, copy=False)
+
+    pair_face_counts: dict[tuple[int, int], int] = {}
+    pair_axis_face_balance: dict[tuple[int, int], np.ndarray] = {}
+    pair_centroid_sums: dict[tuple[int, int], np.ndarray] = {}
+
+    image_shape = np.asarray(mask.shape, dtype=np.int64)
+    for axis_index in range(mask.ndim):
+        lower_boundary_selector = [slice(None)] * mask.ndim
+        lower_boundary_selector[axis_index] = 0
+        lower_boundary_void_mask = assigned_void_mask[tuple(lower_boundary_selector)]
+        lower_boundary_labels = label_image[tuple(lower_boundary_selector)]
+        if np.any(lower_boundary_void_mask):
+            lower_counts = np.bincount(
+                lower_boundary_labels[lower_boundary_void_mask],
+                minlength=region_count,
+            )
+            boundary_face_counts[:, 2 * axis_index] += lower_counts.astype(np.int64, copy=False)
+            region_surface_face_counts += lower_counts.astype(np.int64, copy=False)
+
+        upper_boundary_selector = [slice(None)] * mask.ndim
+        upper_boundary_selector[axis_index] = int(image_shape[axis_index] - 1)
+        upper_boundary_void_mask = assigned_void_mask[tuple(upper_boundary_selector)]
+        upper_boundary_labels = label_image[tuple(upper_boundary_selector)]
+        if np.any(upper_boundary_void_mask):
+            upper_counts = np.bincount(
+                upper_boundary_labels[upper_boundary_void_mask],
+                minlength=region_count,
+            )
+            boundary_face_counts[:, 2 * axis_index + 1] += upper_counts.astype(
+                np.int64,
+                copy=False,
+            )
+            region_surface_face_counts += upper_counts.astype(np.int64, copy=False)
+
+        lower_slices = [slice(None)] * mask.ndim
+        upper_slices = [slice(None)] * mask.ndim
+        lower_slices[axis_index] = slice(0, -1)
+        upper_slices[axis_index] = slice(1, None)
+        lower_slices_tuple = tuple(lower_slices)
+        upper_slices_tuple = tuple(upper_slices)
+
+        lower_assigned_mask = assigned_void_mask[lower_slices_tuple]
+        upper_assigned_mask = assigned_void_mask[upper_slices_tuple]
+        lower_labels = label_image[lower_slices_tuple]
+        upper_labels = label_image[upper_slices_tuple]
+
+        differing_assignment_mask = lower_assigned_mask & (
+            (~upper_assigned_mask) | (lower_labels != upper_labels)
+        )
+        if np.any(differing_assignment_mask):
+            lower_surface_counts = np.bincount(
+                lower_labels[differing_assignment_mask],
+                minlength=region_count,
+            )
+            region_surface_face_counts += lower_surface_counts.astype(np.int64, copy=False)
+
+        differing_assignment_mask = upper_assigned_mask & (
+            (~lower_assigned_mask) | (lower_labels != upper_labels)
+        )
+        if np.any(differing_assignment_mask):
+            upper_surface_counts = np.bincount(
+                upper_labels[differing_assignment_mask],
+                minlength=region_count,
+            )
+            region_surface_face_counts += upper_surface_counts.astype(np.int64, copy=False)
+
+        shared_interface_mask = (
+            lower_assigned_mask
+            & upper_assigned_mask
+            & (lower_labels >= 0)
+            & (upper_labels >= 0)
+            & (lower_labels != upper_labels)
+        )
+        if not np.any(shared_interface_mask):
+            continue
+
+        lower_interface_labels = lower_labels[shared_interface_mask]
+        upper_interface_labels = upper_labels[shared_interface_mask]
+        interface_indices = np.argwhere(shared_interface_mask).astype(float, copy=False)
+        face_midpoint_indices = interface_indices.copy()
+        face_midpoint_indices[:, axis_index] += 0.5
+
+        for face_index in range(interface_indices.shape[0]):
+            first_label = int(lower_interface_labels[face_index])
+            second_label = int(upper_interface_labels[face_index])
+            if first_label < second_label:
+                ordered_pair = (first_label, second_label)
+                orientation_sign = 1.0
+            else:
+                ordered_pair = (second_label, first_label)
+                orientation_sign = -1.0
+
+            pair_face_counts[ordered_pair] = pair_face_counts.get(ordered_pair, 0) + 1
+            if ordered_pair not in pair_axis_face_balance:
+                pair_axis_face_balance[ordered_pair] = np.zeros(mask.ndim, dtype=float)
+            if ordered_pair not in pair_centroid_sums:
+                pair_centroid_sums[ordered_pair] = np.zeros(mask.ndim, dtype=float)
+            pair_axis_face_balance[ordered_pair][axis_index] += orientation_sign
+            pair_centroid_sums[ordered_pair] += face_midpoint_indices[face_index]
+
+    ordered_pairs = sorted(pair_face_counts)
+    throat_region_pairs = np.asarray(ordered_pairs, dtype=np.int64)
+    throat_count = len(ordered_pairs)
+    throat_face_counts = np.zeros(throat_count, dtype=np.int64)
+    throat_axis_face_balance = np.zeros((throat_count, mask.ndim), dtype=float)
+    throat_centroid_indices = np.zeros((throat_count, mask.ndim), dtype=float)
+    for throat_index, ordered_pair in enumerate(ordered_pairs):
+        face_count = int(pair_face_counts[ordered_pair])
+        throat_face_counts[throat_index] = face_count
+        throat_axis_face_balance[throat_index] = pair_axis_face_balance[ordered_pair]
+        throat_centroid_indices[throat_index] = pair_centroid_sums[ordered_pair] / max(
+            face_count, 1
+        )
+
+    return MaximalBallRegionAdjacency(
+        region_labels=region_labels,
+        region_volume_voxels=region_volume_voxels,
+        region_surface_face_counts=region_surface_face_counts,
+        throat_region_pairs=throat_region_pairs,
+        throat_face_counts=throat_face_counts,
+        throat_axis_face_balance=throat_axis_face_balance,
+        throat_centroid_indices=throat_centroid_indices,
+        boundary_face_counts=boundary_face_counts,
+    )
+
+
+def extract_maximal_ball_regions(
+    void_phase_mask: np.ndarray,
+    *,
+    distance_map_backend: str = "auto",
+    settings: MaximalBallSettings | None = None,
+    apply_boundary_clipping: bool = True,
+) -> MaximalBallExtractionResult:
+    """Run the staged native maximal-ball pipeline up to region adjacency.
+
+    This is the current highest-level native extraction entry point that stays
+    independent of PoreSpy network generation. It stops at voxel-region and
+    interface geometry because the final pore/throat-to-`Network` assembly is
+    still under active implementation.
+    """
+
+    candidates = extract_maximal_ball_candidates(
+        void_phase_mask,
+        distance_map_backend=distance_map_backend,
+        settings=settings,
+        apply_boundary_clipping=apply_boundary_clipping,
+    )
+    hierarchy = build_maximal_ball_hierarchy(candidates)
+    voxel_regions = assign_voxel_regions_from_hierarchy(void_phase_mask, hierarchy)
+    region_adjacency = measure_region_adjacency(void_phase_mask, voxel_regions)
+    return MaximalBallExtractionResult(
+        candidates=candidates,
+        hierarchy=hierarchy,
+        voxel_regions=voxel_regions,
+        region_adjacency=region_adjacency,
+    )
+
+
 def extract_maximal_ball_candidates(
     void_phase_mask: np.ndarray,
     *,
@@ -617,14 +1119,23 @@ def extract_maximal_ball_candidates(
 
 __all__ = [
     "MaximalBallCandidates",
+    "MaximalBallExtractionResult",
     "MaximalBallHierarchy",
+    "MaximalBallRegionAdjacency",
     "MaximalBallSettings",
+    "MaximalBallVoxelRegions",
     "ResolvedMaximalBallSettings",
+    "assign_voxel_regions_from_hierarchy",
     "build_maximal_ball_hierarchy",
     "clip_distance_map_to_domain_boundaries",
     "compute_void_distance_map",
+    "extract_maximal_ball_regions",
     "extract_maximal_ball_candidates",
     "find_maximal_ball_candidates",
+    "grow_root_regions_by_radius",
+    "initialize_root_region_labels",
+    "measure_region_adjacency",
     "resolve_maximal_ball_settings",
+    "seed_root_region_ball_interiors",
     "suppress_overlapping_maximal_balls",
 ]
