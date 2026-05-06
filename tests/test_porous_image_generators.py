@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import numpy as np
 import pytest
 
 from voids.generators import generate_spanning_multiscale_blobs_matrix
@@ -92,8 +95,22 @@ def test_coerce_blobiness_accepts_scalar_and_rejects_nonpositive_values() -> Non
         pimg._coerce_blobiness((1.0, -2.0), ndim=2, name="blobiness")
 
 
-def test_generate_spanning_multiscale_blobs_matrix_can_fail_cleanly() -> None:
-    """A single low-porosity trial on a tiny 2D image may legitimately fail to span."""
+def test_generate_spanning_multiscale_blobs_matrix_can_fail_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The multiscale generator should raise cleanly when the trial image cannot span."""
+
+    def fake_blobs(*, shape, porosity, blobiness, seed, periodic):
+        del porosity, blobiness, seed, periodic
+        field = np.ones(shape, dtype=float)
+        field[:3, :] = 0.0
+        return field
+
+    monkeypatch.setattr(
+        pimg,
+        "ps",
+        SimpleNamespace(generators=SimpleNamespace(blobs=fake_blobs)),
+    )
 
     with pytest.raises(RuntimeError, match="Could not generate spanning multiscale blobs matrix"):
         generate_spanning_multiscale_blobs_matrix(
