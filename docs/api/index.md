@@ -34,9 +34,11 @@ If you already know what you want to do, these are the main entry points:
 | Scale an imported network from voxel units | `voids.io.porespy.scale_porespy_geometry` |
 | Infer Cartesian boundary labels | `voids.io.porespy.ensure_cartesian_boundary_labels` |
 | Import a PoreSpy/OpenPNM-style dictionary | `voids.io.porespy.from_porespy` |
+| Extract a native maximal-ball network from a segmented image | `voids.image.extract_maximal_ball_network_dict` |
 | Compute porosity and connectivity diagnostics | `voids.physics.petrophysics` |
 | Solve single-phase flow | `voids.physics.singlephase.solve` |
 | Save and reload a canonical network | `voids.io.hdf5.save_hdf5`, `voids.io.hdf5.load_hdf5` |
+| Render a network interactively | `voids.visualization.plotly`, `voids.visualization.pyvista` |
 | Cross-check a workflow against OpenPNM conventions | `voids.benchmarks.crosscheck` |
 
 ---

@@ -95,6 +95,26 @@ Those two goals are intentionally separated across the documentation tree:
 
 ---
 
+## Other User-Facing Capabilities
+
+Some parts of `voids` were already implemented but easier to miss in the previous
+docs structure because they mostly appeared under the API reference. The most
+important ones are:
+
+- [I/O](api/io.md): HDF5 persistence and import/export helpers for canonical
+  and external network formats
+- [Image Processing](api/image.md): segmentation helpers, spanning-cluster
+  checks, and the native maximal-ball extraction backend
+- [Generators](api/generators.md) and [Examples API](api/examples.md): synthetic
+  porous images, deterministic network generators, and mesh-like fixtures
+- [Visualization](api/visualization.md): Plotly and PyVista rendering for
+  inspection and communication
+- [Benchmarks](api/benchmarks.md): reusable wrappers for OpenPNM, segmented
+  volume, and XLB cross-check workflows
+- [Simulators](api/simulators.md): ready-to-run single-phase workflow entry points
+
+---
+
 ## Current Scope (v0.1.x)
 
 | Feature | Status |

@@ -5,6 +5,12 @@ connectivity analysis, and pore network extraction used in vug sensitivity studi
 
 ---
 
+## Maximal-Ball Extraction
+
+::: voids.image.maximal_ball
+
+---
+
 ## Network Extraction
 
 ::: voids.image.network_extraction

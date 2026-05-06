@@ -80,22 +80,25 @@ extra:
 nav:
   - Home: index.md
   - Getting Started: getting_started.md
-  - Concepts and Conventions: concepts.md
+  - Concepts and Background:
+    - Concepts and Conventions: concepts.md
+    - Image Segmentation & Network Extraction: image_segmentation_network_extraction.md
+    - Theoretical Background: background.md
   - Scientific Workflow: workflow.md
-  - Image Segmentation & Network Extraction: image_segmentation_network_extraction.md
-  - Examples: examples.md
-  - Notebook Reports:
-    - Overview: notebook_reports/index.md
-    - Shape-Factor Conductance Comparison: notebook_reports/14_mwe_shape_factor_conductance_comparison.md
-    - External pnextract / pnflow Benchmark Notebook: notebook_reports/15_mwe_external_pnflow_benchmark.md
-    - Kabs Benchmark With Thermodynamic Viscosity: notebook_reports/16_mwe_viscosity_model_kabs_benchmark.md
-    - Solver Options Benchmark Notebook: notebook_reports/17_mwe_solver_options_benchmark.md
+  - Examples:
+    - Overview: examples.md
+    - Notebook Reports:
+      - Overview: notebook_reports/index.md
+      - Shape-Factor Conductance Comparison: notebook_reports/14_mwe_shape_factor_conductance_comparison.md
+      - External Reference CNM Benchmark Notebook: notebook_reports/15_mwe_external_pnflow_benchmark.md
+      - Kabs Benchmark With Thermodynamic Viscosity: notebook_reports/16_mwe_viscosity_model_kabs_benchmark.md
+      - Solver Options Benchmark Notebook: notebook_reports/17_mwe_solver_options_benchmark.md
   - Verification & Validation:
     - Overview: verification/index.md
     - Verification:
       - Software Verification Overview: verification/software.md
       - OpenPNM Extracted-Network Cross-Check: verification/openpnm.md
-      - External pnextract / pnflow Benchmark: verification/pnflow.md
+      - External Reference CNM Benchmark: verification/pnflow.md
       - XLB Direct-Image Permeability Benchmark: verification/xlb.md
       - DRP-443 Fracture-Network Verification Overview: verification/drp443.md
       - DRP-10 Estaillades Verification Overview: verification/drp10.md
@@ -113,7 +116,6 @@ nav:
       - DRP-317 Leopard Notebook Report: validation/drp317_leopard.md
       - DRP-317 Bentheimer Notebook Report: validation/drp317_bentheimer.md
       - DRP-317 Bandera Gray Notebook Report: validation/drp317_banderagray.md
-  - Theoretical Background: background.md
   - API Reference:
     - Overview: api/index.md
     - Core Data Structures:

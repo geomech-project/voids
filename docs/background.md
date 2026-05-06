@@ -98,7 +98,7 @@ G_{\mathrm{square}} = \frac{1}{16}, \qquad
 G_{\mathrm{triangle}} = \frac{\sqrt{3}}{36}.
 \]
 
-In the equivalent-duct construction used in the Imperial College workflow, the
+In the equivalent-duct construction used in this modeling family, the
 cross-section is represented by an admissible duct family with the same inscribed
 radius \(r\) and shape factor \(G\). For that family,
 
@@ -115,7 +115,7 @@ Two cautions are important:
 
 1. The pair \((r, G)\) is a reduced constitutive representation, not a full
    reconstruction of the original cross-section.
-2. The square/circle transition used in `voids` follows the historical `pnflow`
+2. The square/circle transition used in `voids` follows a historical
    implementation convention. It is a pragmatic modeling rule, not a universal theorem.
 
 ### Valvatne-Blunt Throat-Only Model
@@ -529,8 +529,8 @@ The main assumptions that should be stated explicitly in any study using `voids`
    not for the raw backend callable.
 5. Apparent permeability depends on the correctness of `SampleGeometry.lengths` and
    `SampleGeometry.cross_sections`.
-6. Multiphase polygonal corner physics from the full Imperial College `pnflow`
-   framework is not implemented yet.
+6. Full multiphase polygonal-corner physics from the broader network-modeling
+   literature is not implemented yet.
 
 If any of these assumptions are not acceptable for a given study, the workflow needs
 to be tightened before the resulting permeability should be interpreted quantitatively.
@@ -546,7 +546,7 @@ to be tightened before the resulting permeability should be interpreted quantita
   noncircular capillaries I. One-phase creeping flow. *Journal of Colloid and
   Interface Science*, 236(2), 295-304.
 - Valvatne, P. H. (2004). *Predictive pore-scale modelling of multiphase flow*.
-  PhD thesis, Imperial College London.
+  PhD thesis.
 - Valvatne, P. H., and M. J. Blunt (2004). Predictive pore-scale modeling of
   two-phase flow in mixed wet media. *Water Resources Research*, 40(7).
 - Blunt, M. J., et al. (2013). Pore-scale imaging and modelling. *Advances in Water

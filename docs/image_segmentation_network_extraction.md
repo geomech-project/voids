@@ -236,7 +236,7 @@ net_spanning = result.net
 
 Use `extract_spanning_pore_network` when you only need image extraction. Use
 `construct_spanning_network` when you want a single interface that can also
-construct imported reference networks such as Imperial CNM files.
+construct imported reference networks in the same canonical schema.
 
 ---
 
@@ -245,9 +245,8 @@ construct imported reference networks such as Imperial CNM files.
 | Public backend | Normalized backend | Dependency | Main purpose |
 |---|---|---|---|
 | `porespy`, `snow2`, `porespy_snow2` | `porespy_snow2` | PoreSpy | Standard PoreSpy `snow2` extraction |
-| `porespy_imperial`, `imperial_snow2`, `snow2_imperial` | `porespy_snow2_imperial` | PoreSpy | `snow2` with benchmark-tuned defaults closer to Imperial reference cases |
+| `porespy_imperial`, `imperial_snow2`, `snow2_imperial` | `porespy_snow2_imperial` | PoreSpy | `snow2` with benchmark-tuned defaults for a more conservative reduction |
 | `native_maximal_ball`, `maximal_ball`, `maxball` | `native_maximal_ball` | NumPy/SciPy, optional `edt` | Native dependency-light maximal-ball extraction |
-| `pnflow_cnm`, `imperial_cnm`, `pnextract_cnm` | `pnflow_cnm` | none beyond `voids` | Import saved Imperial CNM text files, not image extraction |
 
 ### PoreSpy `snow2`
 
@@ -270,7 +269,7 @@ result = construct_spanning_network(
 ### PoreSpy Imperial Approximation
 
 `backend="porespy_imperial"` still uses PoreSpy `snow2`, but starts with
-defaults selected during the `pnextract` / `pnflow` benchmark investigation:
+defaults selected during the external-reference benchmark investigation:
 
 | Option | Default |
 |---|---:|
@@ -279,50 +278,32 @@ defaults selected during the `pnextract` / `pnflow` benchmark investigation:
 | `boundary_width` | `1` |
 
 User-supplied `extraction_kwargs` override these values. This backend is a
-practical approximation mode, not a clone of `pnextract`.
+practical approximation mode, not an exact replica of any external extractor.
 
 ### Native Maximal-Ball
 
 The native maximal-ball backend is implemented inside `voids`. It is intended
 for transparent, dependency-light extraction and staged verification against the
-Imperial maximal-ball workflow.
+classical maximal-ball literature.
 
 ![Native maximal-ball schematic](assets/image_network_extraction/maximal_ball_schematic.png)
 
 The current native implementation includes:
 
 - Euclidean void-distance field
-- Imperial-style boundary clipping heuristic
+- boundary clipping heuristic
 - maximal-ball candidate selection and overlap suppression
 - parent-child ball hierarchy
 - root-region voxel assignment and boundary cleanup
 - region adjacency and interface face counting
 - pore/throat geometry assembly
 - optional external-reservoir helper pores on the flow axis
-- Imperial-style shape-factor repair and pore shape-factor reconstruction
+- shape-factor repair and pore shape-factor reconstruction
 
-It is not yet exact `pnextract` parity. The remaining benchmark mismatch is
+It is not yet exact external-reference parity. The remaining benchmark mismatch is
 concentrated in throat cross-section, shape-factor, and throat-surface ball
-details. See the [External pnextract / pnflow Benchmark](verification/pnflow.md)
+details. See the [External Reference CNM Benchmark](verification/pnflow.md)
 for the current evidence.
-
-### Imported Imperial CNM
-
-`backend="pnflow_cnm"` imports saved Imperial `*_node*.dat` and `*_link*.dat`
-files. It is useful for solver and conductance cross-checks on the same reduced
-network. It is not an image segmentation or extraction backend.
-
-```python
-result = construct_spanning_network(
-    backend="pnflow_cnm",
-    pnflow_cnm_prefix="case_dir/case_name",
-    pnflow_solver_box_compat=True,
-)
-```
-
-The option `pnflow_solver_box_compat=True` reproduces a checked-in `pnflow`
-solver-box preprocessing detail used by the benchmark. Leave it `False` for a
-generic CNM import.
 
 ---
 
@@ -676,7 +657,7 @@ result = construct_spanning_network(
 
 - Basic threshold segmentation is available, but advanced grayscale/ML/manual
   segmentation remains an upstream scientific preprocessing task.
-- The native maximal-ball backend is not yet exact `pnextract` parity.
+- The native maximal-ball backend is not yet exact external-reference parity.
 - Pore and throat geometry are model reductions, not direct measurements of all
   voxel-scale surface detail.
 - Boundary labels are inferred from Cartesian assumptions unless supplied by the
@@ -686,6 +667,57 @@ result = construct_spanning_network(
 
 For the current single-phase verification status, see:
 
-- [External pnextract / pnflow Benchmark](verification/pnflow.md)
+- [External Reference CNM Benchmark](verification/pnflow.md)
 - [OpenPNM Extracted-Network Cross-Check](verification/openpnm.md)
 - [XLB Direct-Image Permeability Benchmark](verification/xlb.md)
+
+---
+
+## References
+
+The page above mixes two different sources of methodology:
+
+- basic grayscale preprocessing and thresholding utilities implemented through
+  standard scientific-Python image-processing routines,
+- and maximal-ball plus extracted-network ideas from the broader pore-network
+  modeling literature.
+
+The most relevant references for the current `voids` image-to-network workflow are:
+
+- Dong, H., and M. J. Blunt (2009). *Pore-network extraction from
+  micro-computerized-tomography images*. *Physical Review E*, 80, 036307.
+  This is the key maximal-ball extraction reference behind the native
+  maximal-ball backend.
+- Raeini, A. Q., B. Bijeljic, and M. J. Blunt (2017). *Generalized network
+  modeling: Network extraction as a coarse-scale discretization of the void
+  space of porous media*. *Physical Review E*, 96, 013312. This is the main
+  extraction-as-discretization reference and is the closest conceptual
+  reference for the reduction viewpoint adopted in this page.
+- Bultreys, T., Q. Lin, Y. Gao, A. Q. Raeini, A. AlRatrout, B. Bijeljic, and
+  M. J. Blunt (2018). *Validation of model predictions of pore-scale fluid
+  distributions during two-phase flow*. *Physical Review E*, 97, 053104. This
+  is relevant because it documents validation of this broader extraction and
+  pore-scale modeling lineage.
+- Al-Kharusi, A. S., and M. J. Blunt (2008). *Multiphase flow predictions from
+  carbonate pore space images using extracted network models*. *Water
+  Resources Research*, 44, W06S01. This is a useful image-to-network workflow
+  reference showing the broader extraction pipeline from image to transport
+  prediction.
+- Valvatne, P. H., and M. J. Blunt (2004). *Predictive pore-scale modeling of
+  two-phase flow in mixed wet media*. *Water Resources Research*, 40(7). This
+  is primarily a flow-model reference rather than a segmentation reference, but
+  it is still relevant here because the extracted geometry is ultimately
+  consumed by the same conduit-style pore-network modeling tradition.
+- Valvatne, P. H. (2004). *Predictive pore-scale modelling of multiphase flow*.
+  PhD thesis. This thesis provides additional
+  background on the pore-network geometry and flow-model context used by
+  conduit-based network models.
+- Blunt, M. J., M. D. Jackson, M. Piri, and P. H. Valvatne (2002).
+  *Detailed physics, predictive capabilities and macroscopic consequences for
+  pore-network models of multiphase flow*. *Advances in Water Resources*, 25,
+  1069-1089. This is broader background for why extracted pore-throat networks
+  are used as reduced models of the void space.
+- Blunt, M. J., et al. (2013). *Pore-scale imaging and modelling*. *Advances in
+  Water Resources*, 51, 197-216. This is a broader review placing segmented
+  imaging, network extraction, and direct-image simulation in the same
+  pore-scale modeling landscape.
