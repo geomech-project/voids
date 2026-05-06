@@ -38,6 +38,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from voids.benchmarks import compare_network_geometry
 from voids.image import construct_spanning_network
 from voids.paths import data_path, project_root
 from voids.physics.petrophysics import absolute_porosity, effective_porosity
@@ -124,18 +125,15 @@ def _load_reference_case(
     return np.asarray(volume, dtype=bool), metrics
 
 
-def _run_voids_from_volume_case(
+def _construct_voids_from_volume_case(
     volume: np.ndarray,
     *,
     voxel_size: float,
     flow_axis: str,
-    fluid: FluidSinglePhase,
-    options: SinglePhaseOptions,
     backend: str,
-    metric_prefix: str,
     extraction_kwargs: dict[str, object] | None = None,
-) -> dict[str, float | int]:
-    construction = construct_spanning_network(
+) -> object:
+    return construct_spanning_network(
         backend=backend,
         phases=volume.astype(int),
         voxel_size=voxel_size,
@@ -143,6 +141,21 @@ def _run_voids_from_volume_case(
         extraction_kwargs=extraction_kwargs,
         provenance_notes={"benchmark_kind": "external_pnflow_reference"},
     )
+
+
+def _summarize_voids_construction_transport(
+    construction: object,
+    *,
+    flow_axis: str,
+    fluid: FluidSinglePhase,
+    options: SinglePhaseOptions,
+    metric_prefix: str,
+) -> dict[str, float | int]:
+    image = getattr(construction, "image", None)
+    if image is None:
+        raise ValueError(
+            "Image-based construction is required for volume transport summary"
+        )
     bc = PressureBC(
         f"inlet_{flow_axis}min",
         f"outlet_{flow_axis}max",
@@ -157,7 +170,7 @@ def _run_voids_from_volume_case(
         options=options,
     )
     return {
-        "phi_image": float(np.asarray(volume, dtype=bool).mean()),
+        "phi_image": float(np.asarray(image, dtype=bool).mean()),
         f"phi_abs_{metric_prefix}_voids": float(absolute_porosity(construction.net)),
         f"phi_eff_{metric_prefix}_voids": float(
             effective_porosity(construction.net, axis=flow_axis)
@@ -169,20 +182,27 @@ def _run_voids_from_volume_case(
     }
 
 
-def _run_voids_on_imported_cnm_case(
+def _construct_voids_on_imported_cnm_case(
     prefix: Path,
     *,
     flow_axis: str,
-    fluid: FluidSinglePhase,
-    options: SinglePhaseOptions,
-) -> dict[str, float | int]:
-    construction = construct_spanning_network(
+) -> object:
+    return construct_spanning_network(
         backend="pnflow_cnm",
         pnflow_cnm_prefix=prefix,
         pnflow_solver_box_compat=True,
         flow_axis=flow_axis,
         provenance_notes={"benchmark_kind": "external_pnflow_reference"},
     )
+
+
+def _summarize_imported_cnm_transport(
+    construction: object,
+    *,
+    flow_axis: str,
+    fluid: FluidSinglePhase,
+    options: SinglePhaseOptions,
+) -> dict[str, float | int]:
     bc = PressureBC(
         f"inlet_{flow_axis}min",
         f"outlet_{flow_axis}max",
@@ -209,6 +229,62 @@ def _run_voids_on_imported_cnm_case(
         "Nt_imported_voids": int(construction.net.Nt),
         "k_imported_voids": float(result.permeability[flow_axis]),
         "Q_imported_voids": float(result.total_flow_rate),
+    }
+
+
+def _geometry_comparison_metrics(
+    imported_construction: object,
+    candidate_construction: object,
+    *,
+    flow_axis: str,
+    candidate_name: str,
+) -> dict[str, float | int]:
+    imported_full_net = imported_construction.net_full
+    n_physical_pores = int(imported_construction.backend_details["n_physical_pores"])
+    imported_physical_mask = (
+        np.arange(imported_full_net.Np, dtype=np.int64) < n_physical_pores
+    )
+    comparison = compare_network_geometry(
+        imported_full_net,
+        candidate_construction.net_full,
+        axis=flow_axis,
+        reference_pore_mask=imported_physical_mask,
+        reference_name="imported_physical",
+        candidate_name=candidate_name,
+    )
+    return {
+        f"{candidate_name}_geom_pore_count_rel_diff": float(
+            comparison.pore_count_rel_diff
+        ),
+        f"{candidate_name}_geom_throat_count_rel_diff": float(
+            comparison.throat_count_rel_diff
+        ),
+        f"{candidate_name}_geom_mean_coordination_rel_diff": float(
+            comparison.mean_coordination_rel_diff
+        ),
+        f"{candidate_name}_geom_pore_radius_ks": float(comparison.pore_radius_ks),
+        f"{candidate_name}_geom_throat_radius_ks": float(comparison.throat_radius_ks),
+        f"{candidate_name}_geom_throat_area_ks": float(comparison.throat_area_ks),
+        f"{candidate_name}_geom_throat_length_ks": float(comparison.throat_length_ks),
+        f"{candidate_name}_geom_throat_core_length_ks": float(
+            comparison.throat_core_length_ks
+        ),
+        f"{candidate_name}_geom_coordination_ks": float(comparison.coordination_ks),
+        f"{candidate_name}_geom_throat_face_count_ks": float(
+            comparison.throat_face_count_ks
+        ),
+        f"{candidate_name}_geom_n_components": int(
+            comparison.candidate_summary.n_components
+        ),
+        f"{candidate_name}_geom_dead_end_fraction": float(
+            comparison.candidate_summary.dead_end_fraction
+        ),
+        f"{candidate_name}_geom_overlap_boundary_count": int(
+            comparison.candidate_summary.overlapping_boundary_count
+        ),
+        f"{candidate_name}_geom_support_radius_mean": float(
+            comparison.candidate_summary.throat_support_radius_mean
+        ),
     }
 
 
@@ -451,32 +527,56 @@ for row in manifest_df.itertuples(index=False):
     row_series = pd.Series(row._asdict())
     volume, pnflow_metrics = _load_reference_case(reference_root, row_series)
     case_root = reference_root / str(row_series["case"])
-    imported_metrics = _run_voids_on_imported_cnm_case(
+    imported_construction = _construct_voids_on_imported_cnm_case(
         case_root / str(row_series["case"]),
         flow_axis=str(row_series["flow_axis"]),
-        fluid=fluid,
-        options=options,
     )
-    porespy_metrics = _run_voids_from_volume_case(
-        volume,
-        voxel_size=float(row_series["voxel_size_m"]),
+    imported_metrics = _summarize_imported_cnm_transport(
+        imported_construction,
         flow_axis=str(row_series["flow_axis"]),
         fluid=fluid,
         options=options,
+    )
+    porespy_construction = _construct_voids_from_volume_case(
+        volume,
+        voxel_size=float(row_series["voxel_size_m"]),
+        flow_axis=str(row_series["flow_axis"]),
         backend="porespy",
+    )
+    porespy_metrics = _summarize_voids_construction_transport(
+        porespy_construction,
+        flow_axis=str(row_series["flow_axis"]),
+        fluid=fluid,
+        options=options,
         metric_prefix="porespy",
     )
-    maxball_metrics = _run_voids_from_volume_case(
+    maxball_construction = _construct_voids_from_volume_case(
         volume,
         voxel_size=float(row_series["voxel_size_m"]),
         flow_axis=str(row_series["flow_axis"]),
-        fluid=fluid,
-        options=options,
         backend="native_maximal_ball",
-        metric_prefix="maxball",
         extraction_kwargs={
             "distance_map_backend": "scipy",
         },
+    )
+    maxball_metrics = _summarize_voids_construction_transport(
+        maxball_construction,
+        flow_axis=str(row_series["flow_axis"]),
+        fluid=fluid,
+        options=options,
+        metric_prefix="maxball",
+    )
+    porespy_geometry_metrics = _geometry_comparison_metrics(
+        imported_construction,
+        porespy_construction,
+        flow_axis=str(row_series["flow_axis"]),
+        candidate_name="porespy",
+    )
+    maxball_geometry_metrics = _geometry_comparison_metrics(
+        imported_construction,
+        maxball_construction,
+        flow_axis=str(row_series["flow_axis"]),
+        candidate_name="maxball",
     )
     rows.append(
         {
@@ -485,6 +585,8 @@ for row in manifest_df.itertuples(index=False):
             **imported_metrics,
             **porespy_metrics,
             **maxball_metrics,
+            **porespy_geometry_metrics,
+            **maxball_geometry_metrics,
         }
     )
 
@@ -569,8 +671,39 @@ display_columns = [
     "k_rel_diff_imported",
     "k_rel_diff_porespy",
     "k_rel_diff_maxball",
+    "porespy_geom_pore_count_rel_diff",
+    "porespy_geom_throat_count_rel_diff",
+    "porespy_geom_throat_radius_ks",
+    "porespy_geom_coordination_ks",
+    "porespy_geom_n_components",
+    "maxball_geom_pore_count_rel_diff",
+    "maxball_geom_throat_count_rel_diff",
+    "maxball_geom_throat_radius_ks",
+    "maxball_geom_coordination_ks",
+    "maxball_geom_n_components",
+    "maxball_geom_dead_end_fraction",
 ]
 summary_df.loc[:, display_columns]
+
+# %%
+diagnostic_summary_columns = [
+    "k_rel_diff_imported",
+    "k_rel_diff_porespy",
+    "k_rel_diff_maxball",
+    "porespy_geom_pore_count_rel_diff",
+    "porespy_geom_throat_count_rel_diff",
+    "porespy_geom_coordination_ks",
+    "porespy_geom_n_components",
+    "maxball_geom_pore_count_rel_diff",
+    "maxball_geom_throat_count_rel_diff",
+    "maxball_geom_throat_radius_ks",
+    "maxball_geom_coordination_ks",
+    "maxball_geom_n_components",
+    "maxball_geom_dead_end_fraction",
+]
+summary_df.loc[:, diagnostic_summary_columns].mean(numeric_only=True).to_frame(
+    name="mean_over_cases"
+)
 
 # %% [markdown]
 # ## Save derived comparison artifacts
@@ -601,7 +734,8 @@ print("Saved:", porosity_figure_path)
 #
 # The permeability comparison is the main benchmark output. The porosity and network-size columns
 # help diagnose whether a mismatch comes primarily from extraction topology, pore/throat geometry,
-# or the transport model itself.
+# or the transport model itself. The added geometry columns compare each `voids` extraction against
+# the imported physical `pnextract` CNM rather than only against the final `pnflow` permeability.
 #
 # Points to keep in mind when interpreting the numbers:
 # - `pnflow` reports porosity after its own extracted-network construction, not the binary-image
@@ -611,8 +745,12 @@ print("Saved:", porosity_figure_path)
 #   the current `voids` extraction and pruning workflow
 # - if imported-CNM permeability is much closer to `pnflow` than both image-extraction paths, the
 #   dominant remaining mismatch is likely extraction rather than the single-phase solver itself
-# - if the native maximal-ball path improves over the `snow2` path, that is evidence that moving
-#   toward the Imperial extractor structure is helping even before full parity is reached
+# - large throat-count relative error, large throat-radius KS distance, or many disconnected
+#   components in the candidate extraction are stronger evidence of topology/ownership mismatch than
+#   of a boundary-condition or transport-model issue
+# - at the current stage, the native maximal-ball path should be treated as a topology diagnostic:
+#   it can be closer in pore count than `snow2`, while still over-connecting throats and therefore
+#   overshooting permeability by a large margin
 # - a close permeability match on the imported CNM is encouraging, but it still does not prove full
 #   geometric equivalence between implementations
 # - a large mismatch is not automatically a bug in `voids`; it may reflect different extraction and
