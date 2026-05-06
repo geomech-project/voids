@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from scipy.stats import ks_2samp
 
 from voids.core.network import Network
 from voids.geom.hydraulic import (
@@ -13,6 +14,8 @@ from voids.geom.hydraulic import (
     _resolve_pore_throat_viscosities,
     _segment_conductance_valvatne_blunt,
 )
+from voids.graph.connectivity import induced_subnetwork
+from voids.graph.metrics import connectivity_metrics, coordination_numbers
 from voids.io.openpnm import to_openpnm_dict, to_openpnm_network
 from voids.io.porespy import from_porespy
 from voids.physics.singlephase import (
@@ -112,6 +115,349 @@ class ConduitConductanceAudit:
             "pore2_conductance": self.pore2_conductance,
             "equivalent_conductance": self.equivalent_conductance,
         }
+
+
+@dataclass(slots=True)
+class NetworkGeometrySummary:
+    """Compact geometry and connectivity summary for one pore network."""
+
+    axis: str
+    n_pores: int
+    n_throats: int
+    n_components: int
+    giant_component_fraction: float
+    isolated_pore_fraction: float
+    dead_end_fraction: float
+    mean_coordination: float
+    inlet_pore_count: int
+    outlet_pore_count: int
+    overlapping_boundary_count: int
+    boundary_pore_count: int
+    pore_volume_total: float
+    throat_volume_total: float
+    pore_radius_mean: float
+    pore_radius_median: float
+    throat_radius_mean: float
+    throat_radius_median: float
+    throat_area_mean: float
+    throat_area_median: float
+    throat_length_mean: float
+    throat_length_median: float
+    throat_core_length_mean: float
+    throat_core_length_median: float
+    pore_shape_factor_mean: float
+    pore_shape_factor_median: float
+    throat_shape_factor_mean: float
+    throat_shape_factor_median: float
+    throat_face_count_mean: float
+    throat_face_count_median: float
+    throat_support_radius_mean: float
+    throat_support_radius_median: float
+
+    def to_record(self, *, prefix: str) -> dict[str, float | int]:
+        """Return a flat record with prefixed field names."""
+
+        return {
+            f"{prefix}_n_pores": self.n_pores,
+            f"{prefix}_n_throats": self.n_throats,
+            f"{prefix}_n_components": self.n_components,
+            f"{prefix}_giant_component_fraction": self.giant_component_fraction,
+            f"{prefix}_isolated_pore_fraction": self.isolated_pore_fraction,
+            f"{prefix}_dead_end_fraction": self.dead_end_fraction,
+            f"{prefix}_mean_coordination": self.mean_coordination,
+            f"{prefix}_inlet_pore_count": self.inlet_pore_count,
+            f"{prefix}_outlet_pore_count": self.outlet_pore_count,
+            f"{prefix}_overlapping_boundary_count": self.overlapping_boundary_count,
+            f"{prefix}_boundary_pore_count": self.boundary_pore_count,
+            f"{prefix}_pore_volume_total": self.pore_volume_total,
+            f"{prefix}_throat_volume_total": self.throat_volume_total,
+            f"{prefix}_pore_radius_mean": self.pore_radius_mean,
+            f"{prefix}_pore_radius_median": self.pore_radius_median,
+            f"{prefix}_throat_radius_mean": self.throat_radius_mean,
+            f"{prefix}_throat_radius_median": self.throat_radius_median,
+            f"{prefix}_throat_area_mean": self.throat_area_mean,
+            f"{prefix}_throat_area_median": self.throat_area_median,
+            f"{prefix}_throat_length_mean": self.throat_length_mean,
+            f"{prefix}_throat_length_median": self.throat_length_median,
+            f"{prefix}_throat_core_length_mean": self.throat_core_length_mean,
+            f"{prefix}_throat_core_length_median": self.throat_core_length_median,
+            f"{prefix}_pore_shape_factor_mean": self.pore_shape_factor_mean,
+            f"{prefix}_pore_shape_factor_median": self.pore_shape_factor_median,
+            f"{prefix}_throat_shape_factor_mean": self.throat_shape_factor_mean,
+            f"{prefix}_throat_shape_factor_median": self.throat_shape_factor_median,
+            f"{prefix}_throat_face_count_mean": self.throat_face_count_mean,
+            f"{prefix}_throat_face_count_median": self.throat_face_count_median,
+            f"{prefix}_throat_support_radius_mean": self.throat_support_radius_mean,
+            f"{prefix}_throat_support_radius_median": self.throat_support_radius_median,
+        }
+
+
+@dataclass(slots=True)
+class NetworkGeometryComparison:
+    """Geometry and topology mismatch summary between two pore networks."""
+
+    reference_name: str
+    candidate_name: str
+    axis: str
+    reference_summary: NetworkGeometrySummary
+    candidate_summary: NetworkGeometrySummary
+    pore_count_rel_diff: float
+    throat_count_rel_diff: float
+    inlet_count_rel_diff: float
+    outlet_count_rel_diff: float
+    mean_coordination_rel_diff: float
+    pore_radius_ks: float
+    throat_radius_ks: float
+    throat_area_ks: float
+    throat_length_ks: float
+    throat_core_length_ks: float
+    pore_shape_factor_ks: float
+    throat_shape_factor_ks: float
+    coordination_ks: float
+    throat_face_count_ks: float
+
+    def to_record(self) -> dict[str, float | int]:
+        """Return a flat comparison record suitable for CSV export."""
+
+        return {
+            **self.reference_summary.to_record(prefix=f"{self.reference_name}"),
+            **self.candidate_summary.to_record(prefix=f"{self.candidate_name}"),
+            f"{self.candidate_name}_vs_{self.reference_name}_pore_count_rel_diff": self.pore_count_rel_diff,
+            f"{self.candidate_name}_vs_{self.reference_name}_throat_count_rel_diff": self.throat_count_rel_diff,
+            f"{self.candidate_name}_vs_{self.reference_name}_inlet_count_rel_diff": self.inlet_count_rel_diff,
+            f"{self.candidate_name}_vs_{self.reference_name}_outlet_count_rel_diff": self.outlet_count_rel_diff,
+            f"{self.candidate_name}_vs_{self.reference_name}_mean_coordination_rel_diff": self.mean_coordination_rel_diff,
+            f"{self.candidate_name}_vs_{self.reference_name}_pore_radius_ks": self.pore_radius_ks,
+            f"{self.candidate_name}_vs_{self.reference_name}_throat_radius_ks": self.throat_radius_ks,
+            f"{self.candidate_name}_vs_{self.reference_name}_throat_area_ks": self.throat_area_ks,
+            f"{self.candidate_name}_vs_{self.reference_name}_throat_length_ks": self.throat_length_ks,
+            f"{self.candidate_name}_vs_{self.reference_name}_throat_core_length_ks": self.throat_core_length_ks,
+            f"{self.candidate_name}_vs_{self.reference_name}_pore_shape_factor_ks": self.pore_shape_factor_ks,
+            f"{self.candidate_name}_vs_{self.reference_name}_throat_shape_factor_ks": self.throat_shape_factor_ks,
+            f"{self.candidate_name}_vs_{self.reference_name}_coordination_ks": self.coordination_ks,
+            f"{self.candidate_name}_vs_{self.reference_name}_throat_face_count_ks": self.throat_face_count_ks,
+        }
+
+
+def _finite_statistic_mean(values: np.ndarray | None) -> float:
+    """Return the finite mean of an optional numeric array."""
+
+    if values is None:
+        return float("nan")
+    finite_values = np.asarray(values, dtype=float)
+    finite_values = finite_values[np.isfinite(finite_values)]
+    if finite_values.size == 0:
+        return float("nan")
+    return float(np.mean(finite_values))
+
+
+def _finite_statistic_median(values: np.ndarray | None) -> float:
+    """Return the finite median of an optional numeric array."""
+
+    if values is None:
+        return float("nan")
+    finite_values = np.asarray(values, dtype=float)
+    finite_values = finite_values[np.isfinite(finite_values)]
+    if finite_values.size == 0:
+        return float("nan")
+    return float(np.median(finite_values))
+
+
+def _distribution_ks_statistic(values_a: np.ndarray | None, values_b: np.ndarray | None) -> float:
+    """Return the KS statistic for two optional one-dimensional samples."""
+
+    if values_a is None or values_b is None:
+        return float("nan")
+    arr_a = np.asarray(values_a, dtype=float)
+    arr_b = np.asarray(values_b, dtype=float)
+    arr_a = arr_a[np.isfinite(arr_a)]
+    arr_b = arr_b[np.isfinite(arr_b)]
+    if arr_a.size == 0 or arr_b.size == 0:
+        return float("nan")
+    return float(ks_2samp(arr_a, arr_b, alternative="two-sided", method="auto").statistic)
+
+
+def _subset_network_for_geometry(
+    net: Network,
+    *,
+    pore_mask: np.ndarray | None = None,
+) -> Network:
+    """Return a pore-induced subnetwork for geometry analysis."""
+
+    if pore_mask is None:
+        return net
+    subnet, _, _ = induced_subnetwork(net, np.asarray(pore_mask, dtype=bool))
+    return subnet
+
+
+def _get_numeric_field(
+    net: Network,
+    *,
+    entity: str,
+    name: str,
+) -> np.ndarray | None:
+    """Return an optional numeric pore or throat field."""
+
+    store = net.pore if entity == "pore" else net.throat
+    if name not in store:
+        return None
+    return np.asarray(store[name], dtype=float)
+
+
+def summarize_network_geometry(
+    net: Network,
+    *,
+    axis: str,
+    pore_mask: np.ndarray | None = None,
+) -> NetworkGeometrySummary:
+    """Summarize geometry and connectivity for a network or pore-induced subset."""
+
+    subnet = _subset_network_for_geometry(net, pore_mask=pore_mask)
+    connectivity = connectivity_metrics(subnet)
+    inlet_label = f"inlet_{axis}min"
+    outlet_label = f"outlet_{axis}max"
+    inlet_mask = np.asarray(
+        subnet.pore_labels.get(inlet_label, np.zeros(subnet.Np, dtype=bool)), dtype=bool
+    )
+    outlet_mask = np.asarray(
+        subnet.pore_labels.get(outlet_label, np.zeros(subnet.Np, dtype=bool)), dtype=bool
+    )
+    boundary_mask = np.asarray(
+        subnet.pore_labels.get("boundary", np.zeros(subnet.Np, dtype=bool)), dtype=bool
+    )
+
+    pore_volume = _get_numeric_field(subnet, entity="pore", name="volume")
+    throat_volume = _get_numeric_field(subnet, entity="throat", name="volume")
+    pore_radius = _get_numeric_field(subnet, entity="pore", name="radius_inscribed")
+    throat_radius = _get_numeric_field(subnet, entity="throat", name="radius_inscribed")
+    throat_area = _get_numeric_field(subnet, entity="throat", name="area")
+    throat_length = _get_numeric_field(subnet, entity="throat", name="length")
+    throat_core_length = _get_numeric_field(subnet, entity="throat", name="core_length")
+    pore_shape_factor = _get_numeric_field(subnet, entity="pore", name="shape_factor")
+    throat_shape_factor = _get_numeric_field(subnet, entity="throat", name="shape_factor")
+    throat_face_count = _get_numeric_field(subnet, entity="throat", name="face_count")
+    support_side1 = _get_numeric_field(subnet, entity="throat", name="supporting_radius_side1")
+    support_side2 = _get_numeric_field(subnet, entity="throat", name="supporting_radius_side2")
+    throat_support_radius = None
+    if support_side1 is not None and support_side2 is not None:
+        throat_support_radius = np.nanmax(np.column_stack([support_side1, support_side2]), axis=1)
+
+    return NetworkGeometrySummary(
+        axis=axis,
+        n_pores=int(subnet.Np),
+        n_throats=int(subnet.Nt),
+        n_components=int(connectivity.n_components),
+        giant_component_fraction=float(connectivity.giant_component_fraction),
+        isolated_pore_fraction=float(connectivity.isolated_pore_fraction),
+        dead_end_fraction=float(connectivity.dead_end_fraction),
+        mean_coordination=float(connectivity.mean_coordination),
+        inlet_pore_count=int(np.count_nonzero(inlet_mask)),
+        outlet_pore_count=int(np.count_nonzero(outlet_mask)),
+        overlapping_boundary_count=int(np.count_nonzero(inlet_mask & outlet_mask)),
+        boundary_pore_count=int(np.count_nonzero(boundary_mask)),
+        pore_volume_total=float(np.nansum(pore_volume) if pore_volume is not None else np.nan),
+        throat_volume_total=float(
+            np.nansum(throat_volume) if throat_volume is not None else np.nan
+        ),
+        pore_radius_mean=_finite_statistic_mean(pore_radius),
+        pore_radius_median=_finite_statistic_median(pore_radius),
+        throat_radius_mean=_finite_statistic_mean(throat_radius),
+        throat_radius_median=_finite_statistic_median(throat_radius),
+        throat_area_mean=_finite_statistic_mean(throat_area),
+        throat_area_median=_finite_statistic_median(throat_area),
+        throat_length_mean=_finite_statistic_mean(throat_length),
+        throat_length_median=_finite_statistic_median(throat_length),
+        throat_core_length_mean=_finite_statistic_mean(throat_core_length),
+        throat_core_length_median=_finite_statistic_median(throat_core_length),
+        pore_shape_factor_mean=_finite_statistic_mean(pore_shape_factor),
+        pore_shape_factor_median=_finite_statistic_median(pore_shape_factor),
+        throat_shape_factor_mean=_finite_statistic_mean(throat_shape_factor),
+        throat_shape_factor_median=_finite_statistic_median(throat_shape_factor),
+        throat_face_count_mean=_finite_statistic_mean(throat_face_count),
+        throat_face_count_median=_finite_statistic_median(throat_face_count),
+        throat_support_radius_mean=_finite_statistic_mean(throat_support_radius),
+        throat_support_radius_median=_finite_statistic_median(throat_support_radius),
+    )
+
+
+def compare_network_geometry(
+    reference_net: Network,
+    candidate_net: Network,
+    *,
+    axis: str,
+    reference_pore_mask: np.ndarray | None = None,
+    candidate_pore_mask: np.ndarray | None = None,
+    reference_name: str = "reference",
+    candidate_name: str = "candidate",
+) -> NetworkGeometryComparison:
+    """Compare geometry and connectivity between two networks or pore subsets."""
+
+    reference_subnet = _subset_network_for_geometry(reference_net, pore_mask=reference_pore_mask)
+    candidate_subnet = _subset_network_for_geometry(candidate_net, pore_mask=candidate_pore_mask)
+
+    reference_summary = summarize_network_geometry(reference_subnet, axis=axis)
+    candidate_summary = summarize_network_geometry(candidate_subnet, axis=axis)
+
+    reference_coordination = coordination_numbers(reference_subnet)
+    candidate_coordination = coordination_numbers(candidate_subnet)
+
+    return NetworkGeometryComparison(
+        reference_name=reference_name,
+        candidate_name=candidate_name,
+        axis=axis,
+        reference_summary=reference_summary,
+        candidate_summary=candidate_summary,
+        pore_count_rel_diff=_rel_diff(reference_summary.n_pores, candidate_summary.n_pores),
+        throat_count_rel_diff=_rel_diff(reference_summary.n_throats, candidate_summary.n_throats),
+        inlet_count_rel_diff=_rel_diff(
+            reference_summary.inlet_pore_count,
+            candidate_summary.inlet_pore_count,
+        ),
+        outlet_count_rel_diff=_rel_diff(
+            reference_summary.outlet_pore_count,
+            candidate_summary.outlet_pore_count,
+        ),
+        mean_coordination_rel_diff=_rel_diff(
+            reference_summary.mean_coordination,
+            candidate_summary.mean_coordination,
+        ),
+        pore_radius_ks=_distribution_ks_statistic(
+            _get_numeric_field(reference_subnet, entity="pore", name="radius_inscribed"),
+            _get_numeric_field(candidate_subnet, entity="pore", name="radius_inscribed"),
+        ),
+        throat_radius_ks=_distribution_ks_statistic(
+            _get_numeric_field(reference_subnet, entity="throat", name="radius_inscribed"),
+            _get_numeric_field(candidate_subnet, entity="throat", name="radius_inscribed"),
+        ),
+        throat_area_ks=_distribution_ks_statistic(
+            _get_numeric_field(reference_subnet, entity="throat", name="area"),
+            _get_numeric_field(candidate_subnet, entity="throat", name="area"),
+        ),
+        throat_length_ks=_distribution_ks_statistic(
+            _get_numeric_field(reference_subnet, entity="throat", name="length"),
+            _get_numeric_field(candidate_subnet, entity="throat", name="length"),
+        ),
+        throat_core_length_ks=_distribution_ks_statistic(
+            _get_numeric_field(reference_subnet, entity="throat", name="core_length"),
+            _get_numeric_field(candidate_subnet, entity="throat", name="core_length"),
+        ),
+        pore_shape_factor_ks=_distribution_ks_statistic(
+            _get_numeric_field(reference_subnet, entity="pore", name="shape_factor"),
+            _get_numeric_field(candidate_subnet, entity="pore", name="shape_factor"),
+        ),
+        throat_shape_factor_ks=_distribution_ks_statistic(
+            _get_numeric_field(reference_subnet, entity="throat", name="shape_factor"),
+            _get_numeric_field(candidate_subnet, entity="throat", name="shape_factor"),
+        ),
+        coordination_ks=_distribution_ks_statistic(
+            reference_coordination.astype(float),
+            candidate_coordination.astype(float),
+        ),
+        throat_face_count_ks=_distribution_ks_statistic(
+            _get_numeric_field(reference_subnet, entity="throat", name="face_count"),
+            _get_numeric_field(candidate_subnet, entity="throat", name="face_count"),
+        ),
+    )
 
 
 def _rel_diff(a: float, b: float) -> float:
