@@ -393,9 +393,12 @@ def extract_spanning_pore_network(
         voxel_size=float(voxel_size),
         extraction_kwargs=extraction_kwargs,
     )
+    importer_geometry_repairs = geometry_repairs
     if backend_normalized != "native_maximal_ball":
         network_dict = scale_porespy_geometry(network_dict, voxel_size=voxel_size)
         network_dict = ensure_cartesian_boundary_labels(network_dict, axes=(selected_axis,))
+    else:
+        importer_geometry_repairs = None
 
     shape_2d_or_3d = tuple(int(n) for n in arr.shape)
     bulk_shape: tuple[int, int, int] = (
@@ -422,7 +425,7 @@ def extract_spanning_pore_network(
         sample=sample,
         provenance=provenance,
         strict=strict,
-        geometry_repairs=geometry_repairs,
+        geometry_repairs=importer_geometry_repairs,
         repair_seed=repair_seed,
     )
     net, pore_indices, throat_mask = spanning_subnetwork(net_full, axis=selected_axis)

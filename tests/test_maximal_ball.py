@@ -434,9 +434,16 @@ def test_build_network_dict_from_maximal_ball_regions_assembles_expected_fields(
     assert np.all(network_dict["throat.conduit_lengths.pore1"] > 0.0)
     assert np.all(network_dict["throat.conduit_lengths.throat"] > 0.0)
     assert np.all(network_dict["throat.conduit_lengths.pore2"] > 0.0)
-    assert network_dict["pore.volume"][0] == pytest.approx(48.0)
-    assert network_dict["pore.volume"][1] == pytest.approx(24.0)
+    assert network_dict["pore.volume"].sum() + network_dict["throat.volume"].sum() == pytest.approx(
+        72.0
+    )
+    assert network_dict["pore.volume"][0] == pytest.approx(33.23076923076923)
+    assert network_dict["pore.volume"][1] == pytest.approx(12.0)
+    assert network_dict["throat.volume"][0] == pytest.approx(26.76923076923077)
     assert network_dict["throat.cross_sectional_area"][0] == pytest.approx(12.0)
+    assert network_dict["throat.radius_inscribed"][0] == pytest.approx(2.0)
+    assert network_dict["throat.shape_factor"][0] == pytest.approx(1.0 / 12.0)
+    assert np.allclose(network_dict["pore.shape_factor"], np.array([1.0 / 12.0, 1.0 / 12.0]))
 
 
 def test_extract_maximal_ball_network_dict_wraps_extraction_and_assembly() -> None:

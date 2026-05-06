@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from voids.examples.demo import make_linear_chain_network
 from voids.geom import (
     area_equivalent_diameter,
     characteristic_size,
@@ -435,6 +436,70 @@ def test_extract_spanning_pore_network_normalizes_backend_aliases(
     assert captured["kwargs"] is None
     assert result.backend == "porespy_snow2_imperial"
     assert result.provenance.extraction_method == "porespy_snow2_imperial"
+
+
+def test_extract_spanning_pore_network_skips_second_geometry_repair_for_native_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native maximal-ball assembly should not reapply importer geometry repairs."""
+
+    captured: dict[str, object] = {}
+    net = make_linear_chain_network(num_pores=2)
+
+    def fake_extract(phases, *, backend, voxel_size, extraction_kwargs):
+        assert backend == "native_maximal_ball"
+        assert voxel_size == pytest.approx(1.0)
+        return {
+            "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+            "throat.conns": np.array([[0, 1]], dtype=int),
+            "pore.inlet_xmin": np.array([True, False], dtype=bool),
+            "pore.outlet_xmax": np.array([False, True], dtype=bool),
+            "pore.radius_inscribed": np.array([1.0, 1.0], dtype=float),
+            "pore.area": np.array([1.0, 1.0], dtype=float),
+            "pore.shape_factor": np.array([0.03, 0.03], dtype=float),
+            "pore.volume": np.array([1.0, 1.0], dtype=float),
+            "throat.radius_inscribed": np.array([0.5], dtype=float),
+            "throat.cross_sectional_area": np.array([0.5], dtype=float),
+            "throat.shape_factor": np.array([0.02], dtype=float),
+            "throat.volume": np.array([0.1], dtype=float),
+            "throat.conduit_lengths.pore1": np.array([0.2], dtype=float),
+            "throat.conduit_lengths.throat": np.array([0.6], dtype=float),
+            "throat.conduit_lengths.pore2": np.array([0.2], dtype=float),
+        }
+
+    def fake_from_porespy(
+        network_dict,
+        *,
+        sample,
+        provenance,
+        strict,
+        geometry_repairs,
+        repair_seed,
+    ):
+        captured["geometry_repairs"] = geometry_repairs
+        captured["strict"] = strict
+        captured["repair_seed"] = repair_seed
+        return net
+
+    def fake_spanning_subnetwork(net_full, axis):
+        assert axis == "x"
+        return net_full, np.arange(net_full.Np, dtype=np.int64), np.ones(net_full.Nt, dtype=bool)
+
+    monkeypatch.setattr(nex, "_extract_network_dict", fake_extract)
+    monkeypatch.setattr(nex, "from_porespy", fake_from_porespy)
+    monkeypatch.setattr(nex, "spanning_subnetwork", fake_spanning_subnetwork)
+
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="native_maximal_ball",
+        flow_axis="x",
+    )
+
+    assert captured["geometry_repairs"] is None
+    assert captured["strict"] is True
+    assert captured["repair_seed"] == 0
+    assert result.backend == "native_maximal_ball"
 
 
 def test_extract_spanning_pore_network_rejects_unsupported_backend() -> None:

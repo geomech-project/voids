@@ -1093,6 +1093,95 @@ def extract_maximal_ball_regions(
     )
 
 
+def _select_interface_supporting_ball_radii(
+    extraction_result: MaximalBallExtractionResult,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return side-specific throat-supporting maximal-ball radii in voxel units."""
+
+    hierarchy = extraction_result.hierarchy
+    voxel_regions = extraction_result.voxel_regions
+    region_adjacency = extraction_result.region_adjacency
+
+    throat_region_pairs = np.asarray(region_adjacency.throat_region_pairs, dtype=np.int64)
+    throat_centroid_indices = np.asarray(region_adjacency.throat_centroid_indices, dtype=float)
+    retained_center_indices = np.asarray(hierarchy.center_indices, dtype=float)
+    retained_radii_voxels = np.asarray(hierarchy.radii_voxels, dtype=float)
+    root_label_of_ball = np.asarray(voxel_regions.root_of_ball_index, dtype=np.int64)
+    image_ndim = (
+        int(throat_centroid_indices.shape[1])
+        if throat_centroid_indices.size
+        else int(voxel_regions.label_image.ndim)
+    )
+    support_tolerance_voxels = 0.5 * np.sqrt(float(image_ndim))
+
+    throat_count = int(throat_region_pairs.shape[0])
+    first_side_radii = np.full(throat_count, np.nan, dtype=float)
+    second_side_radii = np.full(throat_count, np.nan, dtype=float)
+    if throat_count == 0 or retained_center_indices.size == 0:
+        return first_side_radii, second_side_radii
+
+    for throat_index, region_pair in enumerate(throat_region_pairs):
+        throat_centroid_index = throat_centroid_indices[throat_index]
+        distances_to_centroid = np.linalg.norm(
+            retained_center_indices - throat_centroid_index,
+            axis=1,
+        )
+        centroid_supported_mask = distances_to_centroid <= (
+            retained_radii_voxels + support_tolerance_voxels
+        )
+        if not np.any(centroid_supported_mask):
+            continue
+
+        first_region_label = int(region_pair[0])
+        second_region_label = int(region_pair[1])
+        first_region_mask = centroid_supported_mask & (root_label_of_ball == first_region_label)
+        second_region_mask = centroid_supported_mask & (root_label_of_ball == second_region_label)
+        if np.any(first_region_mask):
+            first_side_radii[throat_index] = float(np.max(retained_radii_voxels[first_region_mask]))
+        if np.any(second_region_mask):
+            second_side_radii[throat_index] = float(
+                np.max(retained_radii_voxels[second_region_mask])
+            )
+
+    return first_side_radii, second_side_radii
+
+
+def _redistribute_region_volumes_like_imperial_export(
+    pore_data: dict[str, np.ndarray],
+    throat_data: dict[str, np.ndarray],
+    throat_conns: np.ndarray,
+) -> None:
+    """Redistribute region volume between pores and throats like the Imperial exporter."""
+
+    pore_region_volume = np.asarray(pore_data["region_volume"], dtype=float)
+    pore_area = np.asarray(pore_data["area"], dtype=float)
+    throat_area = np.asarray(throat_data["area"], dtype=float)
+    redistributed_pore_volume = np.zeros_like(pore_region_volume)
+    redistributed_throat_volume = np.asarray(
+        throat_data.get("volume", np.zeros(throat_conns.shape[0])), dtype=float
+    )
+    redistributed_throat_volume.fill(0.0)
+
+    for pore_index in range(pore_region_volume.size):
+        connected_throat_mask = (throat_conns[:, 0] == pore_index) | (
+            throat_conns[:, 1] == pore_index
+        )
+        total_connected_throat_area = float(throat_area[connected_throat_mask].sum())
+        pore_cross_section_area = float(pore_area[pore_index])
+        normalization_area = pore_cross_section_area + total_connected_throat_area + 1.0e-36
+        raw_region_volume = float(pore_region_volume[pore_index])
+        redistributed_pore_volume[pore_index] = (
+            raw_region_volume * pore_cross_section_area / normalization_area
+        )
+        if np.any(connected_throat_mask):
+            redistributed_throat_volume[connected_throat_mask] += (
+                raw_region_volume * throat_area[connected_throat_mask] / normalization_area
+            )
+
+    pore_data["volume"] = redistributed_pore_volume
+    throat_data["volume"] = redistributed_throat_volume
+
+
 def build_network_dict_from_maximal_ball_regions(
     extraction_result: MaximalBallExtractionResult,
     *,
@@ -1124,9 +1213,18 @@ def build_network_dict_from_maximal_ball_regions(
     - conduit lengths are derived from pore-center to interface-centroid
       distances with a minimum half-voxel regularization
 
-    These rules are scientifically reasonable and easy to audit, but they are
-    not yet guaranteed to match the final Imperial `pnextract` geometry. They
-    are the current native baseline that subsequent parity work can refine.
+    The current implementation now follows the Imperial export logic more
+    closely in three places:
+
+    - throat radii are taken from interface-supporting maximal balls
+    - throat and pore shape factors follow the Imperial export repair and
+      throat-area-weighted pore averaging logic
+    - region volumes are redistributed between pores and throats using the same
+      area-partition rule used by the Imperial CNM writer
+
+    This is still not full `pnextract` parity, because the upstream voxel
+    ownership and throat-surface ball construction remain a native
+    approximation.
     """
 
     if voxel_size <= 0.0:
@@ -1174,7 +1272,6 @@ def build_network_dict_from_maximal_ball_regions(
     throat_count = int(throat_region_pairs.shape[0])
     throat_face_counts = np.asarray(region_adjacency.throat_face_counts, dtype=float)
     throat_area = throat_face_counts * float(voxel_size) ** 2
-    throat_radius = np.sqrt(np.maximum(throat_area, 0.0) / np.pi)
     throat_centroid_indices = np.asarray(region_adjacency.throat_centroid_indices, dtype=float)
     if throat_centroid_indices.shape[0] != throat_count:
         raise ValueError("throat_centroid_indices must align with throat_region_pairs")
@@ -1183,6 +1280,34 @@ def build_network_dict_from_maximal_ball_regions(
         throat_centroid_coords = np.column_stack(
             [throat_centroid_coords, np.zeros(throat_count, dtype=float)]
         )
+
+    first_side_radius_voxels, second_side_radius_voxels = _select_interface_supporting_ball_radii(
+        extraction_result
+    )
+    pore_radius_by_region = root_radii_voxels
+    equivalent_interface_radius = np.sqrt(np.maximum(throat_area, 0.0) / np.pi) / float(voxel_size)
+    throat_support_radius_voxels = np.empty(throat_count, dtype=float)
+    for throat_index, region_pair in enumerate(throat_region_pairs):
+        first_region_label = int(region_pair[0])
+        second_region_label = int(region_pair[1])
+        first_radius_voxels = float(first_side_radius_voxels[throat_index])
+        second_radius_voxels = float(second_side_radius_voxels[throat_index])
+        if not np.isfinite(first_radius_voxels):
+            first_radius_voxels = min(
+                float(pore_radius_by_region[first_region_label]),
+                float(equivalent_interface_radius[throat_index]),
+            )
+        if not np.isfinite(second_radius_voxels):
+            second_radius_voxels = min(
+                float(pore_radius_by_region[second_region_label]),
+                float(equivalent_interface_radius[throat_index]),
+            )
+        throat_support_radius_voxels[throat_index] = min(
+            0.5 * (first_radius_voxels + second_radius_voxels),
+            float(pore_radius_by_region[first_region_label]),
+            float(pore_radius_by_region[second_region_label]),
+        )
+    throat_radius = throat_support_radius_voxels * float(voxel_size)
 
     minimum_segment_length = 0.5 * float(voxel_size)
     if throat_count:
@@ -1212,33 +1337,75 @@ def build_network_dict_from_maximal_ball_regions(
         pore2_length = np.zeros(0, dtype=float)
         core_length = np.zeros(0, dtype=float)
     throat_total_length = pore1_length + core_length + pore2_length
-    throat_volume = throat_area * core_length
+
+    pore_data: dict[str, np.ndarray] = {
+        "radius_inscribed": pore_radius.copy(),
+        "area": pore_area.copy(),
+        "shape_factor": np.full(region_count, _CIRCULAR_SHAPE_FACTOR, dtype=float),
+        "volume": pore_volume.copy(),
+        "region_volume": pore_volume.copy(),
+        "surface_area": pore_surface_area,
+    }
+    throat_data: dict[str, np.ndarray] = {
+        "radius_inscribed": throat_radius.copy(),
+        "area": throat_area.copy(),
+        "shape_factor": np.full(throat_count, _CIRCULAR_SHAPE_FACTOR, dtype=float),
+        "volume": np.zeros(throat_count, dtype=float),
+        "total_length": throat_total_length,
+        "pore1_length": pore1_length,
+        "core_length": core_length,
+        "pore2_length": pore2_length,
+        "centroid": throat_centroid_coords,
+        "face_count": throat_face_counts.astype(np.int64, copy=False),
+        "axis_face_balance": np.asarray(region_adjacency.throat_axis_face_balance, dtype=float),
+        "supporting_radius_side1": first_side_radius_voxels * float(voxel_size),
+        "supporting_radius_side2": second_side_radius_voxels * float(voxel_size),
+    }
+
+    from voids.io.porespy import _apply_imperial_export_geometry_repairs, _derive_missing_geometry
+
+    geometry_repair_summary = _apply_imperial_export_geometry_repairs(
+        pore_data,
+        throat_data,
+        throat_region_pairs,
+        num_pores=region_count,
+        random_seed=0,
+    )
+    _redistribute_region_volumes_like_imperial_export(
+        pore_data,
+        throat_data,
+        throat_region_pairs,
+    )
+    _derive_missing_geometry(pore_data, throat_data)
 
     network_dict: dict[str, np.ndarray] = {
         "pore.coords": pore_coords,
         "throat.conns": throat_region_pairs,
-        "pore.radius_inscribed": pore_radius,
-        "pore.area": pore_area,
-        "pore.shape_factor": np.full(region_count, _CIRCULAR_SHAPE_FACTOR, dtype=float),
-        "pore.volume": pore_volume,
-        "pore.region_volume": pore_volume.copy(),
-        "pore.surface_area": pore_surface_area,
-        "throat.radius_inscribed": throat_radius,
-        "throat.cross_sectional_area": throat_area,
-        "throat.shape_factor": np.full(throat_count, _CIRCULAR_SHAPE_FACTOR, dtype=float),
-        "throat.volume": throat_volume,
-        "throat.total_length": throat_total_length,
-        "throat.conduit_lengths.pore1": pore1_length,
-        "throat.conduit_lengths.throat": core_length,
-        "throat.conduit_lengths.pore2": pore2_length,
-        "throat.centroid": throat_centroid_coords,
-        "throat.face_count": throat_face_counts.astype(np.int64, copy=False),
-        "throat.axis_face_balance": np.asarray(
-            region_adjacency.throat_axis_face_balance, dtype=float
-        ),
+        "pore.radius_inscribed": pore_data["radius_inscribed"],
+        "pore.area": pore_data["area"],
+        "pore.shape_factor": pore_data["shape_factor"],
+        "pore.volume": pore_data["volume"],
+        "pore.region_volume": pore_data["region_volume"],
+        "pore.surface_area": pore_data["surface_area"],
+        "throat.radius_inscribed": throat_data["radius_inscribed"],
+        "throat.cross_sectional_area": throat_data["area"],
+        "throat.shape_factor": throat_data["shape_factor"],
+        "throat.volume": throat_data["volume"],
+        "throat.total_length": throat_data["length"],
+        "throat.conduit_lengths.pore1": throat_data["pore1_length"],
+        "throat.conduit_lengths.throat": throat_data["core_length"],
+        "throat.conduit_lengths.pore2": throat_data["pore2_length"],
+        "throat.centroid": throat_data["centroid"],
+        "throat.face_count": throat_data["face_count"],
+        "throat.axis_face_balance": throat_data["axis_face_balance"],
+        "throat.supporting_radius_side1": throat_data["supporting_radius_side1"],
+        "throat.supporting_radius_side2": throat_data["supporting_radius_side2"],
         "pore.boundary_face_count": np.asarray(
             region_adjacency.boundary_face_counts.sum(axis=1),
             dtype=np.int64,
+        ),
+        "throat.geometry_repairs_mode": np.full(
+            throat_count, geometry_repair_summary["mode"], dtype=object
         ),
     }
 
