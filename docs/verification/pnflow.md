@@ -213,6 +213,9 @@ Summary statistics for this five-case set:
 - the native maximal-ball branch is closer than plain `snow2` on mean
   permeability error for this five-case set, with mixed-sign residual errors
   across the five cases
+- after excluding explicit reservoir helper pores, native maximal-ball physical
+  pore-count differences are `1.19-7.25 %` and physical throat-count differences
+  are `2.00-5.81 %` across the five cases
 - the native maximal-ball branch now uses explicit helper boundary pores on the
   flow axis; this avoids imposing Dirichlet pressure directly at internal pore
   centers
@@ -221,7 +224,8 @@ Those last three points are the key outcome of the investigation: once the same
 reduced network and the checked-in `pnflow` preprocessing are used, the
 single-phase `voids` solve agrees with `pnflow` to plotting precision. The
 remaining mismatch is therefore dominated by image-to-network extraction and
-geometric reduction, not by the single-phase pressure solve.
+geometric reduction, especially conduit-area, shape-factor, and boundary
+reservoir reduction details, not by the single-phase pressure solve.
 
 We also tested a dependency-free internal approximation mode exposed as
 `backend="porespy_imperial"`. This still uses `snow2`, but starts from a

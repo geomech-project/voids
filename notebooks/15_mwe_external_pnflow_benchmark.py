@@ -175,6 +175,9 @@ def _summarize_voids_construction_transport(
         axis=flow_axis,
         options=options,
     )
+    helper_pore_mask = _flow_reservoir_helper_pore_mask(
+        construction.net, flow_axis=flow_axis
+    )
     return {
         "phi_image": float(np.asarray(image, dtype=bool).mean()),
         f"phi_abs_{metric_prefix}_voids": float(absolute_porosity(construction.net)),
@@ -182,6 +185,12 @@ def _summarize_voids_construction_transport(
             effective_porosity(construction.net, axis=flow_axis)
         ),
         f"Np_{metric_prefix}_voids": int(construction.net.Np),
+        f"Np_{metric_prefix}_physical_voids": int(
+            construction.net.Np - np.count_nonzero(helper_pore_mask)
+        ),
+        f"Np_{metric_prefix}_reservoir_helper_voids": int(
+            np.count_nonzero(helper_pore_mask)
+        ),
         f"Nt_{metric_prefix}_voids": int(construction.net.Nt),
         f"k_{metric_prefix}_voids": float(result.permeability[flow_axis]),
         f"Q_{metric_prefix}_voids": float(result.total_flow_rate),
@@ -250,11 +259,19 @@ def _geometry_comparison_metrics(
     imported_physical_mask = (
         np.arange(imported_full_net.Np, dtype=np.int64) < n_physical_pores
     )
+    candidate_helper_mask = _flow_reservoir_helper_pore_mask(
+        candidate_construction.net_full,
+        flow_axis=flow_axis,
+    )
+    candidate_physical_mask = (
+        ~candidate_helper_mask if np.any(candidate_helper_mask) else None
+    )
     comparison = compare_network_geometry(
         imported_full_net,
         candidate_construction.net_full,
         axis=flow_axis,
         reference_pore_mask=imported_physical_mask,
+        candidate_pore_mask=candidate_physical_mask,
         reference_name="imported_physical",
         candidate_name=candidate_name,
     )
@@ -292,6 +309,28 @@ def _geometry_comparison_metrics(
             comparison.candidate_summary.throat_support_radius_mean
         ),
     }
+
+
+def _flow_reservoir_helper_pore_mask(net: object, *, flow_axis: str) -> np.ndarray:
+    """Return helper reservoir pores, if the extraction backend created them."""
+
+    pore_count = int(getattr(net, "Np"))
+    pore_labels = getattr(net, "pore_labels", {})
+    helper_mask = np.zeros(pore_count, dtype=bool)
+    for side_name in ("min", "max"):
+        connected_key = (
+            f"boundary_connected_inlet_{flow_axis}{side_name}"
+            if side_name == "min"
+            else f"boundary_connected_outlet_{flow_axis}{side_name}"
+        )
+        helper_key = (
+            f"inlet_{flow_axis}{side_name}"
+            if side_name == "min"
+            else f"outlet_{flow_axis}{side_name}"
+        )
+        if connected_key in pore_labels and helper_key in pore_labels:
+            helper_mask |= np.asarray(pore_labels[helper_key], dtype=bool)
+    return helper_mask
 
 
 def _maximal_ball_step_diagnostics_metrics(
@@ -693,7 +732,7 @@ summary_df["np_rel_diff_imported"] = np.abs(
     summary_df["Np_imported_physical"] - summary_df["pnflow_n_pores"]
 ) / np.maximum(summary_df["pnflow_n_pores"], 1.0)
 summary_df["np_rel_diff_porespy"] = np.abs(
-    summary_df["Np_porespy_voids"] - summary_df["pnflow_n_pores"]
+    summary_df["Np_porespy_physical_voids"] - summary_df["pnflow_n_pores"]
 ) / np.maximum(summary_df["pnflow_n_pores"], 1.0)
 summary_df["nt_rel_diff_imported"] = np.abs(
     summary_df["Nt_imported_voids"] - summary_df["pnflow_n_throats"]
@@ -702,7 +741,7 @@ summary_df["nt_rel_diff_porespy"] = np.abs(
     summary_df["Nt_porespy_voids"] - summary_df["pnflow_n_throats"]
 ) / np.maximum(summary_df["pnflow_n_throats"], 1.0)
 summary_df["np_rel_diff_maxball"] = np.abs(
-    summary_df["Np_maxball_voids"] - summary_df["pnflow_n_pores"]
+    summary_df["Np_maxball_physical_voids"] - summary_df["pnflow_n_pores"]
 ) / np.maximum(summary_df["pnflow_n_pores"], 1.0)
 summary_df["nt_rel_diff_maxball"] = np.abs(
     summary_df["Nt_maxball_voids"] - summary_df["pnflow_n_throats"]
@@ -719,7 +758,11 @@ display_columns = [
     "phi_abs_maxball_voids",
     "phi_pnflow",
     "Np_imported_physical",
+    "Np_porespy_physical_voids",
+    "Np_porespy_reservoir_helper_voids",
     "Np_porespy_voids",
+    "Np_maxball_physical_voids",
+    "Np_maxball_reservoir_helper_voids",
     "Np_maxball_voids",
     "pnflow_n_pores",
     "Nt_imported_voids",
@@ -841,8 +884,9 @@ print("Saved:", porosity_figure_path)
 #   of a boundary-condition or transport-model issue
 # - at the current stage, the native maximal-ball path should be treated as a topology diagnostic:
 #   it now uses explicit external-reservoir boundary pores on the flow axis and is closer than
-#   `snow2` on mean permeability error for this five-case set, while still overpredicting the
-#   high-connectivity cases
+#   `snow2` on mean permeability error for this five-case set; after excluding helper reservoir
+#   pores from geometry diagnostics, the residual mismatch is more concentrated in conduit
+#   area/shape-factor and boundary-reservoir reduction than in physical pore/throat counts
 # - a close permeability match on the imported CNM is encouraging, but it still does not prove full
 #   geometric equivalence between implementations
 # - a large mismatch is not automatically a bug in `voids`; it may reflect different extraction and
