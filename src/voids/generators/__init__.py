@@ -11,6 +11,7 @@ from voids.generators.porous_image import (
     generate_connected_matrix,
     generate_connected_matrix_2d,
     generate_spanning_blobs_matrix,
+    generate_spanning_multiscale_blobs_matrix,
     generate_spanning_matrix_2d,
     generate_spanning_voronoi_matrix_2d,
     insert_circular_vug_2d,
@@ -33,6 +34,7 @@ from voids.generators.vug_templates import (
 )
 
 __all__ = [
+    "generate_spanning_multiscale_blobs_matrix",
     "generate_spanning_blobs_matrix",
     "generate_connected_matrix",
     "estimate_voronoi_ncells_for_porosity_2d",

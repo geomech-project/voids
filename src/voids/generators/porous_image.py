@@ -9,6 +9,142 @@ from voids.image.connectivity import has_spanning_cluster
 from voids.image._utils import normalize_shape, validate_axis_index
 
 
+def _coerce_blobiness(
+    blobiness: float | Sequence[float],
+    *,
+    ndim: int,
+    name: str,
+) -> float | tuple[float, ...]:
+    """Normalize blobiness controls to the format expected by PoreSpy."""
+
+    if np.isscalar(blobiness):
+        value = float(blobiness)
+        if value <= 0:
+            raise ValueError(f"{name} must be positive")
+        return value
+
+    values = tuple(float(v) for v in blobiness)
+    if len(values) != ndim:
+        raise ValueError(f"{name} must have length {ndim}")
+    if min(values) <= 0:
+        raise ValueError(f"All entries in {name} must be positive")
+    return values
+
+
+def generate_spanning_multiscale_blobs_matrix(
+    *,
+    shape: Sequence[int],
+    porosity: float,
+    blobiness_primary: float | Sequence[float],
+    blobiness_secondary: float | Sequence[float],
+    axis_index: int,
+    seed_start: int,
+    max_tries: int,
+    primary_weight: float = 0.75,
+    periodic: bool = True,
+) -> tuple[np.ndarray, int]:
+    """Generate a spanning binary image from a two-scale PoreSpy blobs field.
+
+    Parameters
+    ----------
+    shape :
+        Image shape in voxels. Supports 2D and 3D.
+    porosity :
+        Target void fraction in ``(0, 1)``. This is enforced by thresholding the
+        combined multiscale field at its porosity quantile, so the achieved
+        porosity closely matches the requested value up to voxel discretization.
+    blobiness_primary, blobiness_secondary :
+        Correlation-length controls for the two component blob fields. Each can
+        be either a positive scalar or a length-``ndim`` sequence to create
+        anisotropic correlation by axis.
+    axis_index :
+        Axis used for percolation (spanning) acceptance.
+    seed_start :
+        Initial random seed. Each trial uses ``(seed_start + 2*i, seed_start + 2*i + 1)``
+        for the primary and secondary fields.
+    max_tries :
+        Maximum number of independent multiscale fields to test.
+    primary_weight :
+        Convex combination weight for the primary field in ``[0, 1]``.
+    periodic :
+        Forwarded to ``porespy.generators.blobs``.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, int]
+        ``(matrix, seed_used)`` where ``matrix`` is boolean with ``True`` as
+        void and ``seed_used`` is the primary seed of the accepted realization.
+
+    Notes
+    -----
+    This helper is inspired by the official PoreSpy multiscale-image workflow:
+    two correlated noise fields are generated with ``porosity=None``, blended,
+    then thresholded to the target void fraction.
+
+    Scientific interpretation
+    -------------------------
+    This generator is still synthetic, but it can represent broader
+    multi-resolution structure than single-scale blobs while retaining explicit
+    porosity control.
+    """
+
+    dims = normalize_shape(shape, allowed_ndim=(2, 3))
+    axis = validate_axis_index(axis_index=axis_index, ndim=len(dims))
+    if not (0.0 < porosity < 1.0):
+        raise ValueError("porosity must be in (0, 1)")
+    if max_tries < 1:
+        raise ValueError("max_tries must be >= 1")
+    if not (0.0 <= primary_weight <= 1.0):
+        raise ValueError("primary_weight must be in [0, 1]")
+
+    primary = _coerce_blobiness(
+        blobiness_primary,
+        ndim=len(dims),
+        name="blobiness_primary",
+    )
+    secondary = _coerce_blobiness(
+        blobiness_secondary,
+        ndim=len(dims),
+        name="blobiness_secondary",
+    )
+
+    for i in range(max_tries):
+        seed_primary = int(seed_start + 2 * i)
+        seed_secondary = int(seed_primary + 1)
+        field_primary = np.asarray(
+            ps.generators.blobs(
+                shape=dims,
+                porosity=None,
+                blobiness=primary,
+                seed=seed_primary,
+                periodic=bool(periodic),
+            ),
+            dtype=float,
+        )
+        field_secondary = np.asarray(
+            ps.generators.blobs(
+                shape=dims,
+                porosity=None,
+                blobiness=secondary,
+                seed=seed_secondary,
+                periodic=bool(periodic),
+            ),
+            dtype=float,
+        )
+        score = (
+            float(primary_weight) * field_primary + (1.0 - float(primary_weight)) * field_secondary
+        )
+        threshold = float(np.quantile(score, float(porosity)))
+        matrix = np.asarray(score <= threshold, dtype=bool)
+        if has_spanning_cluster(matrix, axis_index=axis):
+            return matrix, seed_primary
+
+    raise RuntimeError(
+        "Could not generate spanning multiscale blobs matrix for "
+        f"seed_start={int(seed_start)} after {int(max_tries)} trials"
+    )
+
+
 def generate_spanning_blobs_matrix(
     *,
     shape: Sequence[int],
@@ -702,6 +838,7 @@ def make_synthetic_grayscale_2d(
 
 
 __all__ = [
+    "generate_spanning_multiscale_blobs_matrix",
     "generate_spanning_blobs_matrix",
     "generate_connected_matrix",
     "estimate_voronoi_ncells_for_porosity_2d",
