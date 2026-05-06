@@ -617,13 +617,48 @@ def test_build_network_dict_from_maximal_ball_regions_assembles_expected_fields(
     assert network_dict["pore.volume"].sum() + network_dict["throat.volume"].sum() == pytest.approx(
         72.0
     )
-    assert network_dict["pore.volume"][0] == pytest.approx(33.23076923076923)
-    assert network_dict["pore.volume"][1] == pytest.approx(12.0)
-    assert network_dict["throat.volume"][0] == pytest.approx(26.76923076923077)
+    assert network_dict["pore.volume"][0] == pytest.approx(33.698087479653445)
+    assert network_dict["pore.volume"][1] == pytest.approx(12.276656553569734)
+    assert network_dict["throat.volume"][0] == pytest.approx(26.02525596677682)
     assert network_dict["throat.cross_sectional_area"][0] == pytest.approx(12.0)
-    assert network_dict["throat.radius_inscribed"][0] == pytest.approx(2.0)
-    assert network_dict["throat.shape_factor"][0] == pytest.approx(1.0 / 12.0)
-    assert np.allclose(network_dict["pore.shape_factor"], np.array([1.0 / 12.0, 1.0 / 12.0]))
+    assert network_dict["throat.radius_inscribed"][0] == pytest.approx(1.9544100476116797)
+    assert network_dict["throat.shape_factor"][0] == pytest.approx(1.0 / (4.0 * np.pi))
+    assert np.allclose(
+        network_dict["pore.shape_factor"],
+        np.array([1.0 / (4.0 * np.pi), 1.0 / (4.0 * np.pi)]),
+    )
+
+    reservoir_network_dict = build_network_dict_from_maximal_ball_regions(
+        extraction_result,
+        voxel_size=2.0,
+        flow_boundary_mode="external_reservoir",
+        boundary_axis="x",
+    )
+
+    assert reservoir_network_dict["pore.coords"].shape == (4, 3)
+    assert np.array_equal(
+        reservoir_network_dict["throat.conns"],
+        np.array([[0, 1], [2, 0], [1, 3]], dtype=np.int64),
+    )
+    assert np.array_equal(
+        reservoir_network_dict["pore.inlet_xmin"],
+        np.array([False, False, True, False]),
+    )
+    assert np.array_equal(
+        reservoir_network_dict["pore.outlet_xmax"],
+        np.array([False, False, False, True]),
+    )
+    assert np.array_equal(
+        reservoir_network_dict["pore.boundary_connected_inlet_xmin"],
+        np.array([True, False, False, False]),
+    )
+    assert np.array_equal(
+        reservoir_network_dict["pore.boundary_connected_outlet_xmax"],
+        np.array([False, True, False, False]),
+    )
+    assert np.all(reservoir_network_dict["throat.conduit_lengths.pore1"] >= 0.0)
+    assert np.all(reservoir_network_dict["throat.conduit_lengths.throat"] > 0.0)
+    assert np.all(reservoir_network_dict["throat.conduit_lengths.pore2"] >= 0.0)
 
 
 def test_build_network_dict_from_maximal_ball_regions_resolves_overlapping_boundary_labels() -> (

@@ -396,11 +396,12 @@ def test_extract_spanning_pore_network_normalizes_backend_aliases(
 
     captured: dict[str, object] = {}
 
-    def fake_extract(phases, *, backend, voxel_size, extraction_kwargs):
+    def fake_extract(phases, *, backend, voxel_size, extraction_kwargs, flow_axis):
         captured["phases"] = phases
         captured["backend"] = backend
         captured["voxel_size"] = voxel_size
         captured["kwargs"] = extraction_kwargs
+        captured["flow_axis"] = flow_axis
         return {
             "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
             "throat.conns": np.array([[0, 1]], dtype=int),
@@ -420,6 +421,7 @@ def test_extract_spanning_pore_network_normalizes_backend_aliases(
     assert captured["backend"] == "porespy_snow2"
     assert captured["voxel_size"] == pytest.approx(1.0)
     assert captured["kwargs"] is None
+    assert captured["flow_axis"] == "x"
     assert result.backend == "porespy_snow2"
     assert result.provenance.extraction_method == "porespy_snow2"
 
@@ -434,6 +436,7 @@ def test_extract_spanning_pore_network_normalizes_backend_aliases(
     assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=int))
     assert captured["backend"] == "porespy_snow2_imperial"
     assert captured["kwargs"] is None
+    assert captured["flow_axis"] == "x"
     assert result.backend == "porespy_snow2_imperial"
     assert result.provenance.extraction_method == "porespy_snow2_imperial"
 
@@ -446,9 +449,10 @@ def test_extract_spanning_pore_network_skips_second_geometry_repair_for_native_b
     captured: dict[str, object] = {}
     net = make_linear_chain_network(num_pores=2)
 
-    def fake_extract(phases, *, backend, voxel_size, extraction_kwargs):
+    def fake_extract(phases, *, backend, voxel_size, extraction_kwargs, flow_axis):
         assert backend == "native_maximal_ball"
         assert voxel_size == pytest.approx(1.0)
+        assert flow_axis == "x"
         return {
             "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
             "throat.conns": np.array([[0, 1]], dtype=int),

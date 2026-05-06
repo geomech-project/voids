@@ -266,6 +266,59 @@ def compute_maximal_ball_radius_field(
     return np.where(radius_field > 0.0, radius_field, 0.0)
 
 
+def smooth_radius_field_local_relaxation(
+    radius_field: np.ndarray,
+    void_phase_mask: np.ndarray,
+    *,
+    iterations: int,
+) -> np.ndarray:
+    """Smooth a radius field with a compact local relaxation stencil."""
+
+    if iterations < 0:
+        raise ValueError("iterations must be nonnegative")
+
+    mask = np.asarray(void_phase_mask, dtype=bool)
+    smoothed_radius = np.asarray(radius_field, dtype=float).copy()
+    if smoothed_radius.shape != mask.shape:
+        raise ValueError("radius_field and void_phase_mask must have the same shape")
+    if smoothed_radius.ndim not in {2, 3}:
+        raise ValueError("radius_field must be a 2D or 3D array")
+    if iterations == 0:
+        return smoothed_radius
+
+    neighborhood_kernel = np.ones((3,) * smoothed_radius.ndim, dtype=float)
+    mask_float = mask.astype(float, copy=False)
+    for _ in range(iterations):
+        neighbor_count = ndi.convolve(
+            mask_float,
+            neighborhood_kernel,
+            mode="constant",
+            cval=0.0,
+        )
+        radius_sum = ndi.convolve(
+            np.where(mask, smoothed_radius, 0.0),
+            neighborhood_kernel,
+            mode="constant",
+            cval=0.0,
+        )
+        radius_delta = np.zeros_like(smoothed_radius, dtype=float)
+        radius_delta[mask] = (
+            4.0 * radius_sum[mask] / (3.0 * neighbor_count[mask] + 27.0) - smoothed_radius[mask]
+        )
+        radius_delta_sum = ndi.convolve(
+            np.where(mask, radius_delta, 0.0),
+            neighborhood_kernel,
+            mode="constant",
+            cval=0.0,
+        )
+        local_update = np.zeros_like(smoothed_radius, dtype=float)
+        local_update[mask] = 0.02 * (
+            radius_delta[mask] - 1.98 * radius_delta_sum[mask] / (neighbor_count[mask] + 27.0)
+        )
+        smoothed_radius[mask] += np.clip(local_update[mask], -0.005, 0.01)
+    return smoothed_radius
+
+
 def resolve_maximal_ball_settings(
     distance_map: np.ndarray,
     settings: MaximalBallSettings | None = None,
@@ -1938,15 +1991,11 @@ def _select_interface_supporting_ball_data(
     )
     touch_index_side1 = np.asarray(region_adjacency.throat_max_touch_index_side1, dtype=np.int64)
     touch_index_side2 = np.asarray(region_adjacency.throat_max_touch_index_side2, dtype=np.int64)
-    retained_center_coordinates = np.asarray(hierarchy.center_coordinates, dtype=float)
-    retained_radii_voxels = np.asarray(hierarchy.radii_voxels, dtype=float)
-    root_label_of_ball = np.asarray(voxel_regions.root_of_ball_index, dtype=np.int64)
     image_ndim = (
         int(throat_centroid_indices.shape[1])
         if throat_centroid_indices.size
         else int(voxel_regions.label_image.ndim)
     )
-    support_tolerance_voxels = 0.5 * np.sqrt(float(image_ndim))
 
     throat_count = int(throat_region_pairs.shape[0])
     first_side_radii = np.asarray(touch_radius_side1_voxels, dtype=float).copy()
@@ -1968,9 +2017,11 @@ def _select_interface_supporting_ball_data(
         if any(value < 0 for value in seed_index_tuple):
             return np.full(image_ndim, np.nan, dtype=float), float("nan")
         if seed_index_tuple not in refined_touch_seed_cache:
-            _, refined_center_coordinate, refined_radius_voxels = refine_ball_from_seed_index(
+            refined_center_coordinate, refined_radius_voxels = _refine_ball_center_subvoxel(
                 hierarchy.distance_map,
                 np.asarray(seed_index, dtype=np.int64),
+                displacement_limit=0.49,
+                radius_gain_factor=0.95,
             )
             refined_touch_seed_cache[seed_index_tuple] = (
                 np.asarray(refined_center_coordinate, dtype=float),
@@ -1987,55 +2038,12 @@ def _select_interface_supporting_ball_data(
         )
         if np.isfinite(side1_seed_radius):
             first_side_center_coordinates[throat_index] = side1_seed_center_coordinate
-            first_side_radii[throat_index] = max(
-                float(np.nan_to_num(first_side_radii[throat_index], nan=-np.inf)),
-                side1_seed_radius,
-            )
+            if not np.isfinite(first_side_radii[throat_index]):
+                first_side_radii[throat_index] = side1_seed_radius
         if np.isfinite(side2_seed_radius):
             second_side_center_coordinates[throat_index] = side2_seed_center_coordinate
-            second_side_radii[throat_index] = max(
-                float(np.nan_to_num(second_side_radii[throat_index], nan=-np.inf)),
-                side2_seed_radius,
-            )
-
-        if retained_center_coordinates.size == 0:
-            continue
-
-        throat_centroid_index = throat_centroid_indices[throat_index]
-        distances_to_centroid = np.linalg.norm(
-            retained_center_coordinates - throat_centroid_index,
-            axis=1,
-        )
-        centroid_supported_mask = distances_to_centroid <= (
-            retained_radii_voxels + support_tolerance_voxels
-        )
-        if not np.any(centroid_supported_mask):
-            continue
-
-        first_region_label = int(region_pair[0])
-        second_region_label = int(region_pair[1])
-        first_region_mask = centroid_supported_mask & (root_label_of_ball == first_region_label)
-        second_region_mask = centroid_supported_mask & (root_label_of_ball == second_region_label)
-        if np.any(first_region_mask):
-            first_region_best_index = int(np.argmax(retained_radii_voxels[first_region_mask]))
-            first_region_best_ball = np.flatnonzero(first_region_mask)[first_region_best_index]
-            first_side_center_coordinates[throat_index] = retained_center_coordinates[
-                first_region_best_ball
-            ]
-            first_side_radii[throat_index] = max(
-                float(np.nan_to_num(first_side_radii[throat_index], nan=-np.inf)),
-                float(np.max(retained_radii_voxels[first_region_mask])),
-            )
-        if np.any(second_region_mask):
-            second_region_best_index = int(np.argmax(retained_radii_voxels[second_region_mask]))
-            second_region_best_ball = np.flatnonzero(second_region_mask)[second_region_best_index]
-            second_side_center_coordinates[throat_index] = retained_center_coordinates[
-                second_region_best_ball
-            ]
-            second_side_radii[throat_index] = max(
-                float(np.nan_to_num(second_side_radii[throat_index], nan=-np.inf)),
-                float(np.max(retained_radii_voxels[second_region_mask])),
-            )
+            if not np.isfinite(second_side_radii[throat_index]):
+                second_side_radii[throat_index] = side2_seed_radius
 
     return (
         first_side_center_coordinates,
@@ -2128,11 +2136,24 @@ def _resolve_axis_boundary_label_overlap(
     return lower_contact, upper_contact
 
 
+def _resolve_flow_boundary_mode(flow_boundary_mode: str) -> str:
+    """Normalize the network boundary treatment used for flow solves."""
+
+    normalized_mode = str(flow_boundary_mode).strip().lower()
+    if normalized_mode not in {"direct", "external_reservoir"}:
+        raise ValueError("flow_boundary_mode must be one of {'direct', 'external_reservoir'}")
+    return normalized_mode
+
+
 def build_network_dict_from_maximal_ball_regions(
     extraction_result: MaximalBallExtractionResult,
     *,
     voxel_size: float,
     axis_names: tuple[str, ...] = ("x", "y", "z"),
+    flow_boundary_mode: str = "direct",
+    boundary_axis: str | None = None,
+    boundary_length_epsilon: float = 1.0e-300,
+    boundary_radius_scale: float = 1.1,
 ) -> dict[str, np.ndarray]:
     """Assemble a PoreSpy-style network mapping from maximal-ball regions.
 
@@ -2175,6 +2196,11 @@ def build_network_dict_from_maximal_ball_regions(
 
     if voxel_size <= 0.0:
         raise ValueError("voxel_size must be positive")
+    normalized_flow_boundary_mode = _resolve_flow_boundary_mode(flow_boundary_mode)
+    if boundary_length_epsilon <= 0.0:
+        raise ValueError("boundary_length_epsilon must be positive")
+    if boundary_radius_scale <= 0.0:
+        raise ValueError("boundary_radius_scale must be positive")
 
     hierarchy = extraction_result.hierarchy
     voxel_regions = extraction_result.voxel_regions
@@ -2190,6 +2216,10 @@ def build_network_dict_from_maximal_ball_regions(
         raise ValueError("axis_names must provide at least one label per image dimension")
 
     active_axis_names = axis_names[:image_ndim]
+    if boundary_axis is not None and boundary_axis not in active_axis_names:
+        raise ValueError("boundary_axis must be one of the active axis names")
+    if normalized_flow_boundary_mode == "external_reservoir" and boundary_axis is None:
+        boundary_axis = active_axis_names[0]
     retained_region_labels = np.asarray(region_adjacency.region_labels, dtype=np.int64)
     region_count = int(retained_region_labels.size)
     all_root_center_indices = np.asarray(voxel_regions.root_center_indices, dtype=float)
@@ -2328,6 +2358,222 @@ def build_network_dict_from_maximal_ball_regions(
         core_length = np.zeros(0, dtype=float)
         throat_total_length = np.zeros(0, dtype=float)
 
+    direct_boundary_label_masks: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    connected_boundary_label_masks: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    pore_boundary = np.zeros(region_count, dtype=bool)
+    for axis_index, axis_name in enumerate(active_axis_names):
+        lower_face_count = np.asarray(
+            region_adjacency.boundary_face_counts[:, 2 * axis_index],
+            dtype=np.int64,
+        )
+        upper_face_count = np.asarray(
+            region_adjacency.boundary_face_counts[:, 2 * axis_index + 1],
+            dtype=np.int64,
+        )
+        lower_contact = lower_face_count > 0
+        upper_contact = upper_face_count > 0
+        lower_contact, upper_contact = _resolve_axis_boundary_label_overlap(
+            lower_contact,
+            upper_contact,
+            lower_face_count=lower_face_count,
+            upper_face_count=upper_face_count,
+            pore_axis_coordinates=pore_coords[:, axis_index],
+            sample_axis_length=voxel_regions.label_image.shape[axis_index] * float(voxel_size),
+        )
+        direct_boundary_label_masks[axis_name] = (lower_contact, upper_contact)
+        connected_boundary_label_masks[axis_name] = (lower_contact.copy(), upper_contact.copy())
+        pore_boundary |= lower_contact | upper_contact
+
+    if normalized_flow_boundary_mode == "external_reservoir" and boundary_axis is not None:
+        boundary_axis_index = active_axis_names.index(boundary_axis)
+        lower_contact, upper_contact = direct_boundary_label_masks[boundary_axis]
+        lower_face_count = np.asarray(
+            region_adjacency.boundary_face_counts[:, 2 * boundary_axis_index],
+            dtype=np.int64,
+        )
+        upper_face_count = np.asarray(
+            region_adjacency.boundary_face_counts[:, 2 * boundary_axis_index + 1],
+            dtype=np.int64,
+        )
+        sample_axis_length = voxel_regions.label_image.shape[boundary_axis_index] * float(
+            voxel_size
+        )
+
+        helper_coordinates: list[np.ndarray] = []
+        helper_radii: list[float] = []
+        helper_areas: list[float] = []
+        helper_volumes: list[float] = []
+        helper_surface_areas: list[float] = []
+        boundary_throat_connections: list[tuple[int, int]] = []
+        boundary_throat_area: list[float] = []
+        boundary_throat_radius: list[float] = []
+        boundary_throat_pore1_length: list[float] = []
+        boundary_throat_core_length: list[float] = []
+        boundary_throat_pore2_length: list[float] = []
+        boundary_throat_centroids: list[np.ndarray] = []
+        boundary_throat_face_counts: list[float] = []
+        boundary_axis_face_balance: list[np.ndarray] = []
+        boundary_support_radius_side1: list[float] = []
+        boundary_support_radius_side2: list[float] = []
+        inlet_helper_mask: list[bool] = []
+        outlet_helper_mask: list[bool] = []
+
+        def append_boundary_helper_pores(
+            contact_mask: np.ndarray,
+            face_counts: np.ndarray,
+            side: str,
+        ) -> None:
+            boundary_coordinate = 0.0 if side == "lower" else sample_axis_length
+            contact_indices = np.flatnonzero(contact_mask)
+            for pore_index in contact_indices:
+                helper_index = region_count + len(helper_coordinates)
+                physical_coordinate = pore_coords[pore_index]
+                helper_coordinate = physical_coordinate.copy()
+                helper_coordinate[boundary_axis_index] = boundary_coordinate
+                face_count = max(int(face_counts[pore_index]), 1)
+                contact_area = float(face_count) * float(voxel_size) ** 2
+                contact_radius = min(
+                    float(pore_radius[pore_index]),
+                    float(np.sqrt(contact_area / np.pi)),
+                )
+                contact_radius = max(contact_radius, 0.5 * float(voxel_size))
+                helper_radius = boundary_radius_scale * contact_radius
+                center_to_boundary_length = abs(
+                    float(physical_coordinate[boundary_axis_index] - boundary_coordinate)
+                )
+                total_boundary_length = max(
+                    center_to_boundary_length,
+                    3.01 * float(voxel_size),
+                )
+                internal_pore_length = max(0.67 * center_to_boundary_length, 0.0)
+                boundary_core_length = max(
+                    total_boundary_length - boundary_length_epsilon - internal_pore_length,
+                    float(voxel_size),
+                )
+
+                helper_coordinates.append(helper_coordinate)
+                helper_radii.append(helper_radius)
+                helper_areas.append(np.pi * helper_radius**2)
+                helper_volumes.append(0.0)
+                helper_surface_areas.append(0.0)
+                boundary_throat_area.append(contact_area)
+                boundary_throat_radius.append(contact_radius)
+                boundary_throat_centroids.append(helper_coordinate.copy())
+                boundary_throat_face_counts.append(float(face_count))
+                axis_balance = np.zeros(image_ndim, dtype=float)
+                axis_balance[boundary_axis_index] = -face_count if side == "lower" else face_count
+                boundary_axis_face_balance.append(axis_balance)
+                if side == "lower":
+                    boundary_throat_connections.append((helper_index, int(pore_index)))
+                    boundary_throat_pore1_length.append(boundary_length_epsilon)
+                    boundary_throat_pore2_length.append(internal_pore_length)
+                    inlet_helper_mask.append(True)
+                    outlet_helper_mask.append(False)
+                else:
+                    boundary_throat_connections.append((int(pore_index), helper_index))
+                    boundary_throat_pore1_length.append(internal_pore_length)
+                    boundary_throat_pore2_length.append(boundary_length_epsilon)
+                    inlet_helper_mask.append(False)
+                    outlet_helper_mask.append(True)
+                boundary_throat_core_length.append(boundary_core_length)
+                boundary_support_radius_side1.append(contact_radius)
+                boundary_support_radius_side2.append(contact_radius)
+
+        append_boundary_helper_pores(lower_contact, lower_face_count, "lower")
+        append_boundary_helper_pores(upper_contact, upper_face_count, "upper")
+
+        helper_count = len(helper_coordinates)
+        if helper_count:
+            pore_coords = np.vstack([pore_coords, np.asarray(helper_coordinates, dtype=float)])
+            pore_radius = np.concatenate([pore_radius, np.asarray(helper_radii, dtype=float)])
+            pore_area = np.concatenate([pore_area, np.asarray(helper_areas, dtype=float)])
+            pore_volume = np.concatenate([pore_volume, np.asarray(helper_volumes, dtype=float)])
+            pore_surface_area = np.concatenate(
+                [pore_surface_area, np.asarray(helper_surface_areas, dtype=float)]
+            )
+            throat_region_pairs = np.vstack(
+                [
+                    throat_region_pairs,
+                    np.asarray(boundary_throat_connections, dtype=np.int64),
+                ]
+            )
+            throat_area = np.concatenate(
+                [throat_area, np.asarray(boundary_throat_area, dtype=float)]
+            )
+            throat_radius = np.concatenate(
+                [throat_radius, np.asarray(boundary_throat_radius, dtype=float)]
+            )
+            pore1_length = np.concatenate(
+                [pore1_length, np.asarray(boundary_throat_pore1_length, dtype=float)]
+            )
+            core_length = np.concatenate(
+                [core_length, np.asarray(boundary_throat_core_length, dtype=float)]
+            )
+            pore2_length = np.concatenate(
+                [pore2_length, np.asarray(boundary_throat_pore2_length, dtype=float)]
+            )
+            added_total_lengths = (
+                pore1_length[-helper_count:]
+                + core_length[-helper_count:]
+                + pore2_length[-helper_count:]
+            )
+            throat_total_length = np.concatenate([throat_total_length, added_total_lengths])
+            throat_centroid_coords = np.vstack(
+                [throat_centroid_coords, np.asarray(boundary_throat_centroids, dtype=float)]
+            )
+            throat_face_counts = np.concatenate(
+                [throat_face_counts, np.asarray(boundary_throat_face_counts, dtype=float)]
+            )
+            axis_face_balance = np.vstack(
+                [
+                    np.asarray(region_adjacency.throat_axis_face_balance, dtype=float),
+                    np.asarray(boundary_axis_face_balance, dtype=float),
+                ]
+            )
+            first_side_radius_physical = np.concatenate(
+                [
+                    first_side_radius_physical,
+                    np.asarray(boundary_support_radius_side1, dtype=float),
+                ]
+            )
+            second_side_radius_physical = np.concatenate(
+                [
+                    second_side_radius_physical,
+                    np.asarray(boundary_support_radius_side2, dtype=float),
+                ]
+            )
+            pore_boundary = np.concatenate([pore_boundary, np.ones(helper_count, dtype=bool)])
+            for axis_name in active_axis_names:
+                lower_mask, upper_mask = direct_boundary_label_masks[axis_name]
+                direct_boundary_label_masks[axis_name] = (
+                    np.concatenate([lower_mask, np.zeros(helper_count, dtype=bool)]),
+                    np.concatenate([upper_mask, np.zeros(helper_count, dtype=bool)]),
+                )
+                connected_lower, connected_upper = connected_boundary_label_masks[axis_name]
+                connected_boundary_label_masks[axis_name] = (
+                    np.concatenate([connected_lower, np.zeros(helper_count, dtype=bool)]),
+                    np.concatenate([connected_upper, np.zeros(helper_count, dtype=bool)]),
+                )
+            inlet_label = np.concatenate(
+                [
+                    np.zeros(region_count, dtype=bool),
+                    np.asarray(inlet_helper_mask, dtype=bool),
+                ]
+            )
+            outlet_label = np.concatenate(
+                [
+                    np.zeros(region_count, dtype=bool),
+                    np.asarray(outlet_helper_mask, dtype=bool),
+                ]
+            )
+            direct_boundary_label_masks[boundary_axis] = (inlet_label, outlet_label)
+            region_count = int(pore_coords.shape[0])
+            throat_count = int(throat_region_pairs.shape[0])
+        else:
+            axis_face_balance = np.asarray(region_adjacency.throat_axis_face_balance, dtype=float)
+    else:
+        axis_face_balance = np.asarray(region_adjacency.throat_axis_face_balance, dtype=float)
+
     pore_data: dict[str, np.ndarray] = {
         "radius_inscribed": pore_radius.copy(),
         "area": pore_area.copy(),
@@ -2347,7 +2593,7 @@ def build_network_dict_from_maximal_ball_regions(
         "pore2_length": pore2_length,
         "centroid": throat_centroid_coords,
         "face_count": throat_face_counts.astype(np.int64, copy=False),
-        "axis_face_balance": np.asarray(region_adjacency.throat_axis_face_balance, dtype=float),
+        "axis_face_balance": axis_face_balance,
         "supporting_radius_side1": first_side_radius_physical,
         "supporting_radius_side2": second_side_radius_physical,
     }
@@ -2367,6 +2613,17 @@ def build_network_dict_from_maximal_ball_regions(
         throat_region_pairs,
     )
     _derive_missing_geometry(pore_data, throat_data)
+    boundary_face_count = np.asarray(
+        region_adjacency.boundary_face_counts.sum(axis=1),
+        dtype=np.int64,
+    )
+    if boundary_face_count.size < region_count:
+        boundary_face_count = np.concatenate(
+            [
+                boundary_face_count,
+                np.zeros(region_count - boundary_face_count.size, dtype=np.int64),
+            ]
+        )
 
     network_dict: dict[str, np.ndarray] = {
         "pore.coords": pore_coords,
@@ -2390,38 +2647,19 @@ def build_network_dict_from_maximal_ball_regions(
         "throat.axis_face_balance": throat_data["axis_face_balance"],
         "throat.supporting_radius_side1": throat_data["supporting_radius_side1"],
         "throat.supporting_radius_side2": throat_data["supporting_radius_side2"],
-        "pore.boundary_face_count": np.asarray(
-            region_adjacency.boundary_face_counts.sum(axis=1),
-            dtype=np.int64,
-        ),
+        "pore.boundary_face_count": boundary_face_count,
         "throat.geometry_repairs_mode": np.full(
             throat_count, geometry_repair_summary["mode"], dtype=object
         ),
     }
 
-    pore_boundary = np.zeros(region_count, dtype=bool)
-    for axis_index, axis_name in enumerate(active_axis_names):
-        lower_face_count = np.asarray(
-            region_adjacency.boundary_face_counts[:, 2 * axis_index],
-            dtype=np.int64,
-        )
-        upper_face_count = np.asarray(
-            region_adjacency.boundary_face_counts[:, 2 * axis_index + 1],
-            dtype=np.int64,
-        )
-        lower_contact = lower_face_count > 0
-        upper_contact = upper_face_count > 0
-        lower_contact, upper_contact = _resolve_axis_boundary_label_overlap(
-            lower_contact,
-            upper_contact,
-            lower_face_count=lower_face_count,
-            upper_face_count=upper_face_count,
-            pore_axis_coordinates=pore_coords[:, axis_index],
-            sample_axis_length=voxel_regions.label_image.shape[axis_index] * float(voxel_size),
-        )
+    for axis_name in active_axis_names:
+        lower_contact, upper_contact = direct_boundary_label_masks[axis_name]
         network_dict[f"pore.inlet_{axis_name}min"] = lower_contact
         network_dict[f"pore.outlet_{axis_name}max"] = upper_contact
-        pore_boundary |= lower_contact | upper_contact
+        connected_lower, connected_upper = connected_boundary_label_masks[axis_name]
+        network_dict[f"pore.boundary_connected_inlet_{axis_name}min"] = connected_lower
+        network_dict[f"pore.boundary_connected_outlet_{axis_name}max"] = connected_upper
     network_dict["pore.boundary"] = pore_boundary
     return network_dict
 
@@ -2434,6 +2672,10 @@ def extract_maximal_ball_network_dict(
     settings: MaximalBallSettings | None = None,
     apply_boundary_clipping: bool = True,
     axis_names: tuple[str, ...] = ("x", "y", "z"),
+    flow_boundary_mode: str = "direct",
+    boundary_axis: str | None = None,
+    boundary_length_epsilon: float = 1.0e-300,
+    boundary_radius_scale: float = 1.1,
 ) -> MaximalBallNetworkDictResult:
     """Run the staged native maximal-ball path and assemble a network mapping."""
 
@@ -2447,6 +2689,10 @@ def extract_maximal_ball_network_dict(
         extraction_result,
         voxel_size=voxel_size,
         axis_names=axis_names,
+        flow_boundary_mode=flow_boundary_mode,
+        boundary_axis=boundary_axis,
+        boundary_length_epsilon=boundary_length_epsilon,
+        boundary_radius_scale=boundary_radius_scale,
     )
     return MaximalBallNetworkDictResult(
         network_dict=network_dict,
@@ -2523,6 +2769,7 @@ __all__ = [
     "resolve_maximal_ball_settings",
     "retreat_mixed_region_boundary_voxels",
     "seed_root_region_ball_interiors",
+    "smooth_radius_field_local_relaxation",
     "stamp_retained_ball_centers_to_root_labels",
     "summarize_maximal_ball_extraction_diagnostics",
     "suppress_overlapping_maximal_balls",

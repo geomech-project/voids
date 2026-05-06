@@ -271,6 +271,7 @@ def _extract_network_dict(
     backend: str,
     voxel_size: float,
     extraction_kwargs: dict[str, object] | None,
+    flow_axis: str | None,
 ) -> dict[str, object]:
     """Dispatch image extraction to the requested backend."""
 
@@ -295,6 +296,12 @@ def _extract_network_dict(
             )
         distance_map_backend = str(kwargs.pop("distance_map_backend", "auto"))
         apply_boundary_clipping = bool(kwargs.pop("apply_boundary_clipping", True))
+        flow_boundary_mode = str(kwargs.pop("flow_boundary_mode", "direct"))
+        boundary_axis = kwargs.pop("boundary_axis", flow_axis)
+        if boundary_axis is not None:
+            boundary_axis = str(boundary_axis)
+        boundary_length_epsilon = float(kwargs.pop("boundary_length_epsilon", 1.0e-300))
+        boundary_radius_scale = float(kwargs.pop("boundary_radius_scale", 1.1))
         if kwargs:
             unexpected_keys = ", ".join(sorted(kwargs))
             raise ValueError(
@@ -306,6 +313,10 @@ def _extract_network_dict(
             distance_map_backend=distance_map_backend,
             settings=settings_value,
             apply_boundary_clipping=apply_boundary_clipping,
+            flow_boundary_mode=flow_boundary_mode,
+            boundary_axis=boundary_axis,
+            boundary_length_epsilon=boundary_length_epsilon,
+            boundary_radius_scale=boundary_radius_scale,
         ).network_dict
     raise AssertionError(f"Unhandled normalized backend {backend_normalized!r}")
 
@@ -348,7 +359,9 @@ def extract_spanning_pore_network(
         Imperial-calibrated `snow2` aliases, user-supplied values override the
         built-in defaults ``sigma=1.0``, ``r_max=4``, and ``boundary_width=1``.
         For the native maximal-ball backend, supported keys are
-        ``distance_map_backend``, ``apply_boundary_clipping``, and either
+        ``distance_map_backend``, ``apply_boundary_clipping``,
+        ``flow_boundary_mode``, ``boundary_axis``,
+        ``boundary_length_epsilon``, ``boundary_radius_scale``, and either
         ``settings`` or ``maximal_ball_settings``.
     provenance_notes :
         Optional extra provenance metadata attached to the resulting network.
@@ -392,6 +405,7 @@ def extract_spanning_pore_network(
         backend=backend_normalized,
         voxel_size=float(voxel_size),
         extraction_kwargs=extraction_kwargs,
+        flow_axis=selected_axis,
     )
     importer_geometry_repairs = geometry_repairs
     if backend_normalized != "native_maximal_ball":
