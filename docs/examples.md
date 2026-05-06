@@ -223,6 +223,12 @@ and `pnflow`, reruns the current `voids` workflow on the same exact saved
 binary volumes, and compares permeability, porosity, and extracted-network
 size.
 
+The notebook now separates two questions explicitly:
+
+- imported-CNM parity, using the saved external network with
+  `pnflow_solver_box_compat=True`
+- full workflow mismatch, using `snow2` on the original saved binary image
+
 This is the notebook to use when the scientific question is whether the current
 `voids` image-to-network workflow tracks an independent external PNM workflow
 closely enough on controlled synthetic cases.
