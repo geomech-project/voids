@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -10,6 +11,7 @@ from voids.core.network import Network
 from voids.core.provenance import Provenance
 from voids.core.sample import SampleGeometry
 from voids.graph import spanning_subnetwork
+from voids.io.pnflow_cnm import load_pnflow_cnm
 from voids.io.porespy import ensure_cartesian_boundary_labels, from_porespy, scale_porespy_geometry
 
 
@@ -64,6 +66,31 @@ class NetworkExtractionResult:
     throat_mask: np.ndarray
     backend: str
     backend_version: str | None
+
+
+@dataclass(slots=True)
+class NetworkConstructionResult:
+    """Store outputs of a general network-construction workflow.
+
+    This result type covers both image-based extraction backends and imported
+    external-network backends such as Imperial CNM text files.
+    """
+
+    backend: str
+    flow_axis: str
+    sample: SampleGeometry
+    provenance: Provenance
+    net_full: Network
+    net: Network
+    image: np.ndarray | None = None
+    voxel_size: float | None = None
+    axis_lengths: dict[str, float] | None = None
+    axis_areas: dict[str, float] | None = None
+    network_dict: dict[str, object] | None = None
+    pore_indices: np.ndarray | None = None
+    throat_mask: np.ndarray | None = None
+    backend_version: str | None = None
+    backend_details: dict[str, object] = field(default_factory=dict)
 
 
 def infer_sample_axes(
@@ -146,10 +173,93 @@ def _snow2_network_dict(
     return dict(porespy_module.networks.regions_to_network(regions))
 
 
+def _normalize_extraction_backend(backend: str) -> str:
+    """Normalize public extraction-backend aliases."""
+
+    normalized = str(backend).strip().lower()
+    aliases = {
+        "porespy": "porespy_snow2",
+        "porespy_snow2": "porespy_snow2",
+        "snow2": "porespy_snow2",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            f"Unsupported extraction backend {backend!r}; expected one of {sorted(aliases)}"
+        )
+    return aliases[normalized]
+
+
+def _normalize_construction_backend(backend: str) -> str:
+    """Normalize public network-construction backend aliases."""
+
+    normalized = str(backend).strip().lower()
+    aliases = {
+        "porespy": "porespy_snow2",
+        "porespy_snow2": "porespy_snow2",
+        "snow2": "porespy_snow2",
+        "pnflow_cnm": "pnflow_cnm",
+        "imperial_cnm": "pnflow_cnm",
+        "pnextract_cnm": "pnflow_cnm",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            f"Unsupported construction backend {backend!r}; expected one of {sorted(aliases)}"
+        )
+    return aliases[normalized]
+
+
+def _merge_provenance_notes(provenance: Provenance, notes: dict[str, object] | None) -> Provenance:
+    """Return provenance with extra user notes merged in."""
+
+    if not notes:
+        return provenance
+    merged = Provenance.from_metadata(provenance.to_metadata())
+    merged.user_notes = {**merged.user_notes, **dict(notes)}
+    return merged
+
+
+def _construction_result_from_extraction(
+    result: NetworkExtractionResult,
+) -> NetworkConstructionResult:
+    """Lift an extraction result into the broader construction schema."""
+
+    return NetworkConstructionResult(
+        backend=result.backend,
+        flow_axis=result.flow_axis,
+        sample=result.sample,
+        provenance=result.provenance,
+        net_full=result.net_full,
+        net=result.net,
+        image=result.image,
+        voxel_size=result.voxel_size,
+        axis_lengths=result.axis_lengths,
+        axis_areas=result.axis_areas,
+        network_dict=result.network_dict,
+        pore_indices=result.pore_indices,
+        throat_mask=result.throat_mask,
+        backend_version=result.backend_version,
+    )
+
+
+def _extract_network_dict(
+    phases: np.ndarray,
+    *,
+    backend: str,
+    extraction_kwargs: dict[str, object] | None,
+) -> dict[str, object]:
+    """Dispatch image extraction to the requested backend."""
+
+    backend_normalized = _normalize_extraction_backend(backend)
+    if backend_normalized == "porespy_snow2":
+        return _snow2_network_dict(phases, snow2_kwargs=dict(extraction_kwargs or {}))
+    raise AssertionError(f"Unhandled normalized backend {backend_normalized!r}")
+
+
 def extract_spanning_pore_network(
     phases: np.ndarray,
     *,
     voxel_size: float,
+    backend: str = "porespy",
     flow_axis: str | None = None,
     length_unit: str = "m",
     pressure_unit: str = "Pa",
@@ -168,6 +278,11 @@ def extract_spanning_pore_network(
         phases passed to the extraction backend.
     voxel_size :
         Edge length of one voxel in the declared ``length_unit``.
+    backend :
+        Image-to-network extraction backend. Currently supported values are
+        ``"porespy"``, ``"snow2"``, and ``"porespy_snow2"``. The explicit
+        backend parameter keeps the public workflow ready for future
+        `pnextract`-like alternatives while preserving the current default.
     flow_axis :
         Requested spanning axis. When omitted, the longest image axis is used.
     length_unit, pressure_unit :
@@ -207,7 +322,12 @@ def extract_spanning_pore_network(
     if selected_axis not in axis_lengths:
         raise ValueError(f"flow_axis '{selected_axis}' is not compatible with shape {arr.shape}")
 
-    network_dict = _snow2_network_dict(arr, snow2_kwargs=dict(extraction_kwargs or {}))
+    backend_normalized = _normalize_extraction_backend(backend)
+    network_dict = _extract_network_dict(
+        arr,
+        backend=backend_normalized,
+        extraction_kwargs=extraction_kwargs,
+    )
     network_dict = scale_porespy_geometry(network_dict, voxel_size=voxel_size)
     network_dict = ensure_cartesian_boundary_labels(network_dict, axes=(selected_axis,))
 
@@ -227,7 +347,7 @@ def extract_spanning_pore_network(
     provenance = Provenance(
         source_kind="image_extraction",
         source_version=getattr(ps, "__version__", None),
-        extraction_method="snow2",
+        extraction_method=backend_normalized,
         random_seed=repair_seed if geometry_repairs is not None else None,
         user_notes=dict(provenance_notes or {}),
     )
@@ -253,13 +373,119 @@ def extract_spanning_pore_network(
         net=net,
         pore_indices=pore_indices,
         throat_mask=throat_mask,
-        backend="porespy",
+        backend=backend_normalized,
         backend_version=getattr(ps, "__version__", None),
     )
 
 
+def construct_spanning_network(
+    *,
+    backend: str,
+    phases: np.ndarray | None = None,
+    voxel_size: float | None = None,
+    pnflow_cnm_prefix: str | Path | None = None,
+    flow_axis: str | None = None,
+    length_unit: str = "m",
+    pressure_unit: str = "Pa",
+    extraction_kwargs: dict[str, object] | None = None,
+    provenance_notes: dict[str, object] | None = None,
+    strict: bool = True,
+    geometry_repairs: str | None = "imperial_export",
+    repair_seed: int | None = 0,
+) -> NetworkConstructionResult:
+    """Construct a pore network from an image backend or imported CNM files.
+
+    Parameters
+    ----------
+    backend :
+        Construction backend identifier. Supported values include the existing
+        image-extraction aliases ``"porespy"``, ``"snow2"``,
+        ``"porespy_snow2"``, and the imported-network aliases
+        ``"pnflow_cnm"``, ``"imperial_cnm"``, and ``"pnextract_cnm"``.
+    phases, voxel_size :
+        Required for image-based backends and forwarded to
+        :func:`extract_spanning_pore_network`.
+    pnflow_cnm_prefix :
+        Required for the Imperial CNM backend. This is the shared path prefix
+        before the ``*_node*.dat`` and ``*_link*.dat`` suffixes.
+    flow_axis, length_unit, pressure_unit, extraction_kwargs, provenance_notes,
+    strict, geometry_repairs, repair_seed :
+        Forwarded to the selected backend where applicable.
+
+    Returns
+    -------
+    NetworkConstructionResult
+        Unified network-construction result.
+    """
+
+    backend_normalized = _normalize_construction_backend(backend)
+    if backend_normalized == "porespy_snow2":
+        if phases is None:
+            raise ValueError("phases is required for the image-extraction backends")
+        if voxel_size is None:
+            raise ValueError("voxel_size is required for the image-extraction backends")
+        extracted = extract_spanning_pore_network(
+            phases,
+            voxel_size=float(voxel_size),
+            backend=backend_normalized,
+            flow_axis=flow_axis,
+            length_unit=length_unit,
+            pressure_unit=pressure_unit,
+            extraction_kwargs=extraction_kwargs,
+            provenance_notes=provenance_notes,
+            strict=strict,
+            geometry_repairs=geometry_repairs,
+            repair_seed=repair_seed,
+        )
+        return _construction_result_from_extraction(extracted)
+
+    if pnflow_cnm_prefix is None:
+        raise ValueError("pnflow_cnm_prefix is required for backend='pnflow_cnm'")
+    selected_axis = "x" if flow_axis is None else str(flow_axis)
+    if selected_axis != "x":
+        raise ValueError("Imperial CNM construction currently supports only flow_axis='x'")
+
+    imported = load_pnflow_cnm(
+        pnflow_cnm_prefix,
+        boundary_axis=selected_axis,
+        length_unit=length_unit,
+        pressure_unit=pressure_unit,
+    )
+    net = imported.net.copy()
+    net.provenance = _merge_provenance_notes(net.provenance, provenance_notes)
+    axis_lengths = dict(imported.box_lengths)
+    axis_areas = {
+        "x": imported.box_lengths["y"] * imported.box_lengths["z"],
+        "y": imported.box_lengths["x"] * imported.box_lengths["z"],
+        "z": imported.box_lengths["x"] * imported.box_lengths["y"],
+    }
+    return NetworkConstructionResult(
+        backend=backend_normalized,
+        flow_axis=selected_axis,
+        sample=net.sample,
+        provenance=net.provenance,
+        net_full=net,
+        net=net,
+        image=None,
+        voxel_size=None,
+        axis_lengths=axis_lengths,
+        axis_areas=axis_areas,
+        network_dict=None,
+        pore_indices=np.arange(net.Np, dtype=np.int64),
+        throat_mask=np.ones(net.Nt, dtype=bool),
+        backend_version=None,
+        backend_details={
+            "pnflow_cnm_prefix": str(Path(pnflow_cnm_prefix)),
+            "n_physical_pores": int(imported.n_physical_pores),
+            "n_boundary_mirror_pores": int(imported.n_boundary_mirror_pores),
+        },
+    )
+
+
 __all__ = [
+    "NetworkConstructionResult",
     "NetworkExtractionResult",
+    "construct_spanning_network",
     "infer_sample_axes",
     "extract_spanning_pore_network",
 ]

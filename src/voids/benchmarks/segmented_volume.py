@@ -129,6 +129,7 @@ def benchmark_segmented_volume_with_openpnm(
     phases: np.ndarray,
     *,
     voxel_size: float,
+    extraction_backend: str = "porespy",
     flow_axis: str | None = None,
     fluid: FluidSinglePhase | None = None,
     delta_p: float | None = None,
@@ -149,6 +150,9 @@ def benchmark_segmented_volume_with_openpnm(
         Binary segmented image encoded as ``void=1`` and ``solid=0``.
     voxel_size :
         Edge length of one voxel in the declared length unit.
+    extraction_backend :
+        Image-to-network extraction backend forwarded to
+        :func:`voids.image.extract_spanning_pore_network`.
     flow_axis :
         Requested transport axis. When omitted, the longest image axis is used.
     fluid :
@@ -220,6 +224,7 @@ def benchmark_segmented_volume_with_openpnm(
     extract = extract_spanning_pore_network(
         arr,
         voxel_size=voxel_size,
+        backend=extraction_backend,
         flow_axis=flow_axis,
         length_unit=length_unit,
         pressure_unit=pressure_unit,

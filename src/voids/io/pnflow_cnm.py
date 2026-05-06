@@ -11,6 +11,9 @@ from voids.core.sample import SampleGeometry
 from voids.core.validation import validate_network
 
 _BOUNDARY_LENGTH_EPS = 1.0e-300
+_TRIANGLE_MAX_G = np.sqrt(3.0) / 36.0
+_SQUARE_G = 1.0 / 16.0
+_CIRCLE_G = 1.0 / (4.0 * np.pi)
 
 
 @dataclass(slots=True)
@@ -48,6 +51,28 @@ def _split_numeric_line(line: str, *, expected_min_tokens: int, label: str) -> l
             f"Malformed {label}: expected at least {expected_min_tokens} fields, got {len(tokens)}"
         )
     return tokens
+
+
+def _pnflow_effective_shape_factor(shape_factor: np.ndarray) -> np.ndarray:
+    """Return the effective shape factor used internally by `pnflow`.
+
+    Notes
+    -----
+    The Imperial code uses the exported shape factor to classify elements, but
+    square and circular element models solve with canonical shape factors.
+    Triangle elements retain the exported value, capped slightly below the
+    triangular upper bound in the same way as `Element.cpp`.
+    """
+
+    g = np.asarray(shape_factor, dtype=float)
+    out = g.copy()
+    tri = out <= _TRIANGLE_MAX_G + 1.0e-5
+    sq = (out > _TRIANGLE_MAX_G + 1.0e-5) & (out < 0.07)
+    cir = out >= 0.07
+    out[tri] = np.minimum(out[tri], _TRIANGLE_MAX_G - 5.0e-5)
+    out[sq] = _SQUARE_G
+    out[cir] = _CIRCLE_G
+    return out
 
 
 def load_pnflow_cnm(
@@ -142,7 +167,7 @@ def load_pnflow_cnm(
     pore_coords = np.zeros((n_physical_pores, 3), dtype=float)
     pore_volume = np.zeros(n_physical_pores, dtype=float)
     pore_radius = np.zeros(n_physical_pores, dtype=float)
-    pore_shape_factor = np.zeros(n_physical_pores, dtype=float)
+    pore_shape_factor_raw = np.zeros(n_physical_pores, dtype=float)
     pore_connected_inlet = np.zeros(n_physical_pores, dtype=bool)
     pore_connected_outlet = np.zeros(n_physical_pores, dtype=bool)
 
@@ -164,12 +189,12 @@ def load_pnflow_cnm(
         idx = int(tokens[0]) - 1
         pore_volume[idx] = float(tokens[1])
         pore_radius[idx] = max(float(tokens[2]), boundary_length_epsilon)
-        pore_shape_factor[idx] = max(float(tokens[3]), boundary_length_epsilon)
+        pore_shape_factor_raw[idx] = max(float(tokens[3]), boundary_length_epsilon)
 
     coords_list = pore_coords.tolist()
     volume_list = pore_volume.tolist()
     radius_list = pore_radius.tolist()
-    shape_factor_list = pore_shape_factor.tolist()
+    shape_factor_raw_list = pore_shape_factor_raw.tolist()
     inlet_label = np.zeros(n_physical_pores, dtype=bool).tolist()
     outlet_label = np.zeros(n_physical_pores, dtype=bool).tolist()
 
@@ -207,7 +232,7 @@ def load_pnflow_cnm(
             coords_list.append([x_boundary, pore_coords[right, 1], pore_coords[right, 2]])
             volume_list.append(0.0)
             radius_list.append(throat_radius[throat_idx] * boundary_radius_scale)
-            shape_factor_list.append(throat_shape_factor[throat_idx])
+            shape_factor_raw_list.append(throat_shape_factor[throat_idx])
             inlet_label.append(pore1_idx_raw == -1)
             outlet_label.append(pore1_idx_raw == 0)
             left = len(coords_list) - 1
@@ -224,7 +249,7 @@ def load_pnflow_cnm(
             coords_list.append([x_boundary, left_coords[1], left_coords[2]])
             volume_list.append(0.0)
             radius_list.append(throat_radius[throat_idx] * boundary_radius_scale)
-            shape_factor_list.append(throat_shape_factor[throat_idx])
+            shape_factor_raw_list.append(throat_shape_factor[throat_idx])
             inlet_label.append(pore2_idx_raw == -1)
             outlet_label.append(pore2_idx_raw == 0)
             right = len(coords_list) - 1
@@ -238,10 +263,13 @@ def load_pnflow_cnm(
     pore_coords_arr = np.asarray(coords_list, dtype=float)
     pore_volume_arr = np.asarray(volume_list, dtype=float)
     pore_radius_arr = np.asarray(radius_list, dtype=float)
-    pore_shape_factor_arr = np.asarray(shape_factor_list, dtype=float)
+    pore_shape_factor_raw_arr = np.asarray(shape_factor_raw_list, dtype=float)
+    pore_shape_factor_arr = _pnflow_effective_shape_factor(pore_shape_factor_raw_arr)
     inlet_label_arr = np.asarray(inlet_label, dtype=bool)
     outlet_label_arr = np.asarray(outlet_label, dtype=bool)
     pore_area_arr = pore_radius_arr**2 / (4.0 * pore_shape_factor_arr)
+    throat_shape_factor_raw = throat_shape_factor.copy()
+    throat_shape_factor = _pnflow_effective_shape_factor(throat_shape_factor_raw)
     throat_area = throat_radius**2 / (4.0 * throat_shape_factor)
 
     net = Network(
@@ -268,6 +296,7 @@ def load_pnflow_cnm(
             "radius_inscribed": pore_radius_arr,
             "diameter_inscribed": 2.0 * pore_radius_arr,
             "shape_factor": pore_shape_factor_arr,
+            "shape_factor_raw": pore_shape_factor_raw_arr,
             "area": pore_area_arr,
         },
         throat={
@@ -275,6 +304,7 @@ def load_pnflow_cnm(
             "radius_inscribed": throat_radius,
             "diameter_inscribed": 2.0 * throat_radius,
             "shape_factor": throat_shape_factor,
+            "shape_factor_raw": throat_shape_factor_raw,
             "area": throat_area,
             "core_length": throat_core_length,
             "pore1_length": throat_pore1_length,

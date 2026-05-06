@@ -1,6 +1,8 @@
 from voids.image.connectivity import has_spanning_cluster, has_spanning_cluster_2d
 from voids.image.network_extraction import (
+    NetworkConstructionResult,
     NetworkExtractionResult,
+    construct_spanning_network,
     extract_spanning_pore_network,
     infer_sample_axes,
 )
@@ -17,7 +19,9 @@ from voids.image.segmentation import (
 __all__ = [
     "has_spanning_cluster",
     "has_spanning_cluster_2d",
+    "NetworkConstructionResult",
     "NetworkExtractionResult",
+    "construct_spanning_network",
     "extract_spanning_pore_network",
     "infer_sample_axes",
     "VolumeCropResult",
