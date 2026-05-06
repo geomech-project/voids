@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy import ndimage as ndi
+from scipy.spatial import cKDTree
 
 try:
     import edt as fast_edt
@@ -72,6 +73,31 @@ class MaximalBallCandidates:
         """Return retained maximal-ball radii in descending-radius order."""
 
         return self.radii_voxels[self.retained_mask]
+
+
+@dataclass(slots=True)
+class MaximalBallHierarchy:
+    """Parent-child hierarchy over retained maximal-ball candidates.
+
+    The hierarchy is stored on the retained-ball order of
+    :class:`MaximalBallCandidates`, which is already sorted by descending
+    radius. Each ball points either to itself, if it is a root/master ball, or
+    to the index of its parent ball in the same retained ordering.
+    """
+
+    center_indices: np.ndarray
+    radii_voxels: np.ndarray
+    parent_indices: np.ndarray
+    master_indices: np.ndarray
+    hierarchy_levels: np.ndarray
+    distance_map: np.ndarray
+    settings: ResolvedMaximalBallSettings
+
+    @property
+    def root_mask(self) -> np.ndarray:
+        """Return a boolean mask of root/master balls."""
+
+        return self.parent_indices == np.arange(self.parent_indices.size, dtype=np.int64)
 
 
 def compute_void_distance_map(
@@ -297,6 +323,263 @@ def suppress_overlapping_maximal_balls(
     return retained_mask
 
 
+def _find_root_index(parent_indices: np.ndarray, ball_index: int) -> int:
+    """Return the root/master index of one retained ball with path compression."""
+
+    path_indices: list[int] = []
+    current_index = int(ball_index)
+    while parent_indices[current_index] != current_index:
+        path_indices.append(current_index)
+        current_index = int(parent_indices[current_index])
+    for path_index in path_indices:
+        parent_indices[path_index] = current_index
+    return current_index
+
+
+def _is_ancestor_index(parent_indices: np.ndarray, ancestor_index: int, child_index: int) -> bool:
+    """Return whether ``ancestor_index`` is an ancestor of ``child_index``."""
+
+    current_index = int(child_index)
+    visited_indices: set[int] = set()
+    while True:
+        if current_index == ancestor_index:
+            return True
+        parent_index = int(parent_indices[current_index])
+        if parent_index == current_index or current_index in visited_indices:
+            return False
+        visited_indices.add(current_index)
+        current_index = parent_index
+
+
+def _weighted_midpoint_index(
+    first_center_index: np.ndarray,
+    first_radius_voxels: float,
+    second_center_index: np.ndarray,
+    second_radius_voxels: float,
+    *,
+    image_shape: tuple[int, ...],
+) -> tuple[int, ...]:
+    """Return the Imperial-style radius-weighted midpoint voxel index."""
+
+    first_radius_squared = float(first_radius_voxels) ** 2
+    second_radius_squared = float(second_radius_voxels) ** 2
+    weight_sum = first_radius_squared + second_radius_squared
+    weighted_midpoint = (
+        first_center_index.astype(float) * second_radius_squared
+        + second_center_index.astype(float) * first_radius_squared
+    ) / max(weight_sum, 1.0e-30)
+    clipped_midpoint = np.clip(
+        np.rint(weighted_midpoint).astype(np.int64),
+        0,
+        np.asarray(image_shape, dtype=np.int64) - 1,
+    )
+    return tuple(int(value) for value in clipped_midpoint)
+
+
+def _pair_has_supported_midpoint(
+    first_center_index: np.ndarray,
+    first_radius_voxels: float,
+    second_center_index: np.ndarray,
+    second_radius_voxels: float,
+    *,
+    distance_map: np.ndarray,
+    settings: ResolvedMaximalBallSettings,
+) -> bool:
+    """Return whether two balls satisfy the Imperial midpoint support test."""
+
+    midpoint_index = _weighted_midpoint_index(
+        first_center_index,
+        first_radius_voxels,
+        second_center_index,
+        second_radius_voxels,
+        image_shape=distance_map.shape,
+    )
+    midpoint_radius_voxels = float(distance_map[midpoint_index])
+    smaller_radius_voxels = min(first_radius_voxels, second_radius_voxels)
+    center_distance_voxels = float(
+        np.linalg.norm(first_center_index.astype(float) - second_center_index.astype(float))
+    )
+    midpoint_supported = midpoint_radius_voxels > (
+        settings.medial_surface_mid_radius_fraction * smaller_radius_voxels - 0.5
+    )
+    pair_is_close = 1.01 * center_distance_voxels < (
+        first_radius_voxels + second_radius_voxels + 1.0 + settings.medial_surface_noise_voxels
+    )
+    return midpoint_supported and pair_is_close
+
+
+def _assign_parent_if_allowed(
+    parent_indices: np.ndarray,
+    child_index: int,
+    parent_index: int,
+    *,
+    radii_voxels: np.ndarray,
+) -> None:
+    """Assign a parent if the assignment is acyclic and radius-consistent."""
+
+    if child_index == parent_index:
+        return
+    if _is_ancestor_index(parent_indices, child_index, parent_index):
+        return
+    current_parent_index = int(parent_indices[child_index])
+    if (
+        current_parent_index == child_index
+        or radii_voxels[parent_index] >= radii_voxels[current_parent_index]
+    ):
+        parent_indices[child_index] = parent_index
+
+
+def build_maximal_ball_hierarchy(
+    maximal_ball_candidates: MaximalBallCandidates,
+) -> MaximalBallHierarchy:
+    """Build an Imperial-inspired hierarchy over retained maximal balls.
+
+    Notes
+    -----
+    This stage mirrors the main geometric ideas in the Imperial parent
+    competition logic:
+
+    - only retained maximal balls participate
+    - nearby balls interact only when their midpoint is supported by the void
+      distance map
+    - smaller balls preferentially attach to larger nearby balls
+    - nearby master balls can also merge into a higher-level hierarchy
+
+    This is still a staged native implementation. The downstream voxel-growth
+    and throat-construction stages are not yet included here.
+    """
+
+    retained_center_indices = np.asarray(
+        maximal_ball_candidates.retained_center_indices,
+        dtype=np.int64,
+    )
+    retained_radii_voxels = np.asarray(
+        maximal_ball_candidates.retained_radii_voxels,
+        dtype=float,
+    )
+    retained_count = retained_radii_voxels.size
+    parent_indices = np.arange(retained_count, dtype=np.int64)
+    if retained_count == 0:
+        return MaximalBallHierarchy(
+            center_indices=retained_center_indices,
+            radii_voxels=retained_radii_voxels,
+            parent_indices=parent_indices,
+            master_indices=parent_indices.copy(),
+            hierarchy_levels=np.zeros(0, dtype=np.int64),
+            distance_map=np.asarray(maximal_ball_candidates.distance_map, dtype=float),
+            settings=maximal_ball_candidates.settings,
+        )
+
+    settings = maximal_ball_candidates.settings
+    center_tree = cKDTree(retained_center_indices.astype(float))
+    distance_map = np.asarray(maximal_ball_candidates.distance_map, dtype=float)
+
+    for first_ball_index in range(retained_count):
+        first_center_index = retained_center_indices[first_ball_index]
+        first_radius_voxels = float(retained_radii_voxels[first_ball_index])
+        neighbor_search_radius_voxels = (
+            settings.hierarchy_length_factor * first_radius_voxels
+            + 2.0 * settings.medial_surface_noise_voxels
+            + 2.0
+        )
+        nearby_ball_indices = center_tree.query_ball_point(
+            first_center_index.astype(float),
+            r=neighbor_search_radius_voxels,
+        )
+        for second_ball_index in nearby_ball_indices:
+            if second_ball_index <= first_ball_index:
+                continue
+            second_center_index = retained_center_indices[second_ball_index]
+            second_radius_voxels = float(retained_radii_voxels[second_ball_index])
+            if not _pair_has_supported_midpoint(
+                first_center_index,
+                first_radius_voxels,
+                second_center_index,
+                second_radius_voxels,
+                distance_map=distance_map,
+                settings=settings,
+            ):
+                continue
+
+            larger_ball_index = (
+                first_ball_index
+                if first_radius_voxels >= second_radius_voxels
+                else second_ball_index
+            )
+            smaller_ball_index = (
+                second_ball_index if larger_ball_index == first_ball_index else first_ball_index
+            )
+            _assign_parent_if_allowed(
+                parent_indices,
+                smaller_ball_index,
+                larger_ball_index,
+                radii_voxels=retained_radii_voxels,
+            )
+
+            first_root_index = _find_root_index(parent_indices, first_ball_index)
+            second_root_index = _find_root_index(parent_indices, second_ball_index)
+            if first_root_index == second_root_index:
+                continue
+
+            first_root_radius_voxels = float(retained_radii_voxels[first_root_index])
+            second_root_radius_voxels = float(retained_radii_voxels[second_root_index])
+            first_root_center_index = retained_center_indices[first_root_index]
+            second_root_center_index = retained_center_indices[second_root_index]
+            root_distance_voxels = float(
+                np.linalg.norm(
+                    first_root_center_index.astype(float) - second_root_center_index.astype(float)
+                )
+            )
+            average_root_radius_voxels = 0.5 * (
+                first_root_radius_voxels + second_root_radius_voxels
+            )
+            merge_threshold_voxels = np.sqrt(settings.hierarchy_length_factor) * (
+                average_root_radius_voxels + 2.0 * settings.medial_surface_noise_voxels
+            )
+            if root_distance_voxels > merge_threshold_voxels:
+                continue
+
+            larger_root_index = (
+                first_root_index
+                if first_root_radius_voxels >= second_root_radius_voxels
+                else second_root_index
+            )
+            smaller_root_index = (
+                second_root_index if larger_root_index == first_root_index else first_root_index
+            )
+            if retained_radii_voxels[smaller_root_index] < (
+                settings.hierarchy_radius_factor * retained_radii_voxels[smaller_ball_index]
+                + settings.medial_surface_noise_voxels
+            ):
+                _assign_parent_if_allowed(
+                    parent_indices,
+                    smaller_root_index,
+                    larger_root_index,
+                    radii_voxels=retained_radii_voxels,
+                )
+
+    master_indices = np.array(
+        [_find_root_index(parent_indices, ball_index) for ball_index in range(retained_count)],
+        dtype=np.int64,
+    )
+    hierarchy_levels = np.zeros(retained_count, dtype=np.int64)
+    for ball_index in range(retained_count):
+        current_index = ball_index
+        while parent_indices[current_index] != current_index:
+            hierarchy_levels[ball_index] += 1
+            current_index = int(parent_indices[current_index])
+
+    return MaximalBallHierarchy(
+        center_indices=retained_center_indices,
+        radii_voxels=retained_radii_voxels,
+        parent_indices=parent_indices,
+        master_indices=master_indices,
+        hierarchy_levels=hierarchy_levels,
+        distance_map=distance_map,
+        settings=settings,
+    )
+
+
 def extract_maximal_ball_candidates(
     void_phase_mask: np.ndarray,
     *,
@@ -334,8 +617,10 @@ def extract_maximal_ball_candidates(
 
 __all__ = [
     "MaximalBallCandidates",
+    "MaximalBallHierarchy",
     "MaximalBallSettings",
     "ResolvedMaximalBallSettings",
+    "build_maximal_ball_hierarchy",
     "clip_distance_map_to_domain_boundaries",
     "compute_void_distance_map",
     "extract_maximal_ball_candidates",

@@ -1,8 +1,10 @@
 from voids.image.connectivity import has_spanning_cluster, has_spanning_cluster_2d
 from voids.image.maximal_ball import (
     MaximalBallCandidates,
+    MaximalBallHierarchy,
     MaximalBallSettings,
     ResolvedMaximalBallSettings,
+    build_maximal_ball_hierarchy,
     clip_distance_map_to_domain_boundaries,
     compute_void_distance_map,
     extract_maximal_ball_candidates,
@@ -31,8 +33,10 @@ __all__ = [
     "has_spanning_cluster",
     "has_spanning_cluster_2d",
     "MaximalBallCandidates",
+    "MaximalBallHierarchy",
     "MaximalBallSettings",
     "ResolvedMaximalBallSettings",
+    "build_maximal_ball_hierarchy",
     "compute_void_distance_map",
     "resolve_maximal_ball_settings",
     "clip_distance_map_to_domain_boundaries",

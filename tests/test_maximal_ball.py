@@ -4,7 +4,9 @@ import numpy as np
 import pytest
 
 from voids.image.maximal_ball import (
+    MaximalBallCandidates,
     MaximalBallSettings,
+    build_maximal_ball_hierarchy,
     clip_distance_map_to_domain_boundaries,
     compute_void_distance_map,
     extract_maximal_ball_candidates,
@@ -106,6 +108,84 @@ def test_suppress_overlapping_maximal_balls_prefers_larger_candidates() -> None:
     )
 
     assert np.array_equal(retained_mask, np.array([True, False, True]))
+
+
+def test_build_maximal_ball_hierarchy_links_smaller_supported_ball_to_larger_ball() -> None:
+    """A supported nearby smaller ball should attach under the larger retained ball."""
+
+    center_indices = np.array(
+        [
+            [4, 4, 4],
+            [5, 4, 4],
+        ],
+        dtype=np.int64,
+    )
+    radii_voxels = np.array([4.0, 2.5], dtype=float)
+    candidate_mask = np.zeros((10, 10, 10), dtype=bool)
+    candidate_mask[4, 4, 4] = True
+    candidate_mask[5, 4, 4] = True
+    retained_mask = np.array([True, True], dtype=bool)
+    distance_map = np.zeros((10, 10, 10), dtype=float)
+    distance_map[4, 4, 4] = 4.0
+    distance_map[5, 4, 4] = 2.5
+    distance_map[4, 4, 4] = 4.0
+    settings = resolve_maximal_ball_settings(
+        distance_map,
+        MaximalBallSettings(minimal_pore_radius_voxels=1.75),
+    )
+    maximal_ball_data = MaximalBallCandidates(
+        center_indices=center_indices,
+        radii_voxels=radii_voxels,
+        candidate_mask=candidate_mask,
+        retained_mask=retained_mask,
+        distance_map=np.maximum(distance_map, 3.0),
+        settings=settings,
+    )
+
+    hierarchy = build_maximal_ball_hierarchy(maximal_ball_data)
+
+    assert hierarchy.parent_indices.shape == hierarchy.radii_voxels.shape
+    assert np.all(hierarchy.parent_indices <= np.arange(hierarchy.parent_indices.size))
+    assert np.array_equal(hierarchy.parent_indices, np.array([0, 0], dtype=np.int64))
+    assert np.array_equal(hierarchy.master_indices, np.array([0, 0], dtype=np.int64))
+
+
+def test_build_maximal_ball_hierarchy_keeps_separated_balls_as_independent_roots() -> None:
+    """Well-separated retained balls should remain separate hierarchy roots."""
+
+    center_indices = np.array(
+        [
+            [2, 2, 2],
+            [12, 12, 12],
+        ],
+        dtype=np.int64,
+    )
+    radii_voxels = np.array([3.0, 2.5], dtype=float)
+    candidate_mask = np.zeros((16, 16, 16), dtype=bool)
+    candidate_mask[2, 2, 2] = True
+    candidate_mask[12, 12, 12] = True
+    retained_mask = np.array([True, True], dtype=bool)
+    distance_map = np.zeros((16, 16, 16), dtype=float)
+    distance_map[2, 2, 2] = 3.0
+    distance_map[12, 12, 12] = 2.5
+    settings = resolve_maximal_ball_settings(
+        distance_map,
+        MaximalBallSettings(minimal_pore_radius_voxels=1.75),
+    )
+
+    maximal_ball_data = MaximalBallCandidates(
+        center_indices=center_indices,
+        radii_voxels=radii_voxels,
+        candidate_mask=candidate_mask,
+        retained_mask=retained_mask,
+        distance_map=distance_map,
+        settings=settings,
+    )
+    hierarchy = build_maximal_ball_hierarchy(maximal_ball_data)
+
+    assert np.array_equal(hierarchy.parent_indices, np.array([0, 1], dtype=np.int64))
+    assert np.array_equal(hierarchy.master_indices, np.array([0, 1], dtype=np.int64))
+    assert np.array_equal(hierarchy.hierarchy_levels, np.array([0, 0], dtype=np.int64))
 
 
 def test_extract_maximal_ball_candidates_returns_retained_candidates_in_radius_order() -> None:
