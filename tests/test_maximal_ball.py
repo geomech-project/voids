@@ -542,6 +542,74 @@ def test_measure_region_adjacency_extracts_one_interface_between_two_regions() -
     assert np.array_equal(region_adjacency.throat_max_touch_index_side2, np.array([[2, 0, 0]]))
 
 
+def test_build_network_dict_from_maximal_ball_regions_can_anchor_on_second_side() -> None:
+    """The optional second-side anchor should use the ordered pair's second interface ball."""
+
+    void_phase_mask = np.ones((4, 3, 3), dtype=bool)
+    label_image = np.full((4, 3, 3), -1, dtype=np.int64)
+    label_image[0:2, :, :] = 0
+    label_image[2:4, :, :] = 1
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0, 1], dtype=np.int64),
+        root_labels=np.array([0, 1], dtype=np.int64),
+        root_center_indices=np.array([[0, 1, 1], [3, 1, 1]], dtype=np.int64),
+        root_radii_voxels=np.array([2.0, 2.0], dtype=float),
+        root_of_ball_index=np.array([0, 1], dtype=np.int64),
+        unassigned_label=-1,
+    )
+    distance_map = np.ones((4, 3, 3), dtype=float)
+    distance_map[1, :, :] = 3.0
+    distance_map[2, :, :] = 2.0
+    settings = resolve_maximal_ball_settings(
+        distance_map,
+        MaximalBallSettings(minimal_pore_radius_voxels=1.0),
+    )
+    hierarchy = MaximalBallHierarchy(
+        center_indices=voxel_regions.root_center_indices.copy(),
+        center_coordinates=voxel_regions.root_center_indices.astype(float),
+        radii_voxels=voxel_regions.root_radii_voxels.copy(),
+        parent_indices=np.array([0, 1], dtype=np.int64),
+        master_indices=np.array([0, 1], dtype=np.int64),
+        hierarchy_levels=np.array([0, 0], dtype=np.int64),
+        distance_map=distance_map,
+        settings=settings,
+    )
+    extraction_result = MaximalBallExtractionResult(
+        candidates=MaximalBallCandidates(
+            center_indices=voxel_regions.root_center_indices.copy(),
+            radii_voxels=voxel_regions.root_radii_voxels.copy(),
+            candidate_mask=np.zeros_like(void_phase_mask),
+            retained_mask=np.array([True, True], dtype=bool),
+            distance_map=distance_map,
+            settings=settings,
+        ),
+        hierarchy=hierarchy,
+        voxel_regions=voxel_regions,
+        region_adjacency=measure_region_adjacency(
+            void_phase_mask,
+            voxel_regions,
+            distance_map=distance_map,
+        ),
+    )
+
+    largest_support_network = build_network_dict_from_maximal_ball_regions(
+        extraction_result,
+        voxel_size=1.0,
+        throat_anchor_mode="largest_support",
+    )
+    second_side_network = build_network_dict_from_maximal_ball_regions(
+        extraction_result,
+        voxel_size=1.0,
+        throat_anchor_mode="second_side",
+    )
+
+    assert largest_support_network["throat.total_length"][0] != pytest.approx(
+        second_side_network["throat.total_length"][0]
+    )
+    assert second_side_network["throat.total_length"][0] == pytest.approx(np.sqrt(27.0))
+
+
 def test_measure_region_adjacency_reports_boundary_contact_faces() -> None:
     """Boundary-face accounting should identify which pore regions touch each sample side."""
 

@@ -2185,6 +2185,22 @@ def _resolve_throat_shape_factor_radius_mode(throat_shape_factor_radius_mode: st
     return aliases[normalized_mode]
 
 
+def _resolve_throat_anchor_mode(throat_anchor_mode: str) -> str:
+    """Normalize the throat-center anchor convention used for conduit lengths."""
+
+    normalized_mode = str(throat_anchor_mode).strip().lower()
+    aliases = {
+        "largest_support": "largest_support",
+        "largest_radius": "largest_support",
+        "second_side": "second_side",
+        "higher_label_side": "second_side",
+        "region_pair_second": "second_side",
+    }
+    if normalized_mode not in aliases:
+        raise ValueError("throat_anchor_mode must be one of {'largest_support', 'second_side'}")
+    return aliases[normalized_mode]
+
+
 def _max_boundary_touch_radii_by_side(
     label_image: np.ndarray,
     region_labels: np.ndarray,
@@ -2228,6 +2244,7 @@ def build_network_dict_from_maximal_ball_regions(
     boundary_radius_scale: float = 1.1,
     throat_area_mode: str = "face_count",
     throat_shape_factor_radius_mode: str = "inscribed",
+    throat_anchor_mode: str = "second_side",
 ) -> dict[str, np.ndarray]:
     """Assemble a PoreSpy-style network mapping from maximal-ball regions.
 
@@ -2275,6 +2292,7 @@ def build_network_dict_from_maximal_ball_regions(
     normalized_throat_shape_factor_radius_mode = _resolve_throat_shape_factor_radius_mode(
         throat_shape_factor_radius_mode
     )
+    normalized_throat_anchor_mode = _resolve_throat_anchor_mode(throat_anchor_mode)
     if boundary_length_epsilon <= 0.0:
         raise ValueError("boundary_length_epsilon must be positive")
     if boundary_radius_scale <= 0.0:
@@ -2420,11 +2438,14 @@ def build_network_dict_from_maximal_ball_regions(
     if throat_count:
         first_pore_coordinates = pore_coords[throat_region_pairs[:, 0]]
         second_pore_coordinates = pore_coords[throat_region_pairs[:, 1]]
-        throat_anchor_center_indices = np.where(
-            (first_side_radius_voxels >= second_side_radius_voxels)[:, np.newaxis],
-            first_side_center_indices,
-            second_side_center_indices,
-        )
+        if normalized_throat_anchor_mode == "second_side":
+            throat_anchor_center_indices = second_side_center_indices.copy()
+        else:
+            throat_anchor_center_indices = np.where(
+                (first_side_radius_voxels >= second_side_radius_voxels)[:, np.newaxis],
+                first_side_center_indices,
+                second_side_center_indices,
+            )
         invalid_anchor_mask = ~np.isfinite(throat_anchor_center_indices).all(axis=1)
         throat_anchor_center_indices[invalid_anchor_mask] = throat_centroid_indices[
             invalid_anchor_mask
@@ -2800,6 +2821,7 @@ def extract_maximal_ball_network_dict(
     boundary_radius_scale: float = 1.1,
     throat_area_mode: str = "face_count",
     throat_shape_factor_radius_mode: str = "inscribed",
+    throat_anchor_mode: str = "second_side",
 ) -> MaximalBallNetworkDictResult:
     """Run the staged native maximal-ball path and assemble a network mapping."""
 
@@ -2819,6 +2841,7 @@ def extract_maximal_ball_network_dict(
         boundary_radius_scale=boundary_radius_scale,
         throat_area_mode=throat_area_mode,
         throat_shape_factor_radius_mode=throat_shape_factor_radius_mode,
+        throat_anchor_mode=throat_anchor_mode,
     )
     return MaximalBallNetworkDictResult(
         network_dict=network_dict,
