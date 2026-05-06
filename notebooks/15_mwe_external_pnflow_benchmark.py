@@ -16,10 +16,13 @@
 # - this is an end-to-end workflow comparison, not a solver-only cross-check
 # - any mismatch reflects both extraction differences and constitutive-model differences
 # - the `voids` side is evaluated in two modes:
-#   - import the saved `pnextract` CNM network and solve it with `voids`
+#   - import the saved `pnextract` CNM network, enable explicit
+#     `pnflow_solver_box_compat=True`, and solve it with `voids`
 #   - re-extract the saved binary volume with `snow2` and solve that network with `voids`
 # - the external side uses previously saved `pnextract` geometry plus `pnflow`'s internal
 #   single-phase model
+# - the CNM compatibility switch is benchmark-specific and reproduces checked-in `pnflow`
+#   preprocessing, not a generic physical boundary rule for all imported networks
 # - the committed input volumes make this benchmark stable against future changes in the synthetic
 #   generator implementation
 # - we keep `mu = constant` here on purpose because the checked `pnflow` code path uses scalar fluid
@@ -172,6 +175,7 @@ def _run_voids_on_imported_cnm_case(
     construction = construct_spanning_network(
         backend="pnflow_cnm",
         pnflow_cnm_prefix=prefix,
+        pnflow_solver_box_compat=True,
         flow_axis=flow_axis,
         provenance_notes={"benchmark_kind": "external_pnflow_reference"},
     )
