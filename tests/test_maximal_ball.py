@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import voids.image.maximal_ball as maximal_ball_module
 from voids.image.maximal_ball import (
     MaximalBallCandidates,
     MaximalBallExtractionResult,
@@ -44,6 +45,74 @@ def test_compute_void_distance_map_matches_expected_center_radius() -> None:
     assert distance_map.shape == void_phase_mask.shape
     assert distance_map[2, 2, 2] == pytest.approx(2.0)
     assert np.count_nonzero(distance_map) == 27
+
+
+def test_compute_void_distance_map_forwards_explicit_edt_thread_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit EDT thread counts should be forwarded to the accelerated backend."""
+
+    class FakeEdtModule:
+        def __init__(self) -> None:
+            self.parallel_arguments: list[int] = []
+
+        def edt(
+            self,
+            data: np.ndarray,
+            *,
+            black_border: bool,
+            parallel: int,
+        ) -> np.ndarray:
+            self.parallel_arguments.append(parallel)
+            return np.asarray(data, dtype=float)
+
+    fake_edt_module = FakeEdtModule()
+    monkeypatch.setattr(maximal_ball_module, "fast_edt", fake_edt_module)
+
+    distance_map = compute_void_distance_map(
+        np.array([[True, True], [False, True]], dtype=bool),
+        backend="edt",
+        edt_parallel_threads=3,
+    )
+
+    assert fake_edt_module.parallel_arguments == [3]
+    assert distance_map.shape == (2, 2)
+
+
+def test_extract_maximal_ball_candidates_forwards_edt_thread_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Candidate extraction should pass the EDT worker count into radius-field evaluation."""
+
+    class FakeEdtModule:
+        def __init__(self) -> None:
+            self.parallel_arguments: list[int] = []
+
+        def edt(
+            self,
+            data: np.ndarray,
+            *,
+            black_border: bool,
+            parallel: int,
+        ) -> np.ndarray:
+            self.parallel_arguments.append(parallel)
+            return np.where(np.asarray(data, dtype=bool), 2.0, 0.0)
+
+    fake_edt_module = FakeEdtModule()
+    monkeypatch.setattr(maximal_ball_module, "fast_edt", fake_edt_module)
+
+    void_phase_mask = np.zeros((5, 5, 5), dtype=bool)
+    void_phase_mask[1:4, 1:4, 1:4] = True
+
+    candidates = extract_maximal_ball_candidates(
+        void_phase_mask,
+        distance_map_backend="edt",
+        edt_parallel_threads=4,
+    )
+
+    assert fake_edt_module.parallel_arguments == [4]
+    assert candidates.center_indices.ndim == 2
+    assert candidates.radii_voxels.ndim == 1
 
 
 def test_compute_maximal_ball_radius_field_matches_half_voxel_shift() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import porespy as ps
@@ -295,13 +295,23 @@ def _extract_network_dict(
                 " a mapping, or None"
             )
         distance_map_backend = str(kwargs.pop("distance_map_backend", "auto"))
+        edt_parallel_threads_value = kwargs.pop("edt_parallel_threads", None)
+        edt_parallel_threads = (
+            None
+            if edt_parallel_threads_value is None
+            else int(cast(int | str, edt_parallel_threads_value))
+        )
         apply_boundary_clipping = bool(kwargs.pop("apply_boundary_clipping", True))
         flow_boundary_mode = str(kwargs.pop("flow_boundary_mode", "direct"))
         boundary_axis = kwargs.pop("boundary_axis", flow_axis)
         if boundary_axis is not None:
             boundary_axis = str(boundary_axis)
-        boundary_length_epsilon = float(kwargs.pop("boundary_length_epsilon", 1.0e-300))
-        boundary_radius_scale = float(kwargs.pop("boundary_radius_scale", 1.1))
+        boundary_length_epsilon = float(
+            cast(float | int | str, kwargs.pop("boundary_length_epsilon", 1.0e-300))
+        )
+        boundary_radius_scale = float(
+            cast(float | int | str, kwargs.pop("boundary_radius_scale", 1.1))
+        )
         throat_area_mode = str(kwargs.pop("throat_area_mode", "face_count"))
         throat_shape_factor_radius_mode = str(
             kwargs.pop("throat_shape_factor_radius_mode", "inscribed")
@@ -312,20 +322,24 @@ def _extract_network_dict(
             raise ValueError(
                 f"Unexpected extraction_kwargs for backend='maximal_ball': {unexpected_keys}"
             )
-        return extract_maximal_ball_network_dict(
-            np.asarray(phases, dtype=bool),
-            voxel_size=float(voxel_size),
-            distance_map_backend=distance_map_backend,
-            settings=settings_value,
-            apply_boundary_clipping=apply_boundary_clipping,
-            flow_boundary_mode=flow_boundary_mode,
-            boundary_axis=boundary_axis,
-            boundary_length_epsilon=boundary_length_epsilon,
-            boundary_radius_scale=boundary_radius_scale,
-            throat_area_mode=throat_area_mode,
-            throat_shape_factor_radius_mode=throat_shape_factor_radius_mode,
-            throat_anchor_mode=throat_anchor_mode,
-        ).network_dict
+        return cast(
+            dict[str, object],
+            extract_maximal_ball_network_dict(
+                np.asarray(phases, dtype=bool),
+                voxel_size=float(voxel_size),
+                distance_map_backend=distance_map_backend,
+                edt_parallel_threads=edt_parallel_threads,
+                settings=settings_value,
+                apply_boundary_clipping=apply_boundary_clipping,
+                flow_boundary_mode=flow_boundary_mode,
+                boundary_axis=boundary_axis,
+                boundary_length_epsilon=boundary_length_epsilon,
+                boundary_radius_scale=boundary_radius_scale,
+                throat_area_mode=throat_area_mode,
+                throat_shape_factor_radius_mode=throat_shape_factor_radius_mode,
+                throat_anchor_mode=throat_anchor_mode,
+            ).network_dict,
+        )
     raise AssertionError(f"Unhandled normalized backend {backend_normalized!r}")
 
 
@@ -367,7 +381,8 @@ def extract_spanning_pore_network(
         Imperial-calibrated `snow2` aliases, user-supplied values override the
         built-in defaults ``sigma=1.0``, ``r_max=4``, and ``boundary_width=1``.
         For the native maximal-ball backend, supported keys are
-        ``distance_map_backend``, ``apply_boundary_clipping``,
+        ``distance_map_backend``, ``edt_parallel_threads``,
+        ``apply_boundary_clipping``,
         ``flow_boundary_mode``, ``boundary_axis``,
         ``boundary_length_epsilon``, ``boundary_radius_scale``,
         ``throat_area_mode``, ``throat_shape_factor_radius_mode``,

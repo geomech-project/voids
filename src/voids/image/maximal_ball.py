@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
+from numba import njit  # type: ignore[import-untyped]
 from scipy import ndimage as ndi
 from scipy.spatial import cKDTree
 
 try:
-    import edt as fast_edt
+    import edt as fast_edt  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - optional acceleration dependency
     fast_edt = None
 
@@ -70,13 +73,13 @@ class MaximalBallCandidates:
     def retained_center_indices(self) -> np.ndarray:
         """Return retained maximal-ball centers in descending-radius order."""
 
-        return self.center_indices[self.retained_mask]
+        return cast(np.ndarray, self.center_indices[self.retained_mask])
 
     @property
     def retained_radii_voxels(self) -> np.ndarray:
         """Return retained maximal-ball radii in descending-radius order."""
 
-        return self.radii_voxels[self.retained_mask]
+        return cast(np.ndarray, self.radii_voxels[self.retained_mask])
 
 
 @dataclass(slots=True)
@@ -102,7 +105,10 @@ class MaximalBallHierarchy:
     def root_mask(self) -> np.ndarray:
         """Return a boolean mask of root/master balls."""
 
-        return self.parent_indices == np.arange(self.parent_indices.size, dtype=np.int64)
+        return cast(
+            np.ndarray,
+            self.parent_indices == np.arange(self.parent_indices.size, dtype=np.int64),
+        )
 
 
 @dataclass(slots=True)
@@ -196,10 +202,34 @@ class MaximalBallExtractionDiagnostics:
 _CIRCULAR_SHAPE_FACTOR = 1.0 / (4.0 * np.pi)
 
 
+def _resolve_edt_parallel_threads(edt_parallel_threads: int | None) -> int:
+    """Resolve the worker count for the optional `edt` distance transform."""
+
+    if edt_parallel_threads is not None:
+        resolved_threads = int(edt_parallel_threads)
+        if resolved_threads < 1:
+            raise ValueError("edt_parallel_threads must be a positive integer")
+        return resolved_threads
+
+    environment_value = os.getenv("VOIDS_EDT_THREADS")
+    if environment_value:
+        try:
+            resolved_threads = int(environment_value)
+        except ValueError as exc:  # pragma: no cover - invalid shell environment
+            raise ValueError("VOIDS_EDT_THREADS must be a positive integer") from exc
+        if resolved_threads < 1:
+            raise ValueError("VOIDS_EDT_THREADS must be a positive integer")
+        return resolved_threads
+
+    detected_cpu_count = os.cpu_count() or 1
+    return max(1, int(detected_cpu_count))
+
+
 def compute_void_distance_map(
     void_phase_mask: np.ndarray,
     *,
     backend: str = "auto",
+    edt_parallel_threads: int | None = None,
 ) -> np.ndarray:
     """Compute the void-space Euclidean distance map.
 
@@ -211,6 +241,10 @@ def compute_void_distance_map(
         Distance-transform backend. ``"auto"`` prefers the optional `edt`
         package for 3D arrays when available, otherwise falls back to SciPy.
         Explicit options are ``"scipy"`` and ``"edt"``.
+    edt_parallel_threads :
+        Number of worker threads to use when the optional `edt` backend is
+        active. When omitted, `voids` first checks ``VOIDS_EDT_THREADS`` and
+        otherwise uses the detected CPU count.
     """
 
     mask = np.asarray(void_phase_mask, dtype=bool)
@@ -229,7 +263,14 @@ def compute_void_distance_map(
             raise ImportError(
                 "backend='edt' requested, but the optional 'edt' package is unavailable"
             )
-        return np.asarray(fast_edt.edt(mask, black_border=True, parallel=1), dtype=float)
+        return np.asarray(
+            fast_edt.edt(
+                mask,
+                black_border=True,
+                parallel=_resolve_edt_parallel_threads(edt_parallel_threads),
+            ),
+            dtype=float,
+        )
     return np.asarray(ndi.distance_transform_edt(mask), dtype=float)
 
 
@@ -237,6 +278,7 @@ def compute_maximal_ball_radius_field(
     void_phase_mask: np.ndarray,
     *,
     backend: str = "auto",
+    edt_parallel_threads: int | None = None,
     mode: str = "half_voxel",
 ) -> np.ndarray:
     """Compute the radius field used by the maximal-ball extractor.
@@ -248,6 +290,9 @@ def compute_maximal_ball_radius_field(
     backend :
         Distance-transform backend passed through to
         :func:`compute_void_distance_map`.
+    edt_parallel_threads :
+        Number of worker threads to use when the optional `edt` backend is
+        active.
     mode :
         Radius-field convention. ``"half_voxel"`` returns the nearest non-void
         Euclidean distance minus half a voxel. ``"edt"`` returns the plain
@@ -257,7 +302,11 @@ def compute_maximal_ball_radius_field(
 
     normalized_mode = _normalize_radius_field_mode(mode)
 
-    distance_map = compute_void_distance_map(void_phase_mask, backend=backend)
+    distance_map = compute_void_distance_map(
+        void_phase_mask,
+        backend=backend,
+        edt_parallel_threads=edt_parallel_threads,
+    )
     if normalized_mode == "edt":
         return distance_map
     radius_field = np.asarray(distance_map, dtype=float) - 0.5
@@ -492,37 +541,71 @@ def suppress_overlapping_maximal_balls(
         raise ValueError("center_indices must have shape (count, ndim)")
     if radii.ndim != 1 or radii.shape[0] != centers.shape[0]:
         raise ValueError("radii_voxels must have shape (count,) matching center_indices")
+    return np.asarray(
+        _suppress_overlapping_maximal_balls_compiled(
+            centers=centers,
+            radii=radii,
+            retention_radius_factor=float(settings.retention_radius_factor),
+            retention_radius_offset_voxels=float(settings.retention_radius_offset_voxels),
+            medial_surface_noise_voxels=float(settings.medial_surface_noise_voxels),
+        ),
+        dtype=bool,
+    )
 
-    retained_mask = np.zeros(radii.shape[0], dtype=bool)
-    retained_centers: list[np.ndarray] = []
-    retained_radii: list[float] = []
 
-    for candidate_index in range(radii.shape[0]):
-        candidate_center = centers[candidate_index].astype(float, copy=False)
-        candidate_radius = float(radii[candidate_index])
-        if not retained_centers:
-            retained_mask[candidate_index] = True
-            retained_centers.append(candidate_center)
-            retained_radii.append(candidate_radius)
-            continue
+@njit(cache=True)
+def _suppress_overlapping_maximal_balls_compiled(
+    centers: np.ndarray,
+    radii: np.ndarray,
+    retention_radius_factor: float,
+    retention_radius_offset_voxels: float,
+    medial_surface_noise_voxels: float,
+) -> np.ndarray:
+    """Compiled overlap suppression over descending-radius maximal-ball candidates."""
 
-        retained_center_array = np.vstack(retained_centers)
-        retained_radius_array = np.asarray(retained_radii, dtype=float)
-        center_offsets = retained_center_array - candidate_center
-        center_distances = np.sqrt(np.sum(center_offsets * center_offsets, axis=1))
-        too_close_to_retained = center_distances < (
-            settings.retention_radius_factor * retained_radius_array
-            + settings.retention_radius_offset_voxels
-        )
-        fully_covered_by_retained = center_distances + candidate_radius < (
-            retained_radius_array + settings.medial_surface_noise_voxels
-        )
-        if np.any(too_close_to_retained | fully_covered_by_retained):
+    candidate_count = radii.shape[0]
+    retained_mask = np.zeros(candidate_count, dtype=np.bool_)
+    retained_centers = np.zeros((candidate_count, centers.shape[1]), dtype=np.float64)
+    retained_radii = np.zeros(candidate_count, dtype=np.float64)
+    retained_count = 0
+
+    for candidate_index in range(candidate_count):
+        candidate_radius = radii[candidate_index]
+        should_retain = True
+
+        for retained_index in range(retained_count):
+            squared_distance = 0.0
+            for axis_index in range(centers.shape[1]):
+                offset = (
+                    float(centers[candidate_index, axis_index])
+                    - retained_centers[retained_index, axis_index]
+                )
+                squared_distance += offset * offset
+            center_distance = np.sqrt(squared_distance)
+
+            if center_distance < (
+                retention_radius_factor * retained_radii[retained_index]
+                + retention_radius_offset_voxels
+            ):
+                should_retain = False
+                break
+            if center_distance + candidate_radius < (
+                retained_radii[retained_index] + medial_surface_noise_voxels
+            ):
+                should_retain = False
+                break
+
+        if not should_retain:
             continue
 
         retained_mask[candidate_index] = True
-        retained_centers.append(candidate_center)
-        retained_radii.append(candidate_radius)
+        for axis_index in range(centers.shape[1]):
+            retained_centers[retained_count, axis_index] = float(
+                centers[candidate_index, axis_index]
+            )
+        retained_radii[retained_count] = candidate_radius
+        retained_count += 1
+
     return retained_mask
 
 
@@ -1641,7 +1724,7 @@ def measure_region_adjacency(
 
     image_shape = np.asarray(mask.shape, dtype=np.int64)
     for axis_index in range(mask.ndim):
-        lower_boundary_selector = [slice(None)] * mask.ndim
+        lower_boundary_selector: list[int | slice] = [slice(None)] * mask.ndim
         lower_boundary_selector[axis_index] = 0
         lower_boundary_void_mask = assigned_void_mask[tuple(lower_boundary_selector)]
         lower_boundary_labels = label_image[tuple(lower_boundary_selector)]
@@ -1653,7 +1736,7 @@ def measure_region_adjacency(
             boundary_face_counts[:, 2 * axis_index] += lower_counts.astype(np.int64, copy=False)
             region_surface_face_counts += lower_counts.astype(np.int64, copy=False)
 
-        upper_boundary_selector = [slice(None)] * mask.ndim
+        upper_boundary_selector: list[int | slice] = [slice(None)] * mask.ndim
         upper_boundary_selector[axis_index] = int(image_shape[axis_index] - 1)
         upper_boundary_void_mask = assigned_void_mask[tuple(upper_boundary_selector)]
         upper_boundary_labels = label_image[tuple(upper_boundary_selector)]
@@ -1879,6 +1962,7 @@ def extract_maximal_ball_regions(
     void_phase_mask: np.ndarray,
     *,
     distance_map_backend: str = "auto",
+    edt_parallel_threads: int | None = None,
     settings: MaximalBallSettings | None = None,
     apply_boundary_clipping: bool = True,
 ) -> MaximalBallExtractionResult:
@@ -1893,6 +1977,7 @@ def extract_maximal_ball_regions(
     candidates = extract_maximal_ball_candidates(
         void_phase_mask,
         distance_map_backend=distance_map_backend,
+        edt_parallel_threads=edt_parallel_threads,
         settings=settings,
         apply_boundary_clipping=apply_boundary_clipping,
     )
@@ -2812,6 +2897,7 @@ def extract_maximal_ball_network_dict(
     *,
     voxel_size: float,
     distance_map_backend: str = "auto",
+    edt_parallel_threads: int | None = None,
     settings: MaximalBallSettings | None = None,
     apply_boundary_clipping: bool = True,
     axis_names: tuple[str, ...] = ("x", "y", "z"),
@@ -2828,6 +2914,7 @@ def extract_maximal_ball_network_dict(
     extraction_result = extract_maximal_ball_regions(
         void_phase_mask,
         distance_map_backend=distance_map_backend,
+        edt_parallel_threads=edt_parallel_threads,
         settings=settings,
         apply_boundary_clipping=apply_boundary_clipping,
     )
@@ -2853,6 +2940,7 @@ def extract_maximal_ball_candidates(
     void_phase_mask: np.ndarray,
     *,
     distance_map_backend: str = "auto",
+    edt_parallel_threads: int | None = None,
     settings: MaximalBallSettings | None = None,
     apply_boundary_clipping: bool = True,
 ) -> MaximalBallCandidates:
@@ -2862,6 +2950,7 @@ def extract_maximal_ball_candidates(
     distance_map = compute_maximal_ball_radius_field(
         void_phase_mask,
         backend=distance_map_backend,
+        edt_parallel_threads=edt_parallel_threads,
         mode=raw_settings.radius_field_mode,
     )
     resolved_settings = resolve_maximal_ball_settings(distance_map, raw_settings)
