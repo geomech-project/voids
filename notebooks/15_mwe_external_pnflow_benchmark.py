@@ -39,7 +39,11 @@ import numpy as np
 import pandas as pd
 
 from voids.benchmarks import compare_network_geometry
-from voids.image import construct_spanning_network
+from voids.image import (
+    construct_spanning_network,
+    extract_maximal_ball_regions,
+    summarize_maximal_ball_extraction_diagnostics,
+)
 from voids.paths import data_path, project_root
 from voids.physics.petrophysics import absolute_porosity, effective_porosity
 from voids.physics.singlephase import (
@@ -288,6 +292,49 @@ def _geometry_comparison_metrics(
     }
 
 
+def _maximal_ball_step_diagnostics_metrics(
+    volume: np.ndarray,
+    *,
+    distance_map_backend: str,
+) -> dict[str, float | int]:
+    """Summarize native maximal-ball extraction stages for per-case benchmarking."""
+
+    extraction_result = extract_maximal_ball_regions(
+        volume,
+        distance_map_backend=distance_map_backend,
+    )
+    diagnostics = summarize_maximal_ball_extraction_diagnostics(
+        volume,
+        extraction_result,
+    )
+    return {
+        "maxball_diag_retained_ball_count": int(diagnostics.retained_ball_count),
+        "maxball_diag_root_region_count": int(diagnostics.root_region_count),
+        "maxball_diag_occupied_region_count": int(diagnostics.occupied_region_count),
+        "maxball_diag_assigned_void_fraction": float(
+            diagnostics.assigned_void_fraction
+        ),
+        "maxball_diag_unassigned_void_voxel_count": int(
+            diagnostics.unassigned_void_voxel_count
+        ),
+        "maxball_diag_zero_throat_region_count": int(
+            diagnostics.zero_throat_region_count
+        ),
+        "maxball_diag_internal_zero_throat_region_count": int(
+            diagnostics.internal_zero_throat_region_count
+        ),
+        "maxball_diag_boundary_zero_throat_region_count": int(
+            diagnostics.boundary_zero_throat_region_count
+        ),
+        "maxball_diag_touch_radius_side1_mean_voxels": float(
+            diagnostics.throat_touch_radius_side1_mean_voxels
+        ),
+        "maxball_diag_touch_radius_side2_mean_voxels": float(
+            diagnostics.throat_touch_radius_side2_mean_voxels
+        ),
+    }
+
+
 def _make_permeability_comparison_figure(
     summary_frame: pd.DataFrame,
     *,
@@ -442,6 +489,7 @@ manifest_path = reference_root / "manifest.csv"
 report_dir = project_root() / "docs" / "assets" / "verification"
 report_dir.mkdir(parents=True, exist_ok=True)
 report_csv = report_dir / "pnflow_5_case_results.csv"
+maxball_diagnostics_csv = report_dir / "pnflow_maxball_step_diagnostics.csv"
 comparison_figure_path = report_dir / "pnflow_permeability_scatter_and_error.png"
 porosity_figure_path = report_dir / "pnflow_porosity_vs_permeability.png"
 
@@ -578,6 +626,10 @@ for row in manifest_df.itertuples(index=False):
         flow_axis=str(row_series["flow_axis"]),
         candidate_name="maxball",
     )
+    maxball_step_diagnostics = _maximal_ball_step_diagnostics_metrics(
+        volume,
+        distance_map_backend="scipy",
+    )
     rows.append(
         {
             **row._asdict(),
@@ -587,6 +639,7 @@ for row in manifest_df.itertuples(index=False):
             **maxball_metrics,
             **porespy_geometry_metrics,
             **maxball_geometry_metrics,
+            **maxball_step_diagnostics,
         }
     )
 
@@ -682,6 +735,10 @@ display_columns = [
     "maxball_geom_coordination_ks",
     "maxball_geom_n_components",
     "maxball_geom_dead_end_fraction",
+    "maxball_diag_assigned_void_fraction",
+    "maxball_diag_unassigned_void_voxel_count",
+    "maxball_diag_zero_throat_region_count",
+    "maxball_diag_internal_zero_throat_region_count",
 ]
 summary_df.loc[:, display_columns]
 
@@ -700,6 +757,9 @@ diagnostic_summary_columns = [
     "maxball_geom_coordination_ks",
     "maxball_geom_n_components",
     "maxball_geom_dead_end_fraction",
+    "maxball_diag_assigned_void_fraction",
+    "maxball_diag_zero_throat_region_count",
+    "maxball_diag_internal_zero_throat_region_count",
 ]
 summary_df.loc[:, diagnostic_summary_columns].mean(numeric_only=True).to_frame(
     name="mean_over_cases"
@@ -714,6 +774,26 @@ summary_df.loc[:, diagnostic_summary_columns].mean(numeric_only=True).to_frame(
 # %%
 summary_df.to_csv(report_csv, index=False)
 print("Saved:", report_csv)
+
+# %%
+maxball_step_diagnostic_columns = [
+    "case",
+    "maxball_diag_retained_ball_count",
+    "maxball_diag_root_region_count",
+    "maxball_diag_occupied_region_count",
+    "maxball_diag_assigned_void_fraction",
+    "maxball_diag_unassigned_void_voxel_count",
+    "maxball_diag_zero_throat_region_count",
+    "maxball_diag_internal_zero_throat_region_count",
+    "maxball_diag_boundary_zero_throat_region_count",
+    "maxball_diag_touch_radius_side1_mean_voxels",
+    "maxball_diag_touch_radius_side2_mean_voxels",
+]
+summary_df.loc[:, maxball_step_diagnostic_columns].to_csv(
+    maxball_diagnostics_csv,
+    index=False,
+)
+print("Saved:", maxball_diagnostics_csv)
 
 # %%
 _make_permeability_comparison_figure(

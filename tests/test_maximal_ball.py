@@ -27,6 +27,7 @@ from voids.image.maximal_ball import (
     retreat_mixed_region_boundary_voxels,
     seed_root_region_ball_interiors,
     stamp_retained_ball_centers_to_root_labels,
+    summarize_maximal_ball_extraction_diagnostics,
     suppress_overlapping_maximal_balls,
 )
 
@@ -457,13 +458,22 @@ def test_measure_region_adjacency_extracts_one_interface_between_two_regions() -
         unassigned_label=-1,
     )
 
-    region_adjacency = measure_region_adjacency(void_phase_mask, voxel_regions)
+    distance_map = np.ones((4, 3, 3), dtype=float)
+    distance_map[1, :, :] = 2.0
+    distance_map[2, :, :] = 3.0
+    region_adjacency = measure_region_adjacency(
+        void_phase_mask,
+        voxel_regions,
+        distance_map=distance_map,
+    )
 
     assert np.array_equal(region_adjacency.region_volume_voxels, np.array([18, 18], dtype=np.int64))
     assert np.array_equal(region_adjacency.throat_region_pairs, np.array([[0, 1]], dtype=np.int64))
     assert np.array_equal(region_adjacency.throat_face_counts, np.array([9], dtype=np.int64))
     assert np.allclose(region_adjacency.throat_axis_face_balance, np.array([[9.0, 0.0, 0.0]]))
     assert np.allclose(region_adjacency.throat_centroid_indices, np.array([[1.5, 1.0, 1.0]]))
+    assert np.allclose(region_adjacency.throat_max_touch_radius_side1_voxels, np.array([2.0]))
+    assert np.allclose(region_adjacency.throat_max_touch_radius_side2_voxels, np.array([3.0]))
 
 
 def test_measure_region_adjacency_reports_boundary_contact_faces() -> None:
@@ -618,6 +628,67 @@ def test_build_network_dict_from_maximal_ball_regions_resolves_overlapping_bound
 
     assert np.array_equal(network_dict["pore.inlet_xmin"], np.array([True]))
     assert np.array_equal(network_dict["pore.outlet_xmax"], np.array([False]))
+
+
+def test_summarize_maximal_ball_extraction_diagnostics_reports_unassigned_and_isolated_regions() -> (
+    None
+):
+    """Extraction diagnostics should expose unassigned voids and isolated regions."""
+
+    void_phase_mask = np.ones((4, 3, 1), dtype=bool)
+    label_image = np.full((4, 3, 1), -1, dtype=np.int64)
+    label_image[0:2, :, :] = 0
+    label_image[2, 0:2, :] = 1
+    label_image[3, 2, :] = 2
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0, 1, 2], dtype=np.int64),
+        root_labels=np.array([0, 1, 2], dtype=np.int64),
+        root_center_indices=np.array([[0, 1, 0], [2, 0, 0], [3, 2, 0]], dtype=np.int64),
+        root_radii_voxels=np.array([2.0, 1.5, 1.0], dtype=float),
+        root_of_ball_index=np.array([0, 1, 2], dtype=np.int64),
+        unassigned_label=-1,
+    )
+    settings = resolve_maximal_ball_settings(
+        np.ones((4, 3, 1), dtype=float),
+        MaximalBallSettings(minimal_pore_radius_voxels=1.0),
+    )
+    extraction_result = MaximalBallExtractionResult(
+        candidates=MaximalBallCandidates(
+            center_indices=voxel_regions.root_center_indices.copy(),
+            radii_voxels=voxel_regions.root_radii_voxels.copy(),
+            candidate_mask=np.zeros((4, 3, 1), dtype=bool),
+            retained_mask=np.array([True, True, True], dtype=bool),
+            distance_map=np.ones((4, 3, 1), dtype=float),
+            settings=settings,
+        ),
+        hierarchy=MaximalBallHierarchy(
+            center_indices=voxel_regions.root_center_indices.copy(),
+            radii_voxels=voxel_regions.root_radii_voxels.copy(),
+            parent_indices=np.array([0, 1, 2], dtype=np.int64),
+            master_indices=np.array([0, 1, 2], dtype=np.int64),
+            hierarchy_levels=np.array([0, 0, 0], dtype=np.int64),
+            distance_map=np.ones((4, 3, 1), dtype=float),
+            settings=settings,
+        ),
+        voxel_regions=voxel_regions,
+        region_adjacency=measure_region_adjacency(
+            void_phase_mask,
+            voxel_regions,
+            distance_map=np.ones((4, 3, 1), dtype=float),
+        ),
+    )
+
+    diagnostics = summarize_maximal_ball_extraction_diagnostics(
+        void_phase_mask,
+        extraction_result,
+    )
+
+    assert diagnostics.retained_ball_count == 3
+    assert diagnostics.root_region_count == 3
+    assert diagnostics.occupied_region_count == 3
+    assert diagnostics.unassigned_void_voxel_count == 3
+    assert diagnostics.zero_throat_region_count >= 1
 
 
 def test_extract_maximal_ball_network_dict_wraps_extraction_and_assembly() -> None:

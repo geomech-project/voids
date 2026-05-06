@@ -145,6 +145,8 @@ class MaximalBallRegionAdjacency:
     throat_face_counts: np.ndarray
     throat_axis_face_balance: np.ndarray
     throat_centroid_indices: np.ndarray
+    throat_max_touch_radius_side1_voxels: np.ndarray
+    throat_max_touch_radius_side2_voxels: np.ndarray
     boundary_face_counts: np.ndarray
 
 
@@ -164,6 +166,22 @@ class MaximalBallNetworkDictResult:
 
     network_dict: dict[str, np.ndarray]
     extraction: MaximalBallExtractionResult
+
+
+@dataclass(slots=True)
+class MaximalBallExtractionDiagnostics:
+    """Compact diagnostics for step-by-step maximal-ball extraction comparison."""
+
+    retained_ball_count: int
+    root_region_count: int
+    occupied_region_count: int
+    assigned_void_fraction: float
+    unassigned_void_voxel_count: int
+    zero_throat_region_count: int
+    internal_zero_throat_region_count: int
+    boundary_zero_throat_region_count: int
+    throat_touch_radius_side1_mean_voxels: float
+    throat_touch_radius_side2_mean_voxels: float
 
 
 _CIRCULAR_SHAPE_FACTOR = 1.0 / (4.0 * np.pi)
@@ -1231,6 +1249,8 @@ def assign_voxel_regions_from_hierarchy(
 def measure_region_adjacency(
     void_phase_mask: np.ndarray,
     voxel_regions: MaximalBallVoxelRegions,
+    *,
+    distance_map: np.ndarray | None = None,
 ) -> MaximalBallRegionAdjacency:
     """Measure pore-region volumes, interfaces, and boundary contacts.
 
@@ -1264,6 +1284,13 @@ def measure_region_adjacency(
     label_image = np.asarray(voxel_regions.label_image, dtype=np.int64)
     if mask.shape != label_image.shape:
         raise ValueError("void_phase_mask and voxel_regions.label_image must match")
+    working_distance_map: np.ndarray | None = None
+    if distance_map is not None:
+        working_distance_map = np.asarray(distance_map, dtype=float)
+        if working_distance_map.shape != mask.shape:
+            raise ValueError(
+                "distance_map must match void_phase_mask and voxel_regions.label_image"
+            )
 
     region_labels = np.asarray(voxel_regions.root_labels, dtype=np.int64)
     region_count = int(region_labels.size)
@@ -1284,6 +1311,8 @@ def measure_region_adjacency(
     pair_face_counts: dict[tuple[int, int], int] = {}
     pair_axis_face_balance: dict[tuple[int, int], np.ndarray] = {}
     pair_centroid_sums: dict[tuple[int, int], np.ndarray] = {}
+    pair_max_touch_radius_side1: dict[tuple[int, int], float] = {}
+    pair_max_touch_radius_side2: dict[tuple[int, int], float] = {}
 
     image_shape = np.asarray(mask.shape, dtype=np.int64)
     for axis_index in range(mask.ndim):
@@ -1361,6 +1390,16 @@ def measure_region_adjacency(
         interface_indices = np.argwhere(shared_interface_mask).astype(float, copy=False)
         face_midpoint_indices = interface_indices.copy()
         face_midpoint_indices[:, axis_index] += 0.5
+        lower_touch_radii = (
+            working_distance_map[lower_slices_tuple][shared_interface_mask]
+            if working_distance_map is not None
+            else None
+        )
+        upper_touch_radii = (
+            working_distance_map[upper_slices_tuple][shared_interface_mask]
+            if working_distance_map is not None
+            else None
+        )
 
         for face_index in range(interface_indices.shape[0]):
             first_label = int(lower_interface_labels[face_index])
@@ -1368,9 +1407,29 @@ def measure_region_adjacency(
             if first_label < second_label:
                 ordered_pair = (first_label, second_label)
                 orientation_sign = 1.0
+                side1_touch_radius = (
+                    float(lower_touch_radii[face_index])
+                    if lower_touch_radii is not None
+                    else float("nan")
+                )
+                side2_touch_radius = (
+                    float(upper_touch_radii[face_index])
+                    if upper_touch_radii is not None
+                    else float("nan")
+                )
             else:
                 ordered_pair = (second_label, first_label)
                 orientation_sign = -1.0
+                side1_touch_radius = (
+                    float(upper_touch_radii[face_index])
+                    if upper_touch_radii is not None
+                    else float("nan")
+                )
+                side2_touch_radius = (
+                    float(lower_touch_radii[face_index])
+                    if lower_touch_radii is not None
+                    else float("nan")
+                )
 
             pair_face_counts[ordered_pair] = pair_face_counts.get(ordered_pair, 0) + 1
             if ordered_pair not in pair_axis_face_balance:
@@ -1379,6 +1438,16 @@ def measure_region_adjacency(
                 pair_centroid_sums[ordered_pair] = np.zeros(mask.ndim, dtype=float)
             pair_axis_face_balance[ordered_pair][axis_index] += orientation_sign
             pair_centroid_sums[ordered_pair] += face_midpoint_indices[face_index]
+            if np.isfinite(side1_touch_radius):
+                pair_max_touch_radius_side1[ordered_pair] = max(
+                    pair_max_touch_radius_side1.get(ordered_pair, -np.inf),
+                    side1_touch_radius,
+                )
+            if np.isfinite(side2_touch_radius):
+                pair_max_touch_radius_side2[ordered_pair] = max(
+                    pair_max_touch_radius_side2.get(ordered_pair, -np.inf),
+                    side2_touch_radius,
+                )
 
     occupied_region_mask = region_volume_voxels > 0
     occupied_region_indices = np.flatnonzero(occupied_region_mask).astype(np.int64)
@@ -1395,6 +1464,8 @@ def measure_region_adjacency(
         remapped_pair_face_counts: dict[tuple[int, int], int] = {}
         remapped_pair_axis_face_balance: dict[tuple[int, int], np.ndarray] = {}
         remapped_pair_centroid_sums: dict[tuple[int, int], np.ndarray] = {}
+        remapped_pair_max_touch_radius_side1: dict[tuple[int, int], float] = {}
+        remapped_pair_max_touch_radius_side2: dict[tuple[int, int], float] = {}
         for ordered_pair, face_count in pair_face_counts.items():
             first_region = int(compact_label_of_region[ordered_pair[0]])
             second_region = int(compact_label_of_region[ordered_pair[1]])
@@ -1404,9 +1475,19 @@ def measure_region_adjacency(
             remapped_pair_face_counts[remapped_pair] = face_count
             remapped_pair_axis_face_balance[remapped_pair] = pair_axis_face_balance[ordered_pair]
             remapped_pair_centroid_sums[remapped_pair] = pair_centroid_sums[ordered_pair]
+            if ordered_pair in pair_max_touch_radius_side1:
+                remapped_pair_max_touch_radius_side1[remapped_pair] = pair_max_touch_radius_side1[
+                    ordered_pair
+                ]
+            if ordered_pair in pair_max_touch_radius_side2:
+                remapped_pair_max_touch_radius_side2[remapped_pair] = pair_max_touch_radius_side2[
+                    ordered_pair
+                ]
         pair_face_counts = remapped_pair_face_counts
         pair_axis_face_balance = remapped_pair_axis_face_balance
         pair_centroid_sums = remapped_pair_centroid_sums
+        pair_max_touch_radius_side1 = remapped_pair_max_touch_radius_side1
+        pair_max_touch_radius_side2 = remapped_pair_max_touch_radius_side2
 
     ordered_pairs = sorted(pair_face_counts)
     throat_region_pairs = np.asarray(ordered_pairs, dtype=np.int64)
@@ -1414,6 +1495,8 @@ def measure_region_adjacency(
     throat_face_counts = np.zeros(throat_count, dtype=np.int64)
     throat_axis_face_balance = np.zeros((throat_count, mask.ndim), dtype=float)
     throat_centroid_indices = np.zeros((throat_count, mask.ndim), dtype=float)
+    throat_max_touch_radius_side1_voxels = np.full(throat_count, np.nan, dtype=float)
+    throat_max_touch_radius_side2_voxels = np.full(throat_count, np.nan, dtype=float)
     for throat_index, ordered_pair in enumerate(ordered_pairs):
         face_count = int(pair_face_counts[ordered_pair])
         throat_face_counts[throat_index] = face_count
@@ -1421,6 +1504,14 @@ def measure_region_adjacency(
         throat_centroid_indices[throat_index] = pair_centroid_sums[ordered_pair] / max(
             face_count, 1
         )
+        if ordered_pair in pair_max_touch_radius_side1:
+            throat_max_touch_radius_side1_voxels[throat_index] = pair_max_touch_radius_side1[
+                ordered_pair
+            ]
+        if ordered_pair in pair_max_touch_radius_side2:
+            throat_max_touch_radius_side2_voxels[throat_index] = pair_max_touch_radius_side2[
+                ordered_pair
+            ]
 
     return MaximalBallRegionAdjacency(
         region_labels=region_labels,
@@ -1430,6 +1521,8 @@ def measure_region_adjacency(
         throat_face_counts=throat_face_counts,
         throat_axis_face_balance=throat_axis_face_balance,
         throat_centroid_indices=throat_centroid_indices,
+        throat_max_touch_radius_side1_voxels=throat_max_touch_radius_side1_voxels,
+        throat_max_touch_radius_side2_voxels=throat_max_touch_radius_side2_voxels,
         boundary_face_counts=boundary_face_counts,
     )
 
@@ -1457,12 +1550,68 @@ def extract_maximal_ball_regions(
     )
     hierarchy = build_maximal_ball_hierarchy(candidates)
     voxel_regions = assign_voxel_regions_from_hierarchy(void_phase_mask, hierarchy)
-    region_adjacency = measure_region_adjacency(void_phase_mask, voxel_regions)
+    region_adjacency = measure_region_adjacency(
+        void_phase_mask,
+        voxel_regions,
+        distance_map=hierarchy.distance_map,
+    )
     return MaximalBallExtractionResult(
         candidates=candidates,
         hierarchy=hierarchy,
         voxel_regions=voxel_regions,
         region_adjacency=region_adjacency,
+    )
+
+
+def summarize_maximal_ball_extraction_diagnostics(
+    void_phase_mask: np.ndarray,
+    extraction_result: MaximalBallExtractionResult,
+) -> MaximalBallExtractionDiagnostics:
+    """Summarize intermediate maximal-ball extraction behavior for comparison work."""
+
+    mask = np.asarray(void_phase_mask, dtype=bool)
+    label_image = np.asarray(extraction_result.voxel_regions.label_image, dtype=np.int64)
+    if mask.shape != label_image.shape:
+        raise ValueError("void_phase_mask must match extraction_result voxel-region labels")
+
+    assigned_void_mask = mask & (label_image >= 0)
+    unassigned_void_voxel_count = int(np.count_nonzero(mask & (label_image < 0)))
+    region_adjacency = extraction_result.region_adjacency
+    occupied_region_count = int(region_adjacency.region_volume_voxels.size)
+    neighbor_counts = np.zeros(occupied_region_count, dtype=np.int64)
+    throat_region_pairs = np.asarray(region_adjacency.throat_region_pairs, dtype=np.int64)
+    if throat_region_pairs.size:
+        np.add.at(neighbor_counts, throat_region_pairs[:, 0], 1)
+        np.add.at(neighbor_counts, throat_region_pairs[:, 1], 1)
+    zero_throat_region_mask = neighbor_counts == 0
+    boundary_face_counts = np.asarray(region_adjacency.boundary_face_counts, dtype=np.int64)
+    boundary_touch_mask = np.sum(boundary_face_counts, axis=1) > 0
+
+    return MaximalBallExtractionDiagnostics(
+        retained_ball_count=int(extraction_result.candidates.retained_center_indices.shape[0]),
+        root_region_count=int(extraction_result.voxel_regions.root_labels.size),
+        occupied_region_count=occupied_region_count,
+        assigned_void_fraction=float(
+            np.count_nonzero(assigned_void_mask) / max(np.count_nonzero(mask), 1)
+        ),
+        unassigned_void_voxel_count=unassigned_void_voxel_count,
+        zero_throat_region_count=int(np.count_nonzero(zero_throat_region_mask)),
+        internal_zero_throat_region_count=int(
+            np.count_nonzero(zero_throat_region_mask & ~boundary_touch_mask)
+        ),
+        boundary_zero_throat_region_count=int(
+            np.count_nonzero(zero_throat_region_mask & boundary_touch_mask)
+        ),
+        throat_touch_radius_side1_mean_voxels=float(
+            np.nanmean(region_adjacency.throat_max_touch_radius_side1_voxels)
+            if region_adjacency.throat_max_touch_radius_side1_voxels.size
+            else np.nan
+        ),
+        throat_touch_radius_side2_mean_voxels=float(
+            np.nanmean(region_adjacency.throat_max_touch_radius_side2_voxels)
+            if region_adjacency.throat_max_touch_radius_side2_voxels.size
+            else np.nan
+        ),
     )
 
 
@@ -1477,6 +1626,14 @@ def _select_interface_supporting_ball_radii(
 
     throat_region_pairs = np.asarray(region_adjacency.throat_region_pairs, dtype=np.int64)
     throat_centroid_indices = np.asarray(region_adjacency.throat_centroid_indices, dtype=float)
+    touch_radius_side1_voxels = np.asarray(
+        region_adjacency.throat_max_touch_radius_side1_voxels,
+        dtype=float,
+    )
+    touch_radius_side2_voxels = np.asarray(
+        region_adjacency.throat_max_touch_radius_side2_voxels,
+        dtype=float,
+    )
     retained_center_indices = np.asarray(hierarchy.center_indices, dtype=float)
     retained_radii_voxels = np.asarray(hierarchy.radii_voxels, dtype=float)
     root_label_of_ball = np.asarray(voxel_regions.root_of_ball_index, dtype=np.int64)
@@ -1488,8 +1645,8 @@ def _select_interface_supporting_ball_radii(
     support_tolerance_voxels = 0.5 * np.sqrt(float(image_ndim))
 
     throat_count = int(throat_region_pairs.shape[0])
-    first_side_radii = np.full(throat_count, np.nan, dtype=float)
-    second_side_radii = np.full(throat_count, np.nan, dtype=float)
+    first_side_radii = np.asarray(touch_radius_side1_voxels, dtype=float).copy()
+    second_side_radii = np.asarray(touch_radius_side2_voxels, dtype=float).copy()
     if throat_count == 0 or retained_center_indices.size == 0:
         return first_side_radii, second_side_radii
 
@@ -1510,10 +1667,14 @@ def _select_interface_supporting_ball_radii(
         first_region_mask = centroid_supported_mask & (root_label_of_ball == first_region_label)
         second_region_mask = centroid_supported_mask & (root_label_of_ball == second_region_label)
         if np.any(first_region_mask):
-            first_side_radii[throat_index] = float(np.max(retained_radii_voxels[first_region_mask]))
+            first_side_radii[throat_index] = max(
+                float(np.nan_to_num(first_side_radii[throat_index], nan=-np.inf)),
+                float(np.max(retained_radii_voxels[first_region_mask])),
+            )
         if np.any(second_region_mask):
-            second_side_radii[throat_index] = float(
-                np.max(retained_radii_voxels[second_region_mask])
+            second_side_radii[throat_index] = max(
+                float(np.nan_to_num(second_side_radii[throat_index], nan=-np.inf)),
+                float(np.max(retained_radii_voxels[second_region_mask])),
             )
 
     return first_side_radii, second_side_radii
@@ -1928,6 +2089,7 @@ def extract_maximal_ball_candidates(
 
 __all__ = [
     "MaximalBallCandidates",
+    "MaximalBallExtractionDiagnostics",
     "MaximalBallExtractionResult",
     "MaximalBallHierarchy",
     "MaximalBallNetworkDictResult",
@@ -1944,10 +2106,15 @@ __all__ = [
     "extract_maximal_ball_regions",
     "extract_maximal_ball_candidates",
     "find_maximal_ball_candidates",
+    "grow_root_regions_by_neighbor_priority",
     "grow_root_regions_by_radius",
     "initialize_root_region_labels",
     "measure_region_adjacency",
+    "reassign_region_boundary_voxels_by_majority",
     "resolve_maximal_ball_settings",
+    "retreat_mixed_region_boundary_voxels",
     "seed_root_region_ball_interiors",
+    "stamp_retained_ball_centers_to_root_labels",
+    "summarize_maximal_ball_extraction_diagnostics",
     "suppress_overlapping_maximal_balls",
 ]
