@@ -46,10 +46,12 @@ If you are new to the project, the shortest useful path is:
 1. [Getting Started](getting_started.md) for installation and the minimal solve
 2. [Concepts and Conventions](concepts.md) for the canonical data model and units
 3. [Scientific Workflow](workflow.md) for image-based or imported-network studies
-4. [Theoretical Background](background.md) for governing equations and assumptions
-5. [Examples](examples.md) for notebook-scale workflows
-6. [Verification & Validation](verification/index.md) for benchmark evidence
-7. [API Reference](api/index.md) for callable details
+4. [Image Segmentation & Network Extraction](image_segmentation_network_extraction.md)
+   for the segmented-image-to-network pipeline
+5. [Theoretical Background](background.md) for governing equations and assumptions
+6. [Examples](examples.md) for notebook-scale workflows
+7. [Verification & Validation](verification/index.md) for benchmark evidence
+8. [API Reference](api/index.md) for callable details
 
 ---
 
@@ -112,7 +114,8 @@ Those two goals are intentionally separated across the documentation tree:
 | Plotly and PyVista visualization | ✅ |
 | OpenPNM cross-checks | ✅ |
 | Multiphase flow | ❌ Not yet |
-| Image segmentation | ❌ Delegated to PoreSpy |
+| Basic grayscale thresholding and cylindrical crop preprocessing | ✅ |
+| Advanced CT segmentation and manual/ML cleanup | ❌ Upstream preprocessing task |
 
 ---
 

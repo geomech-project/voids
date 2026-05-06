@@ -82,6 +82,7 @@ nav:
   - Getting Started: getting_started.md
   - Concepts and Conventions: concepts.md
   - Scientific Workflow: workflow.md
+  - Image Segmentation & Network Extraction: image_segmentation_network_extraction.md
   - Examples: examples.md
   - Notebook Reports:
     - Overview: notebook_reports/index.md
