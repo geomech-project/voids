@@ -19,10 +19,14 @@ from voids.image.maximal_ball import (
     extract_maximal_ball_candidates,
     find_maximal_ball_candidates,
     grow_root_regions_by_radius,
+    grow_root_regions_by_neighbor_priority,
     initialize_root_region_labels,
     measure_region_adjacency,
+    reassign_region_boundary_voxels_by_majority,
     resolve_maximal_ball_settings,
+    retreat_mixed_region_boundary_voxels,
     seed_root_region_ball_interiors,
+    stamp_retained_ball_centers_to_root_labels,
     suppress_overlapping_maximal_balls,
 )
 
@@ -315,6 +319,125 @@ def test_assign_voxel_regions_from_hierarchy_expands_beyond_root_centers() -> No
         np.count_nonzero(voxel_regions.assigned_void_mask) >= voxel_regions.root_ball_indices.size
     )
     assert np.count_nonzero(voxel_regions.assigned_void_mask) > voxel_regions.root_ball_indices.size
+
+
+def test_reassign_region_boundary_voxels_by_majority_switches_weak_boundary_label() -> None:
+    """A weakly supported labeled voxel should adopt the stronger competing label."""
+
+    void_phase_mask = np.ones((5, 5, 1), dtype=bool)
+    distance_map = np.ones((5, 5, 1), dtype=float)
+    label_image = np.full((5, 5, 1), -1, dtype=np.int64)
+    label_image[2, 2, 0] = 0
+    label_image[1, 2, 0] = 1
+    label_image[3, 2, 0] = 1
+    label_image[2, 1, 0] = 1
+
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0, 1], dtype=np.int64),
+        root_labels=np.array([0, 1], dtype=np.int64),
+        root_center_indices=np.array([[2, 2, 0], [1, 2, 0]], dtype=np.int64),
+        root_radii_voxels=np.array([1.0, 1.0], dtype=float),
+        root_of_ball_index=np.array([0, 1], dtype=np.int64),
+        unassigned_label=-1,
+    )
+
+    reassigned_regions = reassign_region_boundary_voxels_by_majority(
+        void_phase_mask,
+        distance_map,
+        voxel_regions,
+        radius_support_mode="any",
+        iterations=1,
+    )
+
+    assert reassigned_regions.label_image[2, 2, 0] == 1
+
+
+def test_retreat_mixed_region_boundary_voxels_unassigns_mixed_interface_voxel() -> None:
+    """A voxel touching both same and different labels should retreat to unassigned."""
+
+    void_phase_mask = np.ones((5, 5, 1), dtype=bool)
+    label_image = np.full((5, 5, 1), -1, dtype=np.int64)
+    label_image[2, 2, 0] = 0
+    label_image[1, 2, 0] = 0
+    label_image[3, 2, 0] = 1
+
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0, 1], dtype=np.int64),
+        root_labels=np.array([0, 1], dtype=np.int64),
+        root_center_indices=np.array([[2, 2, 0], [3, 2, 0]], dtype=np.int64),
+        root_radii_voxels=np.array([1.0, 1.0], dtype=float),
+        root_of_ball_index=np.array([0, 1], dtype=np.int64),
+        unassigned_label=-1,
+    )
+
+    retreated_regions = retreat_mixed_region_boundary_voxels(
+        void_phase_mask,
+        voxel_regions,
+    )
+
+    assert retreated_regions.label_image[2, 2, 0] == -1
+
+
+def test_grow_root_regions_by_neighbor_priority_propagates_without_radius_filter() -> None:
+    """Late sweep growth should fill an unassigned voxel from a directly touching label."""
+
+    void_phase_mask = np.ones((4, 4, 1), dtype=bool)
+    label_image = np.full((4, 4, 1), -1, dtype=np.int64)
+    label_image[1, 1, 0] = 0
+
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0], dtype=np.int64),
+        root_labels=np.array([0], dtype=np.int64),
+        root_center_indices=np.array([[1, 1, 0]], dtype=np.int64),
+        root_radii_voxels=np.array([1.0], dtype=float),
+        root_of_ball_index=np.array([0], dtype=np.int64),
+        unassigned_label=-1,
+    )
+
+    grown_regions = grow_root_regions_by_neighbor_priority(
+        void_phase_mask,
+        voxel_regions,
+        iterations=2,
+    )
+
+    assert np.count_nonzero(grown_regions.assigned_void_mask) > 1
+
+
+def test_stamp_retained_ball_centers_to_root_labels_restores_center_assignment() -> None:
+    """Retained-ball centers should be restored after temporary retreat passes."""
+
+    label_image = np.full((5, 5, 1), -1, dtype=np.int64)
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0], dtype=np.int64),
+        root_labels=np.array([0], dtype=np.int64),
+        root_center_indices=np.array([[2, 2, 0]], dtype=np.int64),
+        root_radii_voxels=np.array([2.0], dtype=float),
+        root_of_ball_index=np.array([0], dtype=np.int64),
+        unassigned_label=-1,
+    )
+    hierarchy = MaximalBallHierarchy(
+        center_indices=np.array([[2, 2, 0]], dtype=np.int64),
+        radii_voxels=np.array([2.0], dtype=float),
+        parent_indices=np.array([0], dtype=np.int64),
+        master_indices=np.array([0], dtype=np.int64),
+        hierarchy_levels=np.array([0], dtype=np.int64),
+        distance_map=np.ones((5, 5, 1), dtype=float),
+        settings=resolve_maximal_ball_settings(
+            np.ones((5, 5, 1), dtype=float),
+            MaximalBallSettings(minimal_pore_radius_voxels=1.0),
+        ),
+    )
+
+    stamped_regions = stamp_retained_ball_centers_to_root_labels(
+        voxel_regions,
+        hierarchy,
+    )
+
+    assert stamped_regions.label_image[2, 2, 0] == 0
 
 
 def test_measure_region_adjacency_extracts_one_interface_between_two_regions() -> None:

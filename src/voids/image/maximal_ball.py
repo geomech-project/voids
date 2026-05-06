@@ -775,13 +775,99 @@ def _neighbor_offsets(ndim: int) -> list[tuple[int, ...]]:
     return offsets
 
 
+def _neighbor_offsets_with_growth_priority(ndim: int) -> list[tuple[int, ...]]:
+    """Return Imperial-like axis sweep order for neighbor inspection."""
+
+    offsets: list[tuple[int, ...]] = []
+    for axis_index in range(ndim):
+        positive_offset = [0] * ndim
+        negative_offset = [0] * ndim
+        positive_offset[axis_index] = 1
+        negative_offset[axis_index] = -1
+        offsets.append(tuple(positive_offset))
+        offsets.append(tuple(negative_offset))
+    return offsets
+
+
+def _normalize_radius_support_mode(
+    *,
+    radius_support_mode: str | None,
+    require_strictly_larger_radius: bool | None,
+) -> str:
+    """Normalize the local radius-support rule for voxel growth."""
+
+    if radius_support_mode is None:
+        if require_strictly_larger_radius is True:
+            return "strictly_larger"
+        return "greater_or_equal"
+
+    normalized_mode = str(radius_support_mode).strip().lower()
+    valid_modes = {"strictly_larger", "greater_or_equal", "any"}
+    if normalized_mode not in valid_modes:
+        raise ValueError(
+            "radius_support_mode must be one of {'strictly_larger', 'greater_or_equal', 'any'}"
+        )
+    return normalized_mode
+
+
+def _neighbor_satisfies_radius_support(
+    neighbor_radius: float,
+    current_radius: float,
+    *,
+    radius_support_mode: str,
+) -> bool:
+    """Return whether a neighboring voxel may support assignment."""
+
+    if radius_support_mode == "any":
+        return True
+    if radius_support_mode == "strictly_larger":
+        return neighbor_radius > current_radius
+    if radius_support_mode == "greater_or_equal":
+        return neighbor_radius >= current_radius
+    raise ValueError(f"Unsupported radius_support_mode={radius_support_mode!r}")
+
+
+def _count_supporting_neighbor_labels(
+    previous_labels: np.ndarray,
+    working_distance_map: np.ndarray,
+    voxel_index: np.ndarray,
+    *,
+    image_shape: np.ndarray,
+    neighbor_offsets: list[tuple[int, ...]],
+    current_label: int | None,
+    current_radius: float,
+    radius_support_mode: str,
+) -> dict[int, int]:
+    """Count neighboring region labels that support a local reassignment."""
+
+    supporting_label_counts: dict[int, int] = {}
+    for neighbor_offset in neighbor_offsets:
+        neighbor_index = voxel_index + np.asarray(neighbor_offset, dtype=np.int64)
+        if np.any(neighbor_index < 0) or np.any(neighbor_index >= image_shape):
+            continue
+        neighbor_index_tuple = tuple(int(value) for value in neighbor_index)
+        neighbor_label = int(previous_labels[neighbor_index_tuple])
+        if neighbor_label < 0 or neighbor_label == current_label:
+            continue
+        neighbor_radius = float(working_distance_map[neighbor_index_tuple])
+        if not _neighbor_satisfies_radius_support(
+            neighbor_radius,
+            current_radius,
+            radius_support_mode=radius_support_mode,
+        ):
+            continue
+        supporting_label_counts[neighbor_label] = supporting_label_counts.get(neighbor_label, 0) + 1
+    return supporting_label_counts
+
+
 def grow_root_regions_by_radius(
     void_phase_mask: np.ndarray,
     distance_map: np.ndarray,
     voxel_regions: MaximalBallVoxelRegions,
     *,
     minimum_supporting_neighbors: int,
-    require_strictly_larger_radius: bool,
+    radius_support_mode: str | None = None,
+    require_strictly_larger_radius: bool | None = None,
     iterations: int = 1,
 ) -> MaximalBallVoxelRegions:
     """Grow root regions across unassigned void voxels using local radius rules."""
@@ -797,6 +883,10 @@ def grow_root_regions_by_radius(
     if mask.shape != label_image.shape or mask.shape != working_distance_map.shape:
         raise ValueError("void_phase_mask, distance_map, and voxel_regions.label_image must match")
 
+    normalized_radius_support_mode = _normalize_radius_support_mode(
+        radius_support_mode=radius_support_mode,
+        require_strictly_larger_radius=require_strictly_larger_radius,
+    )
     neighbor_offsets = _neighbor_offsets(mask.ndim)
     image_shape = np.asarray(mask.shape, dtype=np.int64)
     for _ in range(iterations):
@@ -806,27 +896,16 @@ def grow_root_regions_by_radius(
         for voxel_index in unassigned_indices:
             voxel_index_tuple = tuple(int(value) for value in voxel_index)
             voxel_radius = float(working_distance_map[voxel_index_tuple])
-            supporting_label_counts: dict[int, int] = {}
-            for neighbor_offset in neighbor_offsets:
-                neighbor_index = voxel_index + np.asarray(neighbor_offset, dtype=np.int64)
-                if np.any(neighbor_index < 0) or np.any(neighbor_index >= image_shape):
-                    continue
-                neighbor_index_tuple = tuple(int(value) for value in neighbor_index)
-                neighbor_label = int(previous_labels[neighbor_index_tuple])
-                if neighbor_label < 0:
-                    continue
-                neighbor_radius = float(working_distance_map[neighbor_index_tuple])
-                supports_voxel = (
-                    neighbor_radius > voxel_radius
-                    if require_strictly_larger_radius
-                    else neighbor_radius >= voxel_radius
-                )
-                if not supports_voxel:
-                    continue
-                supporting_label_counts[neighbor_label] = (
-                    supporting_label_counts.get(neighbor_label, 0) + 1
-                )
-
+            supporting_label_counts = _count_supporting_neighbor_labels(
+                previous_labels,
+                working_distance_map,
+                voxel_index,
+                image_shape=image_shape,
+                neighbor_offsets=neighbor_offsets,
+                current_label=None,
+                current_radius=voxel_radius,
+                radius_support_mode=normalized_radius_support_mode,
+            )
             if not supporting_label_counts:
                 continue
             best_label, best_support = max(
@@ -850,11 +929,234 @@ def grow_root_regions_by_radius(
     )
 
 
+def reassign_region_boundary_voxels_by_majority(
+    void_phase_mask: np.ndarray,
+    distance_map: np.ndarray,
+    voxel_regions: MaximalBallVoxelRegions,
+    *,
+    radius_support_mode: str = "any",
+    iterations: int = 1,
+) -> MaximalBallVoxelRegions:
+    """Reassign weakly supported labeled voxels using a neighbor majority rule.
+
+    This mirrors the Imperial `medianElem` stage conceptually: if a labeled
+    voxel is more exposed to different neighboring pore labels than to its own
+    label, it may be reassigned to the strongest competing neighbor label.
+    """
+
+    if iterations < 1:
+        raise ValueError("iterations must be at least 1")
+
+    mask = np.asarray(void_phase_mask, dtype=bool)
+    working_distance_map = np.asarray(distance_map, dtype=float)
+    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    if mask.shape != label_image.shape or mask.shape != working_distance_map.shape:
+        raise ValueError("void_phase_mask, distance_map, and voxel_regions.label_image must match")
+
+    normalized_radius_support_mode = _normalize_radius_support_mode(
+        radius_support_mode=radius_support_mode,
+        require_strictly_larger_radius=None,
+    )
+    neighbor_offsets = _neighbor_offsets(mask.ndim)
+    image_shape = np.asarray(mask.shape, dtype=np.int64)
+
+    for _ in range(iterations):
+        previous_labels = label_image.copy()
+        changed_any_voxel = False
+        assigned_indices = np.argwhere(mask & (previous_labels >= 0))
+        for voxel_index in assigned_indices:
+            voxel_index_tuple = tuple(int(value) for value in voxel_index)
+            current_label = int(previous_labels[voxel_index_tuple])
+            current_radius = float(working_distance_map[voxel_index_tuple])
+
+            same_label_neighbor_count = 0
+            different_label_neighbor_count = 0
+            for neighbor_offset in neighbor_offsets:
+                neighbor_index = voxel_index + np.asarray(neighbor_offset, dtype=np.int64)
+                if np.any(neighbor_index < 0) or np.any(neighbor_index >= image_shape):
+                    continue
+                neighbor_index_tuple = tuple(int(value) for value in neighbor_index)
+                neighbor_label = int(previous_labels[neighbor_index_tuple])
+                if neighbor_label < 0:
+                    continue
+                if neighbor_label == current_label:
+                    same_label_neighbor_count += 1
+                else:
+                    different_label_neighbor_count += 1
+
+            if different_label_neighbor_count <= same_label_neighbor_count:
+                continue
+
+            supporting_label_counts = _count_supporting_neighbor_labels(
+                previous_labels,
+                working_distance_map,
+                voxel_index,
+                image_shape=image_shape,
+                neighbor_offsets=neighbor_offsets,
+                current_label=current_label,
+                current_radius=current_radius,
+                radius_support_mode=normalized_radius_support_mode,
+            )
+            if not supporting_label_counts:
+                continue
+            best_label, best_support = max(
+                supporting_label_counts.items(),
+                key=lambda item: (item[1], -item[0]),
+            )
+            if best_support > same_label_neighbor_count:
+                label_image[voxel_index_tuple] = int(best_label)
+                changed_any_voxel = True
+
+        if not changed_any_voxel:
+            break
+
+    return MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=voxel_regions.root_ball_indices,
+        root_labels=voxel_regions.root_labels,
+        root_center_indices=voxel_regions.root_center_indices,
+        root_radii_voxels=voxel_regions.root_radii_voxels,
+        root_of_ball_index=voxel_regions.root_of_ball_index,
+        unassigned_label=voxel_regions.unassigned_label,
+    )
+
+
+def retreat_mixed_region_boundary_voxels(
+    void_phase_mask: np.ndarray,
+    voxel_regions: MaximalBallVoxelRegions,
+) -> MaximalBallVoxelRegions:
+    """Retreat mixed boundary voxels back to the unassigned state.
+
+    This mirrors the Imperial `retreatPoresMedian` stage: labeled voxels that
+    touch both same-label and different-label neighbors are temporarily removed
+    so later growth passes can rebuild cleaner interfaces.
+    """
+
+    mask = np.asarray(void_phase_mask, dtype=bool)
+    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    if mask.shape != label_image.shape:
+        raise ValueError("void_phase_mask and voxel_regions.label_image must match")
+
+    neighbor_offsets = _neighbor_offsets(mask.ndim)
+    image_shape = np.asarray(mask.shape, dtype=np.int64)
+    previous_labels = label_image.copy()
+    assigned_indices = np.argwhere(mask & (previous_labels >= 0))
+    for voxel_index in assigned_indices:
+        voxel_index_tuple = tuple(int(value) for value in voxel_index)
+        current_label = int(previous_labels[voxel_index_tuple])
+        same_label_neighbor_count = 0
+        different_label_neighbor_count = 0
+        for neighbor_offset in neighbor_offsets:
+            neighbor_index = voxel_index + np.asarray(neighbor_offset, dtype=np.int64)
+            if np.any(neighbor_index < 0) or np.any(neighbor_index >= image_shape):
+                continue
+            neighbor_index_tuple = tuple(int(value) for value in neighbor_index)
+            neighbor_label = int(previous_labels[neighbor_index_tuple])
+            if neighbor_label < 0:
+                continue
+            if neighbor_label == current_label:
+                same_label_neighbor_count += 1
+            else:
+                different_label_neighbor_count += 1
+        if same_label_neighbor_count > 0 and different_label_neighbor_count > 0:
+            label_image[voxel_index_tuple] = voxel_regions.unassigned_label
+
+    return MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=voxel_regions.root_ball_indices,
+        root_labels=voxel_regions.root_labels,
+        root_center_indices=voxel_regions.root_center_indices,
+        root_radii_voxels=voxel_regions.root_radii_voxels,
+        root_of_ball_index=voxel_regions.root_of_ball_index,
+        unassigned_label=voxel_regions.unassigned_label,
+    )
+
+
+def stamp_retained_ball_centers_to_root_labels(
+    voxel_regions: MaximalBallVoxelRegions,
+    maximal_ball_hierarchy: MaximalBallHierarchy,
+) -> MaximalBallVoxelRegions:
+    """Restore retained-ball centers to their hierarchy-root region labels."""
+
+    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    for ball_index, center_index in enumerate(maximal_ball_hierarchy.center_indices):
+        root_label = int(voxel_regions.root_of_ball_index[ball_index])
+        center_index_tuple = tuple(int(value) for value in center_index)
+        label_image[center_index_tuple] = root_label
+
+    return MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=voxel_regions.root_ball_indices,
+        root_labels=voxel_regions.root_labels,
+        root_center_indices=voxel_regions.root_center_indices,
+        root_radii_voxels=voxel_regions.root_radii_voxels,
+        root_of_ball_index=voxel_regions.root_of_ball_index,
+        unassigned_label=voxel_regions.unassigned_label,
+    )
+
+
+def grow_root_regions_by_neighbor_priority(
+    void_phase_mask: np.ndarray,
+    voxel_regions: MaximalBallVoxelRegions,
+    *,
+    iterations: int = 1,
+) -> MaximalBallVoxelRegions:
+    """Grow unassigned voxels by direct neighbor propagation in sweep order.
+
+    This mirrors the late Imperial `growPores` / `growPores_X2` stages more
+    closely than the earlier radius-aware majority passes.
+    """
+
+    if iterations < 1:
+        raise ValueError("iterations must be at least 1")
+
+    mask = np.asarray(void_phase_mask, dtype=bool)
+    label_image = np.asarray(voxel_regions.label_image, dtype=np.int64).copy()
+    if mask.shape != label_image.shape:
+        raise ValueError("void_phase_mask and voxel_regions.label_image must match")
+
+    image_shape = np.asarray(mask.shape, dtype=np.int64)
+    neighbor_offsets = _neighbor_offsets_with_growth_priority(mask.ndim)
+    forward_indices = np.argwhere(mask)
+    backward_indices = forward_indices[::-1].copy()
+
+    for _ in range(iterations):
+        changed_any_voxel = False
+        for traversal_indices in (forward_indices, backward_indices):
+            for voxel_index in traversal_indices:
+                voxel_index_tuple = tuple(int(value) for value in voxel_index)
+                if label_image[voxel_index_tuple] != voxel_regions.unassigned_label:
+                    continue
+                for neighbor_offset in neighbor_offsets:
+                    neighbor_index = voxel_index + np.asarray(neighbor_offset, dtype=np.int64)
+                    if np.any(neighbor_index < 0) or np.any(neighbor_index >= image_shape):
+                        continue
+                    neighbor_index_tuple = tuple(int(value) for value in neighbor_index)
+                    neighbor_label = int(label_image[neighbor_index_tuple])
+                    if neighbor_label < 0:
+                        continue
+                    label_image[voxel_index_tuple] = neighbor_label
+                    changed_any_voxel = True
+                    break
+        if not changed_any_voxel:
+            break
+
+    return MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=voxel_regions.root_ball_indices,
+        root_labels=voxel_regions.root_labels,
+        root_center_indices=voxel_regions.root_center_indices,
+        root_radii_voxels=voxel_regions.root_radii_voxels,
+        root_of_ball_index=voxel_regions.root_of_ball_index,
+        unassigned_label=voxel_regions.unassigned_label,
+    )
+
+
 def assign_voxel_regions_from_hierarchy(
     void_phase_mask: np.ndarray,
     maximal_ball_hierarchy: MaximalBallHierarchy,
 ) -> MaximalBallVoxelRegions:
-    """Assign voxel ownership from a maximal-ball hierarchy using staged growth passes."""
+    """Assign voxel ownership using an Imperial-inspired staged growth schedule."""
 
     voxel_regions = initialize_root_region_labels(
         void_phase_mask,
@@ -865,21 +1167,64 @@ def assign_voxel_regions_from_hierarchy(
         maximal_ball_hierarchy,
         voxel_regions,
     )
-    growth_schedule = [
-        (3, True, 4),
-        (2, True, 6),
-        (2, False, 8),
-        (1, False, 8),
+    initial_growth_schedule = [
+        (3, "strictly_larger", 3),
+        (2, "strictly_larger", 3),
+        (2, "greater_or_equal", 4),
     ]
-    for minimum_supporting_neighbors, require_strictly_larger_radius, iterations in growth_schedule:
+    for minimum_supporting_neighbors, radius_support_mode, iterations in initial_growth_schedule:
         voxel_regions = grow_root_regions_by_radius(
             void_phase_mask,
             maximal_ball_hierarchy.distance_map,
             voxel_regions,
             minimum_supporting_neighbors=minimum_supporting_neighbors,
-            require_strictly_larger_radius=require_strictly_larger_radius,
+            radius_support_mode=radius_support_mode,
             iterations=iterations,
         )
+
+    voxel_regions = reassign_region_boundary_voxels_by_majority(
+        void_phase_mask,
+        maximal_ball_hierarchy.distance_map,
+        voxel_regions,
+        radius_support_mode="any",
+        iterations=2,
+    )
+    voxel_regions = retreat_mixed_region_boundary_voxels(
+        void_phase_mask,
+        voxel_regions,
+    )
+    voxel_regions = stamp_retained_ball_centers_to_root_labels(
+        voxel_regions,
+        maximal_ball_hierarchy,
+    )
+
+    late_growth_schedule = [
+        (2, "greater_or_equal", 6),
+        (2, "any", 4),
+        (1, "any", 4),
+    ]
+    for minimum_supporting_neighbors, radius_support_mode, iterations in late_growth_schedule:
+        voxel_regions = grow_root_regions_by_radius(
+            void_phase_mask,
+            maximal_ball_hierarchy.distance_map,
+            voxel_regions,
+            minimum_supporting_neighbors=minimum_supporting_neighbors,
+            radius_support_mode=radius_support_mode,
+            iterations=iterations,
+        )
+
+    voxel_regions = reassign_region_boundary_voxels_by_majority(
+        void_phase_mask,
+        maximal_ball_hierarchy.distance_map,
+        voxel_regions,
+        radius_support_mode="any",
+        iterations=2,
+    )
+    voxel_regions = grow_root_regions_by_neighbor_priority(
+        void_phase_mask,
+        voxel_regions,
+        iterations=max(16, 2 * max(void_phase_mask.shape)),
+    )
     return voxel_regions
 
 
@@ -1034,6 +1379,34 @@ def measure_region_adjacency(
                 pair_centroid_sums[ordered_pair] = np.zeros(mask.ndim, dtype=float)
             pair_axis_face_balance[ordered_pair][axis_index] += orientation_sign
             pair_centroid_sums[ordered_pair] += face_midpoint_indices[face_index]
+
+    occupied_region_mask = region_volume_voxels > 0
+    occupied_region_indices = np.flatnonzero(occupied_region_mask).astype(np.int64)
+    if occupied_region_indices.size != region_count:
+        compact_label_of_region = np.full(region_count, -1, dtype=np.int64)
+        compact_label_of_region[occupied_region_indices] = np.arange(
+            occupied_region_indices.size,
+            dtype=np.int64,
+        )
+        region_labels = region_labels[occupied_region_indices]
+        region_volume_voxels = region_volume_voxels[occupied_region_indices]
+        region_surface_face_counts = region_surface_face_counts[occupied_region_indices]
+        boundary_face_counts = boundary_face_counts[occupied_region_indices]
+        remapped_pair_face_counts: dict[tuple[int, int], int] = {}
+        remapped_pair_axis_face_balance: dict[tuple[int, int], np.ndarray] = {}
+        remapped_pair_centroid_sums: dict[tuple[int, int], np.ndarray] = {}
+        for ordered_pair, face_count in pair_face_counts.items():
+            first_region = int(compact_label_of_region[ordered_pair[0]])
+            second_region = int(compact_label_of_region[ordered_pair[1]])
+            if first_region < 0 or second_region < 0:
+                continue
+            remapped_pair = (first_region, second_region)
+            remapped_pair_face_counts[remapped_pair] = face_count
+            remapped_pair_axis_face_balance[remapped_pair] = pair_axis_face_balance[ordered_pair]
+            remapped_pair_centroid_sums[remapped_pair] = pair_centroid_sums[ordered_pair]
+        pair_face_counts = remapped_pair_face_counts
+        pair_axis_face_balance = remapped_pair_axis_face_balance
+        pair_centroid_sums = remapped_pair_centroid_sums
 
     ordered_pairs = sorted(pair_face_counts)
     throat_region_pairs = np.asarray(ordered_pairs, dtype=np.int64)
@@ -1280,14 +1653,22 @@ def build_network_dict_from_maximal_ball_regions(
         raise ValueError("axis_names must provide at least one label per image dimension")
 
     active_axis_names = axis_names[:image_ndim]
-    region_count = int(region_adjacency.region_labels.size)
-    root_center_indices = np.asarray(voxel_regions.root_center_indices, dtype=float)
-    root_radii_voxels = np.asarray(voxel_regions.root_radii_voxels, dtype=float)
+    retained_region_labels = np.asarray(region_adjacency.region_labels, dtype=np.int64)
+    region_count = int(retained_region_labels.size)
+    all_root_center_indices = np.asarray(voxel_regions.root_center_indices, dtype=float)
+    all_root_radii_voxels = np.asarray(voxel_regions.root_radii_voxels, dtype=float)
 
-    if root_center_indices.shape[0] != region_count:
-        raise ValueError("root_center_indices must align with region labels")
-    if root_radii_voxels.shape != (region_count,):
-        raise ValueError("root_radii_voxels must align with region labels")
+    if all_root_center_indices.ndim != 2 or all_root_center_indices.shape[1] != image_ndim:
+        raise ValueError("root_center_indices must have shape (n_roots, image_ndim)")
+    if all_root_radii_voxels.shape != (all_root_center_indices.shape[0],):
+        raise ValueError("root_radii_voxels must align with root_center_indices")
+    if np.any(retained_region_labels < 0) or np.any(
+        retained_region_labels >= all_root_center_indices.shape[0]
+    ):
+        raise ValueError("region_adjacency.region_labels must index the root-region arrays")
+
+    root_center_indices = all_root_center_indices[retained_region_labels]
+    root_radii_voxels = all_root_radii_voxels[retained_region_labels]
 
     pore_coords = root_center_indices * float(voxel_size)
     if pore_coords.shape[1] == 2:
