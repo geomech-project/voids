@@ -83,6 +83,7 @@ def load_pnflow_cnm(
     pressure_unit: str = "Pa",
     boundary_length_epsilon: float = _BOUNDARY_LENGTH_EPS,
     boundary_radius_scale: float = 1.1,
+    pnflow_solver_box_compat: bool = False,
 ) -> PnflowCNMImportResult:
     """Import an Imperial College `pnextract` / `pnflow` CNM text network.
 
@@ -103,6 +104,16 @@ def load_pnflow_cnm(
     boundary_radius_scale :
         Scale factor used for mirrored inlet/outlet helper pores. This follows
         the `InOutBoundary::prepare2()` construction in the Imperial code.
+    pnflow_solver_box_compat :
+        If ``True``, reproduce the Imperial CNM preprocessing quirk that
+        excludes the first physical pore from the solver box when
+        ``nBSs_ = 2`` is hard-coded in `FlowDomain.cpp`. The excluded pore is
+        then treated as an inlet or outlet solver-boundary pore based on its
+        x-position relative to the sample mid-plane. This is kept opt-in
+        because it reproduces checked-in `pnflow` behavior rather than a
+        generic physical boundary rule. Enabling this option is required for
+        near machine-precision single-phase parity with the saved `pnflow`
+        benchmark cases.
 
     Returns
     -------
@@ -267,6 +278,11 @@ def load_pnflow_cnm(
     pore_shape_factor_arr = _pnflow_effective_shape_factor(pore_shape_factor_raw_arr)
     inlet_label_arr = np.asarray(inlet_label, dtype=bool)
     outlet_label_arr = np.asarray(outlet_label, dtype=bool)
+    if pnflow_solver_box_compat and n_physical_pores > 0:
+        if pore_coords_arr[0, 0] < 0.5 * lx:
+            inlet_label_arr[0] = True
+        else:
+            outlet_label_arr[0] = True
     pore_area_arr = pore_radius_arr**2 / (4.0 * pore_shape_factor_arr)
     throat_shape_factor_raw = throat_shape_factor.copy()
     throat_shape_factor = _pnflow_effective_shape_factor(throat_shape_factor_raw)
@@ -289,6 +305,7 @@ def load_pnflow_cnm(
                 "boundary_axis": boundary_axis,
                 "boundary_length_epsilon": boundary_length_epsilon,
                 "boundary_radius_scale": boundary_radius_scale,
+                "pnflow_solver_box_compat": pnflow_solver_box_compat,
             },
         ),
         pore={
@@ -332,6 +349,7 @@ def load_pnflow_cnm(
                 "n_physical_pores": n_physical_pores,
                 "n_boundary_mirror_pores": n_boundary_mirror_pores,
                 "box_lengths": box_lengths,
+                "pnflow_solver_box_compat": pnflow_solver_box_compat,
             }
         },
     )

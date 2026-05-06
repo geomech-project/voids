@@ -81,6 +81,7 @@ def test_construct_spanning_network_supports_imported_pnflow_cnm_backend() -> No
     result = nex.construct_spanning_network(
         backend="imperial_cnm",
         pnflow_cnm_prefix=prefix,
+        pnflow_solver_box_compat=True,
         provenance_notes={"campaign": "unit-test"},
     )
 
@@ -93,6 +94,20 @@ def test_construct_spanning_network_supports_imported_pnflow_cnm_backend() -> No
     assert result.backend_details["n_physical_pores"] == 64
     assert result.backend_details["n_boundary_mirror_pores"] == 34
     assert result.provenance.user_notes["campaign"] == "unit-test"
+
+
+def test_construct_spanning_network_leaves_solver_box_compat_opt_in() -> None:
+    """The unified constructor should keep the Imperial solver-box quirk explicit."""
+
+    case = "phi035_b16"
+    prefix = data_path() / "external_pnflow_benchmark" / case / case
+    result = nex.construct_spanning_network(
+        backend="pnflow_cnm",
+        pnflow_cnm_prefix=prefix,
+    )
+
+    assert not result.net.pore_labels["inlet_xmin"][0]
+    assert not result.net.pore_labels["outlet_xmax"][0]
 
 
 def test_construct_spanning_network_rejects_missing_backend_inputs() -> None:

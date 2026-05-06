@@ -64,7 +64,7 @@ def test_load_pnflow_cnm_parses_boundary_connections_with_mirror_pores(tmp_path:
         + "\n",
     )
 
-    imported = load_pnflow_cnm(prefix)
+    imported = load_pnflow_cnm(prefix, pnflow_solver_box_compat=False)
     net = imported.net
 
     assert imported.n_physical_pores == 2
@@ -84,12 +84,23 @@ def test_load_pnflow_cnm_parses_boundary_connections_with_mirror_pores(tmp_path:
     assert net.pore_coords[3, 0] == pytest.approx(1.0)
 
 
+def test_load_pnflow_cnm_defaults_to_generic_import_without_solver_box_compat() -> None:
+    """Generic CNM imports should not silently apply the Imperial solver-box quirk."""
+
+    case = "phi035_b16"
+    prefix = data_path() / "external_pnflow_benchmark" / case / case
+    imported = load_pnflow_cnm(prefix)
+
+    assert not imported.net.pore_labels["inlet_xmin"][0]
+    assert not imported.net.pore_labels["outlet_xmax"][0]
+
+
 def test_load_pnflow_cnm_supports_tight_singlephase_comparison_on_saved_benchmark_case() -> None:
     """Imported Imperial CNM data should solve close to the saved `pnflow` reference."""
 
     case = "phi038_b18"
     prefix = data_path() / "external_pnflow_benchmark" / case / case
-    imported = load_pnflow_cnm(prefix)
+    imported = load_pnflow_cnm(prefix, pnflow_solver_box_compat=True)
     result = solve(
         imported.net,
         fluid=FluidSinglePhase(viscosity=1.0e-3),
@@ -103,4 +114,25 @@ def test_load_pnflow_cnm_supports_tight_singlephase_comparison_on_saved_benchmar
 
     assert imported.n_physical_pores == 64
     assert imported.net.Nt == 180
-    assert rel_err < 0.08
+    assert rel_err < 1.0e-5
+
+
+def test_load_pnflow_cnm_solver_box_compatibility_matches_hard_case() -> None:
+    """The Imperial solver-box compatibility mode should reproduce the saved hard case."""
+
+    case = "phi035_b16"
+    prefix = data_path() / "external_pnflow_benchmark" / case / case
+    imported = load_pnflow_cnm(prefix, pnflow_solver_box_compat=True)
+    result = solve(
+        imported.net,
+        fluid=FluidSinglePhase(viscosity=1.0e-3),
+        bc=PressureBC("inlet_xmin", "outlet_xmax", pin=2.0e5, pout=0.0),
+        axis="x",
+        options=SinglePhaseOptions(conductance_model="valvatne_blunt", solver="direct"),
+    )
+
+    k_ref = 1.33185e-14
+    rel_err = abs(result.permeability["x"] - k_ref) / k_ref
+
+    assert imported.net.pore_labels["outlet_xmax"][0]
+    assert rel_err < 1.0e-5

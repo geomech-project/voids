@@ -384,6 +384,7 @@ def construct_spanning_network(
     phases: np.ndarray | None = None,
     voxel_size: float | None = None,
     pnflow_cnm_prefix: str | Path | None = None,
+    pnflow_solver_box_compat: bool = False,
     flow_axis: str | None = None,
     length_unit: str = "m",
     pressure_unit: str = "Pa",
@@ -408,6 +409,11 @@ def construct_spanning_network(
     pnflow_cnm_prefix :
         Required for the Imperial CNM backend. This is the shared path prefix
         before the ``*_node*.dat`` and ``*_link*.dat`` suffixes.
+    pnflow_solver_box_compat :
+        If ``True`` and ``backend`` selects the Imperial CNM path, reproduce
+        the checked-in `pnflow` solver-box preprocessing quirk so the imported
+        network matches Imperial single-phase benchmark behavior. Leave this
+        ``False`` for a generic CNM import.
     flow_axis, length_unit, pressure_unit, extraction_kwargs, provenance_notes,
     strict, geometry_repairs, repair_seed :
         Forwarded to the selected backend where applicable.
@@ -450,6 +456,7 @@ def construct_spanning_network(
         boundary_axis=selected_axis,
         length_unit=length_unit,
         pressure_unit=pressure_unit,
+        pnflow_solver_box_compat=pnflow_solver_box_compat,
     )
     net = imported.net.copy()
     net.provenance = _merge_provenance_notes(net.provenance, provenance_notes)
