@@ -14,6 +14,12 @@ from voids.graph import spanning_subnetwork
 from voids.io.pnflow_cnm import load_pnflow_cnm
 from voids.io.porespy import ensure_cartesian_boundary_labels, from_porespy, scale_porespy_geometry
 
+_IMPERIAL_SNOW2_DEFAULTS: dict[str, object] = {
+    "sigma": 1.0,
+    "r_max": 4,
+    "boundary_width": 1,
+}
+
 
 @dataclass(slots=True)
 class NetworkExtractionResult:
@@ -181,6 +187,10 @@ def _normalize_extraction_backend(backend: str) -> str:
         "porespy": "porespy_snow2",
         "porespy_snow2": "porespy_snow2",
         "snow2": "porespy_snow2",
+        "porespy_snow2_imperial": "porespy_snow2_imperial",
+        "porespy_imperial": "porespy_snow2_imperial",
+        "imperial_snow2": "porespy_snow2_imperial",
+        "snow2_imperial": "porespy_snow2_imperial",
     }
     if normalized not in aliases:
         raise ValueError(
@@ -197,6 +207,10 @@ def _normalize_construction_backend(backend: str) -> str:
         "porespy": "porespy_snow2",
         "porespy_snow2": "porespy_snow2",
         "snow2": "porespy_snow2",
+        "porespy_snow2_imperial": "porespy_snow2_imperial",
+        "porespy_imperial": "porespy_snow2_imperial",
+        "imperial_snow2": "porespy_snow2_imperial",
+        "snow2_imperial": "porespy_snow2_imperial",
         "pnflow_cnm": "pnflow_cnm",
         "imperial_cnm": "pnflow_cnm",
         "pnextract_cnm": "pnflow_cnm",
@@ -252,6 +266,12 @@ def _extract_network_dict(
     backend_normalized = _normalize_extraction_backend(backend)
     if backend_normalized == "porespy_snow2":
         return _snow2_network_dict(phases, snow2_kwargs=dict(extraction_kwargs or {}))
+    if backend_normalized == "porespy_snow2_imperial":
+        kwargs = {
+            **_IMPERIAL_SNOW2_DEFAULTS,
+            **dict(extraction_kwargs or {}),
+        }
+        return _snow2_network_dict(phases, snow2_kwargs=kwargs)
     raise AssertionError(f"Unhandled normalized backend {backend_normalized!r}")
 
 
@@ -280,15 +300,19 @@ def extract_spanning_pore_network(
         Edge length of one voxel in the declared ``length_unit``.
     backend :
         Image-to-network extraction backend. Currently supported values are
-        ``"porespy"``, ``"snow2"``, and ``"porespy_snow2"``. The explicit
-        backend parameter keeps the public workflow ready for future
-        `pnextract`-like alternatives while preserving the current default.
+        ``"porespy"``, ``"snow2"``, ``"porespy_snow2"``, plus the calibrated
+        approximation aliases ``"porespy_imperial"``, ``"imperial_snow2"``,
+        and ``"snow2_imperial"``. The explicit backend parameter keeps the
+        public workflow ready for future `pnextract`-like alternatives while
+        preserving the current default.
     flow_axis :
         Requested spanning axis. When omitted, the longest image axis is used.
     length_unit, pressure_unit :
         Units stored in resulting :class:`SampleGeometry`.
     extraction_kwargs :
-        Keyword arguments forwarded to the extraction backend call.
+        Keyword arguments forwarded to the extraction backend call. For the
+        Imperial-calibrated `snow2` aliases, user-supplied values override the
+        built-in defaults ``sigma=1.0``, ``r_max=4``, and ``boundary_width=1``.
     provenance_notes :
         Optional extra provenance metadata attached to the resulting network.
     strict :
@@ -310,7 +334,10 @@ def extract_spanning_pore_network(
     Notes
     -----
     Current implementation uses PoreSpy's ``snow2`` backend and normalizes
-    accepted return styles into a standard network mapping before import.
+    accepted return styles into a standard network mapping before import. The
+    calibrated Imperial-style aliases still use `snow2`, but start from a
+    benchmark-tuned parameter profile that is closer to the committed
+    `pnextract` reference cases than the plain default.
     """
 
     arr = np.asarray(phases, dtype=int)
@@ -425,7 +452,7 @@ def construct_spanning_network(
     """
 
     backend_normalized = _normalize_construction_backend(backend)
-    if backend_normalized == "porespy_snow2":
+    if backend_normalized in {"porespy_snow2", "porespy_snow2_imperial"}:
         if phases is None:
             raise ValueError("phases is required for the image-extraction backends")
         if voxel_size is None:

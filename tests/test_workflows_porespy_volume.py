@@ -357,6 +357,37 @@ def test_extract_spanning_pore_network_forwards_extraction_kwargs(
     assert captured["kwargs"] == {"sigma": 0.5}
 
 
+def test_extract_spanning_pore_network_applies_imperial_snow2_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The calibrated Imperial-style alias should inject benchmark-tuned defaults."""
+
+    captured: dict[str, object] = {}
+
+    def fake_snow2(phases, *, snow2_kwargs):
+        captured["phases"] = phases
+        captured["kwargs"] = snow2_kwargs
+        return {
+            "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+            "throat.conns": np.array([[0, 1]], dtype=int),
+            "pore.xmin": np.array([True, False], dtype=bool),
+            "pore.xmax": np.array([False, True], dtype=bool),
+        }
+
+    monkeypatch.setattr(nex, "_snow2_network_dict", fake_snow2)
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="porespy_imperial",
+        flow_axis="x",
+        extraction_kwargs={"sigma": 0.8},
+    )
+
+    assert result.backend == "porespy_snow2_imperial"
+    assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=int))
+    assert captured["kwargs"] == {"sigma": 0.8, "r_max": 4, "boundary_width": 1}
+
+
 def test_extract_spanning_pore_network_normalizes_backend_aliases(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -388,6 +419,20 @@ def test_extract_spanning_pore_network_normalizes_backend_aliases(
     assert captured["kwargs"] is None
     assert result.backend == "porespy_snow2"
     assert result.provenance.extraction_method == "porespy_snow2"
+
+    captured.clear()
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="snow2_imperial",
+        flow_axis="x",
+    )
+
+    assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=int))
+    assert captured["backend"] == "porespy_snow2_imperial"
+    assert captured["kwargs"] is None
+    assert result.backend == "porespy_snow2_imperial"
+    assert result.provenance.extraction_method == "porespy_snow2_imperial"
 
 
 def test_extract_spanning_pore_network_rejects_unsupported_backend() -> None:

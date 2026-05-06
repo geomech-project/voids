@@ -72,6 +72,14 @@ def test_construct_spanning_network_dispatches_to_image_backend(
     assert result.net.Np == net.Np
     assert result.backend_version == "test-version"
 
+    result = nex.construct_spanning_network(
+        backend="porespy_imperial",
+        phases=np.ones((3, 3, 3), dtype=int),
+        voxel_size=2.5,
+    )
+    assert captured["backend"] == "porespy_snow2_imperial"
+    assert result.backend == "porespy_snow2_imperial"
+
 
 def test_construct_spanning_network_supports_imported_pnflow_cnm_backend() -> None:
     """Imperial CNM imports should be available through the unified constructor."""

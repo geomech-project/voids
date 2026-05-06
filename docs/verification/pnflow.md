@@ -210,6 +210,15 @@ reduced network and the checked-in `pnflow` preprocessing are used, the
 single-phase `voids` solve agrees with `pnflow` to plotting precision. The
 remaining large mismatch is therefore dominated by network extraction.
 
+We also tested a dependency-free internal approximation mode exposed as
+`backend="porespy_imperial"`. This still uses `snow2`, but starts from a
+benchmark-tuned parameter profile (`sigma=1.0`, `r_max=4`,
+`boundary_width=1`) chosen to move the five-case benchmark closer to the
+committed `pnextract` reference without invoking any external binaries. On the
+same five cases, that reduced the mean relative permeability difference from
+about `37.56 %` for the plain `snow2` default to about `30.13 %`, with the
+maximum case dropping from about `63.40 %` to about `47.50 %`.
+
 ---
 
 ## Interpretation
@@ -227,7 +236,9 @@ These results support the following conclusions:
    preprocessing choice is a generic physical modeling rule.
 4. The practical next target for closer workflow agreement is a more
    `pnextract`-like extraction backend in `voids`, not a rewrite of the
-   single-phase solver.
+   single-phase solver. The calibrated `porespy_imperial` mode is a useful
+   interim improvement, but it does not yet reproduce the Imperial maximal-ball
+   extraction algorithm.
 
 The practical interpretation is now split:
 
