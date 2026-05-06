@@ -272,6 +272,17 @@ pixi run bump-version <new-version>
 solver validation, and interoperability studies, but it should not be described as a
 complete pore-network simulation platform yet.
 
+## AI Usage Statement
+
+Starting with `v0.1.7`, `voids` development is aided by AI tools, including
+Codex and GitHub Copilot. These tools are used to assist with refactoring,
+fast code changes, code review, and documentation writing.
+
+All scientific choices, implementation decisions, and final content remain
+under human review and responsibility. This statement is intended as a
+transparency measure aligned with current scientific-integrity expectations for
+AI-assisted research and software development.
+
 ## Institutional Support
 
 `voids` receives institutional support from the
