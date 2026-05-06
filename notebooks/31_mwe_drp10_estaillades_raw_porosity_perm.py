@@ -40,6 +40,7 @@
 #   <https://doi.org/10.1016/j.advwatres.2015.05.019>
 
 # %%
+import os
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -93,9 +94,16 @@ paper_citation = (
 
 # Modeling controls
 flow_axis = "x"  # Paper computes absolute permeability left-to-right.
-compute_directional_all_axes = True
 trim_nonpercolating_paths = True
-geometry_repairs: str | None = "imperial_export"
+extraction_backend = "native_maximal_ball"
+compute_directional_all_axes = True
+edt_parallel_threads = min(4, os.cpu_count() or 1)
+extraction_kwargs: dict[str, object] = {
+    "distance_map_backend": "auto",
+    "edt_parallel_threads": edt_parallel_threads,
+    "flow_boundary_mode": "direct",
+}
+geometry_repairs: str | None = None
 conductance_models: tuple[str, ...] = ("valvatne_blunt",)
 
 pressure_gradient_pa_per_m = 1.0e4
@@ -451,9 +459,11 @@ def extract_axis_network(axis: str):
     extract_axis = extract_spanning_pore_network(
         axis_image,
         voxel_size=voxel_size_m,
+        backend=extraction_backend,
         flow_axis=axis,
         length_unit="m",
         geometry_repairs=geometry_repairs,
+        extraction_kwargs=extraction_kwargs,
         provenance_notes={
             "raw_source": str(raw_relpath).replace("\\", "/"),
             "raw_shape_voxels": raw_shape,
@@ -466,6 +476,8 @@ def extract_axis_network(axis: str):
             "paper_citation": paper_citation,
             "trim_nonpercolating_paths": trim_nonpercolating_paths,
             "conductance_models": list(conductance_models),
+            "extraction_backend": extraction_backend,
+            "extraction_kwargs": dict(extraction_kwargs),
             "geometry_repairs": geometry_repairs,
             "full_sample_analysis": True,
         },
