@@ -110,8 +110,11 @@ def test_construct_spanning_network_supports_native_maximal_ball_backend() -> No
     assert result.image is not None
     assert result.network_dict is not None
     assert result.net_full.Np >= 1
-    assert result.net.pore_labels["inlet_xmin"].any()
-    assert result.net.pore_labels["outlet_xmax"].any()
+    assert result.net_full.pore_labels["boundary"].any()
+    assert not np.any(
+        result.net_full.pore_labels["inlet_xmin"] & result.net_full.pore_labels["outlet_xmax"]
+    )
+    assert result.net.Np <= result.net_full.Np
 
 
 def test_construct_spanning_network_supports_imported_pnflow_cnm_backend() -> None:

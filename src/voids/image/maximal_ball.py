@@ -1182,6 +1182,42 @@ def _redistribute_region_volumes_like_imperial_export(
     throat_data["volume"] = redistributed_throat_volume
 
 
+def _resolve_axis_boundary_label_overlap(
+    lower_contact: np.ndarray,
+    upper_contact: np.ndarray,
+    *,
+    lower_face_count: np.ndarray,
+    upper_face_count: np.ndarray,
+    pore_axis_coordinates: np.ndarray,
+    sample_axis_length: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Make per-axis inlet/outlet pore labels mutually exclusive."""
+
+    lower_contact = np.asarray(lower_contact, dtype=bool).copy()
+    upper_contact = np.asarray(upper_contact, dtype=bool).copy()
+    overlap_mask = lower_contact & upper_contact
+    if not np.any(overlap_mask):
+        return lower_contact, upper_contact
+
+    lower_face_count = np.asarray(lower_face_count, dtype=np.int64)
+    upper_face_count = np.asarray(upper_face_count, dtype=np.int64)
+    pore_axis_coordinates = np.asarray(pore_axis_coordinates, dtype=float)
+    sample_midpoint = 0.5 * float(sample_axis_length)
+    overlap_indices = np.flatnonzero(overlap_mask)
+    for pore_index in overlap_indices:
+        lower_faces = int(lower_face_count[pore_index])
+        upper_faces = int(upper_face_count[pore_index])
+        if lower_faces > upper_faces:
+            upper_contact[pore_index] = False
+        elif upper_faces > lower_faces:
+            lower_contact[pore_index] = False
+        elif pore_axis_coordinates[pore_index] <= sample_midpoint:
+            upper_contact[pore_index] = False
+        else:
+            lower_contact[pore_index] = False
+    return lower_contact, upper_contact
+
+
 def build_network_dict_from_maximal_ball_regions(
     extraction_result: MaximalBallExtractionResult,
     *,
@@ -1308,6 +1344,16 @@ def build_network_dict_from_maximal_ball_regions(
             float(pore_radius_by_region[second_region_label]),
         )
     throat_radius = throat_support_radius_voxels * float(voxel_size)
+    first_side_radius_physical = np.where(
+        np.isfinite(first_side_radius_voxels),
+        first_side_radius_voxels * float(voxel_size),
+        throat_radius,
+    )
+    second_side_radius_physical = np.where(
+        np.isfinite(second_side_radius_voxels),
+        second_side_radius_voxels * float(voxel_size),
+        throat_radius,
+    )
 
     minimum_segment_length = 0.5 * float(voxel_size)
     if throat_count:
@@ -1358,8 +1404,8 @@ def build_network_dict_from_maximal_ball_regions(
         "centroid": throat_centroid_coords,
         "face_count": throat_face_counts.astype(np.int64, copy=False),
         "axis_face_balance": np.asarray(region_adjacency.throat_axis_face_balance, dtype=float),
-        "supporting_radius_side1": first_side_radius_voxels * float(voxel_size),
-        "supporting_radius_side2": second_side_radius_voxels * float(voxel_size),
+        "supporting_radius_side1": first_side_radius_physical,
+        "supporting_radius_side2": second_side_radius_physical,
     }
 
     from voids.io.porespy import _apply_imperial_export_geometry_repairs, _derive_missing_geometry
@@ -1411,12 +1457,23 @@ def build_network_dict_from_maximal_ball_regions(
 
     pore_boundary = np.zeros(region_count, dtype=bool)
     for axis_index, axis_name in enumerate(active_axis_names):
-        lower_contact = (
-            np.asarray(region_adjacency.boundary_face_counts[:, 2 * axis_index], dtype=np.int64) > 0
+        lower_face_count = np.asarray(
+            region_adjacency.boundary_face_counts[:, 2 * axis_index],
+            dtype=np.int64,
         )
-        upper_contact = (
-            np.asarray(region_adjacency.boundary_face_counts[:, 2 * axis_index + 1], dtype=np.int64)
-            > 0
+        upper_face_count = np.asarray(
+            region_adjacency.boundary_face_counts[:, 2 * axis_index + 1],
+            dtype=np.int64,
+        )
+        lower_contact = lower_face_count > 0
+        upper_contact = upper_face_count > 0
+        lower_contact, upper_contact = _resolve_axis_boundary_label_overlap(
+            lower_contact,
+            upper_contact,
+            lower_face_count=lower_face_count,
+            upper_face_count=upper_face_count,
+            pore_axis_coordinates=pore_coords[:, axis_index],
+            sample_axis_length=voxel_regions.label_image.shape[axis_index] * float(voxel_size),
         )
         network_dict[f"pore.inlet_{axis_name}min"] = lower_contact
         network_dict[f"pore.outlet_{axis_name}max"] = upper_contact
