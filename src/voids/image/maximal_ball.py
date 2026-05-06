@@ -221,8 +221,7 @@ def _resolve_edt_parallel_threads(edt_parallel_threads: int | None) -> int:
             raise ValueError("VOIDS_EDT_THREADS must be a positive integer")
         return resolved_threads
 
-    detected_cpu_count = os.cpu_count() or 1
-    return max(1, int(detected_cpu_count))
+    return 1
 
 
 def compute_void_distance_map(
@@ -244,7 +243,7 @@ def compute_void_distance_map(
     edt_parallel_threads :
         Number of worker threads to use when the optional `edt` backend is
         active. When omitted, `voids` first checks ``VOIDS_EDT_THREADS`` and
-        otherwise uses the detected CPU count.
+        otherwise uses one thread for stable default behavior.
     """
 
     mask = np.asarray(void_phase_mask, dtype=bool)

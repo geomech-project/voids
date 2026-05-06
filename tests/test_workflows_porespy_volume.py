@@ -358,6 +358,136 @@ def test_extract_spanning_pore_network_forwards_extraction_kwargs(
     assert captured["kwargs"] == {"sigma": 0.5}
 
 
+def test_extract_network_dict_forwards_native_maximal_ball_threading_and_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native backend dispatch should forward EDT threading and normalized settings."""
+
+    captured: dict[str, object] = {}
+
+    class FakeExtractionResult:
+        def __init__(self) -> None:
+            self.network_dict = {
+                "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+                "throat.conns": np.array([[0, 1]], dtype=int),
+            }
+
+    def fake_extract_maximal_ball_network_dict(
+        phases,
+        *,
+        voxel_size,
+        distance_map_backend,
+        edt_parallel_threads,
+        settings,
+        apply_boundary_clipping,
+        flow_boundary_mode,
+        boundary_axis,
+        boundary_length_epsilon,
+        boundary_radius_scale,
+        throat_area_mode,
+        throat_shape_factor_radius_mode,
+        throat_anchor_mode,
+    ):
+        captured["phases"] = phases
+        captured["voxel_size"] = voxel_size
+        captured["distance_map_backend"] = distance_map_backend
+        captured["edt_parallel_threads"] = edt_parallel_threads
+        captured["settings"] = settings
+        captured["apply_boundary_clipping"] = apply_boundary_clipping
+        captured["flow_boundary_mode"] = flow_boundary_mode
+        captured["boundary_axis"] = boundary_axis
+        captured["boundary_length_epsilon"] = boundary_length_epsilon
+        captured["boundary_radius_scale"] = boundary_radius_scale
+        captured["throat_area_mode"] = throat_area_mode
+        captured["throat_shape_factor_radius_mode"] = throat_shape_factor_radius_mode
+        captured["throat_anchor_mode"] = throat_anchor_mode
+        return FakeExtractionResult()
+
+    monkeypatch.setattr(
+        nex, "extract_maximal_ball_network_dict", fake_extract_maximal_ball_network_dict
+    )
+
+    network_dict = nex._extract_network_dict(
+        np.ones((2, 2, 2), dtype=int),
+        backend="native_maximal_ball",
+        voxel_size=1.5,
+        extraction_kwargs={
+            "distance_map_backend": "edt",
+            "edt_parallel_threads": "7",
+            "settings": {"minimal_pore_radius_voxels": 1.0},
+            "apply_boundary_clipping": False,
+            "flow_boundary_mode": "direct",
+            "boundary_length_epsilon": "1e-12",
+            "boundary_radius_scale": "1.25",
+            "throat_area_mode": "face_count",
+            "throat_shape_factor_radius_mode": "inscribed",
+            "throat_anchor_mode": "second_side",
+        },
+        flow_axis="x",
+    )
+
+    assert set(network_dict) == {"pore.coords", "throat.conns"}
+    assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=bool))
+    assert captured["voxel_size"] == pytest.approx(1.5)
+    assert captured["distance_map_backend"] == "edt"
+    assert captured["edt_parallel_threads"] == 7
+    assert isinstance(captured["settings"], nex.MaximalBallSettings)
+    assert captured["apply_boundary_clipping"] is False
+    assert captured["flow_boundary_mode"] == "direct"
+    assert captured["boundary_axis"] == "x"
+    assert captured["boundary_length_epsilon"] == pytest.approx(1.0e-12)
+    assert captured["boundary_radius_scale"] == pytest.approx(1.25)
+    assert captured["throat_area_mode"] == "face_count"
+    assert captured["throat_shape_factor_radius_mode"] == "inscribed"
+    assert captured["throat_anchor_mode"] == "second_side"
+
+
+def test_extract_network_dict_rejects_invalid_native_maximal_ball_kwargs() -> None:
+    """Native backend dispatch should fail clearly on invalid settings or stray kwargs."""
+
+    with pytest.raises(TypeError, match="maximal-ball extraction settings must be"):
+        nex._extract_network_dict(
+            np.ones((2, 2, 2), dtype=int),
+            backend="native_maximal_ball",
+            voxel_size=1.0,
+            extraction_kwargs={"settings": 3.14},
+            flow_axis="x",
+        )
+
+    with pytest.raises(ValueError, match="Unexpected extraction_kwargs for backend='maximal_ball'"):
+        nex._extract_network_dict(
+            np.ones((2, 2, 2), dtype=int),
+            backend="native_maximal_ball",
+            voxel_size=1.0,
+            extraction_kwargs={"unexpected_key": True},
+            flow_axis="x",
+        )
+
+
+def test_extract_network_dict_asserts_on_unhandled_normalized_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The private dispatcher should guard against impossible backend normalization drift."""
+
+    monkeypatch.setattr(nex, "_normalize_extraction_backend", lambda backend: "unexpected_backend")
+
+    with pytest.raises(AssertionError, match="Unhandled normalized backend"):
+        nex._extract_network_dict(
+            np.ones((2, 2, 2), dtype=int),
+            backend="porespy",
+            voxel_size=1.0,
+            extraction_kwargs=None,
+            flow_axis="x",
+        )
+
+
+def test_normalize_construction_backend_rejects_unsupported_backend() -> None:
+    """Construction backend normalization should reject unsupported backend names."""
+
+    with pytest.raises(ValueError, match="Unsupported construction backend"):
+        nex._normalize_construction_backend("unsupported_backend")
+
+
 def test_extract_spanning_pore_network_applies_imperial_snow2_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

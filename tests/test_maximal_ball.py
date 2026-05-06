@@ -79,6 +79,108 @@ def test_compute_void_distance_map_forwards_explicit_edt_thread_count(
     assert distance_map.shape == (2, 2)
 
 
+def test_compute_void_distance_map_uses_environment_thread_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The EDT backend should honor `VOIDS_EDT_THREADS` when explicit threads are omitted."""
+
+    class FakeEdtModule:
+        def __init__(self) -> None:
+            self.parallel_arguments: list[int] = []
+
+        def edt(
+            self,
+            data: np.ndarray,
+            *,
+            black_border: bool,
+            parallel: int,
+        ) -> np.ndarray:
+            self.parallel_arguments.append(parallel)
+            return np.asarray(data, dtype=float)
+
+    fake_edt_module = FakeEdtModule()
+    monkeypatch.setattr(maximal_ball_module, "fast_edt", fake_edt_module)
+    monkeypatch.setenv("VOIDS_EDT_THREADS", "5")
+
+    distance_map = compute_void_distance_map(
+        np.array([[True, False], [True, True]], dtype=bool),
+        backend="edt",
+    )
+
+    assert fake_edt_module.parallel_arguments == [5]
+    assert distance_map.shape == (2, 2)
+
+
+def test_compute_void_distance_map_defaults_to_one_thread_when_configuration_is_implicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The EDT backend should keep the default worker count conservative."""
+
+    class FakeEdtModule:
+        def __init__(self) -> None:
+            self.parallel_arguments: list[int] = []
+
+        def edt(
+            self,
+            data: np.ndarray,
+            *,
+            black_border: bool,
+            parallel: int,
+        ) -> np.ndarray:
+            self.parallel_arguments.append(parallel)
+            return np.asarray(data, dtype=float)
+
+    fake_edt_module = FakeEdtModule()
+    monkeypatch.setattr(maximal_ball_module, "fast_edt", fake_edt_module)
+    monkeypatch.delenv("VOIDS_EDT_THREADS", raising=False)
+
+    compute_void_distance_map(
+        np.array([[True, True], [False, True]], dtype=bool),
+        backend="edt",
+    )
+
+    assert fake_edt_module.parallel_arguments == [1]
+
+
+def test_compute_void_distance_map_rejects_invalid_thread_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invalid explicit or environment-provided EDT worker counts should fail clearly."""
+
+    class FakeEdtModule:
+        def edt(
+            self,
+            data: np.ndarray,
+            *,
+            black_border: bool,
+            parallel: int,
+        ) -> np.ndarray:
+            return np.asarray(data, dtype=float)
+
+    monkeypatch.setattr(maximal_ball_module, "fast_edt", FakeEdtModule())
+
+    with pytest.raises(ValueError, match="edt_parallel_threads must be a positive integer"):
+        compute_void_distance_map(
+            np.array([[True, True], [False, True]], dtype=bool),
+            backend="edt",
+            edt_parallel_threads=0,
+        )
+
+    monkeypatch.setenv("VOIDS_EDT_THREADS", "0")
+    with pytest.raises(ValueError, match="VOIDS_EDT_THREADS must be a positive integer"):
+        compute_void_distance_map(
+            np.array([[True, True], [False, True]], dtype=bool),
+            backend="edt",
+        )
+
+    monkeypatch.setenv("VOIDS_EDT_THREADS", "not-an-int")
+    with pytest.raises(ValueError, match="VOIDS_EDT_THREADS must be a positive integer"):
+        compute_void_distance_map(
+            np.array([[True, True], [False, True]], dtype=bool),
+            backend="edt",
+        )
+
+
 def test_extract_maximal_ball_candidates_forwards_edt_thread_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
