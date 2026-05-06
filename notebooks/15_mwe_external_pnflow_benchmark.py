@@ -15,10 +15,12 @@
 # Scientific scope and caveats:
 # - this is an end-to-end workflow comparison, not a solver-only cross-check
 # - any mismatch reflects both extraction differences and constitutive-model differences
-# - the `voids` side is evaluated in two modes:
+# - the `voids` side is evaluated in three modes:
 #   - import the saved `pnextract` CNM network, enable explicit
 #     `pnflow_solver_box_compat=True`, and solve it with `voids`
 #   - re-extract the saved binary volume with `snow2` and solve that network with `voids`
+#   - re-extract the saved binary volume with the native maximal-ball backend, using explicit
+#     external-reservoir boundary pores on the flow axis, and solve that network with `voids`
 # - the external side uses previously saved `pnextract` geometry plus `pnflow`'s internal
 #   single-phase model
 # - the CNM compatibility switch is benchmark-specific and reproduces checked-in `pnflow`
@@ -561,15 +563,15 @@ print("void fraction =", float(representative_volume.mean()))
 # %% [markdown]
 # ## Run `voids` against the committed external references
 #
-# For each case, the notebook loads the saved external outputs and then evaluates two `voids`
+# For each case, the notebook loads the saved external outputs and then evaluates three `voids`
 # pathways:
 #
 # - imported CNM: reuse the saved `pnextract` network and compare the `voids` single-phase solve
 #   directly against `pnflow`
 # - image extraction with `snow2`: re-extract the saved binary volume with the current `voids`
 #   `snow2` workflow and compare that full path against `pnflow`
-# - image extraction with native maximal-ball: run the current in-progress `voids` maximal-ball
-#   path and compare that full path against `pnflow`
+# - image extraction with native maximal-ball: run the current `voids` maximal-ball path with
+#   explicit external-reservoir boundary pores and compare that full path against `pnflow`
 #
 # This split helps identify whether a mismatch is dominated by extraction or by the single-phase
 # solver/geometry interpretation on the same network.
@@ -611,6 +613,7 @@ for row in manifest_df.itertuples(index=False):
         backend="native_maximal_ball",
         extraction_kwargs={
             "distance_map_backend": "scipy",
+            "flow_boundary_mode": "external_reservoir",
         },
     )
     maxball_metrics = _summarize_voids_construction_transport(
@@ -837,8 +840,9 @@ print("Saved:", porosity_figure_path)
 #   components in the candidate extraction are stronger evidence of topology/ownership mismatch than
 #   of a boundary-condition or transport-model issue
 # - at the current stage, the native maximal-ball path should be treated as a topology diagnostic:
-#   it can be closer in pore count than `snow2`, while still over-connecting throats and therefore
-#   overshooting permeability by a large margin
+#   it now uses explicit external-reservoir boundary pores on the flow axis and is closer than
+#   `snow2` on mean permeability error for this five-case set, while still overpredicting the
+#   high-connectivity cases
 # - a close permeability match on the imported CNM is encouraging, but it still does not prove full
 #   geometric equivalence between implementations
 # - a large mismatch is not automatically a bug in `voids`; it may reflect different extraction and
