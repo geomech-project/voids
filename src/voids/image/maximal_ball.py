@@ -158,6 +158,17 @@ class MaximalBallExtractionResult:
     region_adjacency: MaximalBallRegionAdjacency
 
 
+@dataclass(slots=True)
+class MaximalBallNetworkDictResult:
+    """PoreSpy-style network mapping assembled from native maximal-ball regions."""
+
+    network_dict: dict[str, np.ndarray]
+    extraction: MaximalBallExtractionResult
+
+
+_CIRCULAR_SHAPE_FACTOR = 1.0 / (4.0 * np.pi)
+
+
 def compute_void_distance_map(
     void_phase_mask: np.ndarray,
     *,
@@ -1082,6 +1093,199 @@ def extract_maximal_ball_regions(
     )
 
 
+def build_network_dict_from_maximal_ball_regions(
+    extraction_result: MaximalBallExtractionResult,
+    *,
+    voxel_size: float,
+    axis_names: tuple[str, ...] = ("x", "y", "z"),
+) -> dict[str, np.ndarray]:
+    """Assemble a PoreSpy-style network mapping from maximal-ball regions.
+
+    Parameters
+    ----------
+    extraction_result :
+        Native maximal-ball extraction outputs through the region-adjacency
+        stage.
+    voxel_size :
+        Physical edge length of one voxel.
+    axis_names :
+        Axis labels associated with the image dimensions. Only the first
+        ``ndim`` entries are used.
+
+    Notes
+    -----
+    This builder intentionally uses explicit, readable geometric rules rather
+    than hidden heuristics:
+
+    - pore coordinates are the root maximal-ball centers
+    - pore volumes are the labeled region voxel counts
+    - throat areas are the counted interface faces
+    - throat centroids are the mean interface-face midpoints
+    - conduit lengths are derived from pore-center to interface-centroid
+      distances with a minimum half-voxel regularization
+
+    These rules are scientifically reasonable and easy to audit, but they are
+    not yet guaranteed to match the final Imperial `pnextract` geometry. They
+    are the current native baseline that subsequent parity work can refine.
+    """
+
+    if voxel_size <= 0.0:
+        raise ValueError("voxel_size must be positive")
+
+    hierarchy = extraction_result.hierarchy
+    voxel_regions = extraction_result.voxel_regions
+    region_adjacency = extraction_result.region_adjacency
+    image_ndim = (
+        int(hierarchy.center_indices.shape[1])
+        if hierarchy.center_indices.size
+        else int(voxel_regions.label_image.ndim)
+    )
+    if image_ndim not in {2, 3}:
+        raise ValueError("maximal-ball network assembly supports only 2D or 3D images")
+    if len(axis_names) < image_ndim:
+        raise ValueError("axis_names must provide at least one label per image dimension")
+
+    active_axis_names = axis_names[:image_ndim]
+    region_count = int(region_adjacency.region_labels.size)
+    root_center_indices = np.asarray(voxel_regions.root_center_indices, dtype=float)
+    root_radii_voxels = np.asarray(voxel_regions.root_radii_voxels, dtype=float)
+
+    if root_center_indices.shape[0] != region_count:
+        raise ValueError("root_center_indices must align with region labels")
+    if root_radii_voxels.shape != (region_count,):
+        raise ValueError("root_radii_voxels must align with region labels")
+
+    pore_coords = root_center_indices * float(voxel_size)
+    if pore_coords.shape[1] == 2:
+        pore_coords = np.column_stack([pore_coords, np.zeros(region_count, dtype=float)])
+    pore_radius = root_radii_voxels * float(voxel_size)
+    pore_area = np.pi * pore_radius**2
+    pore_volume = (
+        np.asarray(region_adjacency.region_volume_voxels, dtype=float) * float(voxel_size) ** 3
+    )
+    pore_surface_area = (
+        np.asarray(region_adjacency.region_surface_face_counts, dtype=float)
+        * float(voxel_size) ** 2
+    )
+
+    throat_region_pairs = np.asarray(region_adjacency.throat_region_pairs, dtype=np.int64)
+    if throat_region_pairs.size == 0:
+        throat_region_pairs = np.zeros((0, 2), dtype=np.int64)
+    throat_count = int(throat_region_pairs.shape[0])
+    throat_face_counts = np.asarray(region_adjacency.throat_face_counts, dtype=float)
+    throat_area = throat_face_counts * float(voxel_size) ** 2
+    throat_radius = np.sqrt(np.maximum(throat_area, 0.0) / np.pi)
+    throat_centroid_indices = np.asarray(region_adjacency.throat_centroid_indices, dtype=float)
+    if throat_centroid_indices.shape[0] != throat_count:
+        raise ValueError("throat_centroid_indices must align with throat_region_pairs")
+    throat_centroid_coords = throat_centroid_indices * float(voxel_size)
+    if throat_centroid_coords.shape[1] == 2:
+        throat_centroid_coords = np.column_stack(
+            [throat_centroid_coords, np.zeros(throat_count, dtype=float)]
+        )
+
+    minimum_segment_length = 0.5 * float(voxel_size)
+    if throat_count:
+        first_pore_coordinates = pore_coords[throat_region_pairs[:, 0]]
+        second_pore_coordinates = pore_coords[throat_region_pairs[:, 1]]
+        pore1_to_interface_length = np.linalg.norm(
+            throat_centroid_coords - first_pore_coordinates, axis=1
+        )
+        pore2_to_interface_length = np.linalg.norm(
+            second_pore_coordinates - throat_centroid_coords, axis=1
+        )
+        pore1_length = np.maximum(
+            pore1_to_interface_length - minimum_segment_length, minimum_segment_length
+        )
+        pore2_length = np.maximum(
+            pore2_to_interface_length - minimum_segment_length, minimum_segment_length
+        )
+        direct_center_distance = np.linalg.norm(
+            second_pore_coordinates - first_pore_coordinates, axis=1
+        )
+        core_length = np.maximum(
+            direct_center_distance - pore1_length - pore2_length,
+            minimum_segment_length,
+        )
+    else:
+        pore1_length = np.zeros(0, dtype=float)
+        pore2_length = np.zeros(0, dtype=float)
+        core_length = np.zeros(0, dtype=float)
+    throat_total_length = pore1_length + core_length + pore2_length
+    throat_volume = throat_area * core_length
+
+    network_dict: dict[str, np.ndarray] = {
+        "pore.coords": pore_coords,
+        "throat.conns": throat_region_pairs,
+        "pore.radius_inscribed": pore_radius,
+        "pore.area": pore_area,
+        "pore.shape_factor": np.full(region_count, _CIRCULAR_SHAPE_FACTOR, dtype=float),
+        "pore.volume": pore_volume,
+        "pore.region_volume": pore_volume.copy(),
+        "pore.surface_area": pore_surface_area,
+        "throat.radius_inscribed": throat_radius,
+        "throat.cross_sectional_area": throat_area,
+        "throat.shape_factor": np.full(throat_count, _CIRCULAR_SHAPE_FACTOR, dtype=float),
+        "throat.volume": throat_volume,
+        "throat.total_length": throat_total_length,
+        "throat.conduit_lengths.pore1": pore1_length,
+        "throat.conduit_lengths.throat": core_length,
+        "throat.conduit_lengths.pore2": pore2_length,
+        "throat.centroid": throat_centroid_coords,
+        "throat.face_count": throat_face_counts.astype(np.int64, copy=False),
+        "throat.axis_face_balance": np.asarray(
+            region_adjacency.throat_axis_face_balance, dtype=float
+        ),
+        "pore.boundary_face_count": np.asarray(
+            region_adjacency.boundary_face_counts.sum(axis=1),
+            dtype=np.int64,
+        ),
+    }
+
+    pore_boundary = np.zeros(region_count, dtype=bool)
+    for axis_index, axis_name in enumerate(active_axis_names):
+        lower_contact = (
+            np.asarray(region_adjacency.boundary_face_counts[:, 2 * axis_index], dtype=np.int64) > 0
+        )
+        upper_contact = (
+            np.asarray(region_adjacency.boundary_face_counts[:, 2 * axis_index + 1], dtype=np.int64)
+            > 0
+        )
+        network_dict[f"pore.inlet_{axis_name}min"] = lower_contact
+        network_dict[f"pore.outlet_{axis_name}max"] = upper_contact
+        pore_boundary |= lower_contact | upper_contact
+    network_dict["pore.boundary"] = pore_boundary
+    return network_dict
+
+
+def extract_maximal_ball_network_dict(
+    void_phase_mask: np.ndarray,
+    *,
+    voxel_size: float,
+    distance_map_backend: str = "auto",
+    settings: MaximalBallSettings | None = None,
+    apply_boundary_clipping: bool = True,
+    axis_names: tuple[str, ...] = ("x", "y", "z"),
+) -> MaximalBallNetworkDictResult:
+    """Run the staged native maximal-ball path and assemble a network mapping."""
+
+    extraction_result = extract_maximal_ball_regions(
+        void_phase_mask,
+        distance_map_backend=distance_map_backend,
+        settings=settings,
+        apply_boundary_clipping=apply_boundary_clipping,
+    )
+    network_dict = build_network_dict_from_maximal_ball_regions(
+        extraction_result,
+        voxel_size=voxel_size,
+        axis_names=axis_names,
+    )
+    return MaximalBallNetworkDictResult(
+        network_dict=network_dict,
+        extraction=extraction_result,
+    )
+
+
 def extract_maximal_ball_candidates(
     void_phase_mask: np.ndarray,
     *,
@@ -1121,14 +1325,17 @@ __all__ = [
     "MaximalBallCandidates",
     "MaximalBallExtractionResult",
     "MaximalBallHierarchy",
+    "MaximalBallNetworkDictResult",
     "MaximalBallRegionAdjacency",
     "MaximalBallSettings",
     "MaximalBallVoxelRegions",
     "ResolvedMaximalBallSettings",
     "assign_voxel_regions_from_hierarchy",
+    "build_network_dict_from_maximal_ball_regions",
     "build_maximal_ball_hierarchy",
     "clip_distance_map_to_domain_boundaries",
     "compute_void_distance_map",
+    "extract_maximal_ball_network_dict",
     "extract_maximal_ball_regions",
     "extract_maximal_ball_candidates",
     "find_maximal_ball_candidates",

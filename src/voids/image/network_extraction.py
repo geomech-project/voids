@@ -11,6 +11,10 @@ from voids.core.network import Network
 from voids.core.provenance import Provenance
 from voids.core.sample import SampleGeometry
 from voids.graph import spanning_subnetwork
+from voids.image.maximal_ball import (
+    MaximalBallSettings,
+    extract_maximal_ball_network_dict,
+)
 from voids.io.pnflow_cnm import load_pnflow_cnm
 from voids.io.porespy import ensure_cartesian_boundary_labels, from_porespy, scale_porespy_geometry
 
@@ -191,6 +195,9 @@ def _normalize_extraction_backend(backend: str) -> str:
         "porespy_imperial": "porespy_snow2_imperial",
         "imperial_snow2": "porespy_snow2_imperial",
         "snow2_imperial": "porespy_snow2_imperial",
+        "maximal_ball": "native_maximal_ball",
+        "native_maximal_ball": "native_maximal_ball",
+        "maxball": "native_maximal_ball",
     }
     if normalized not in aliases:
         raise ValueError(
@@ -211,6 +218,9 @@ def _normalize_construction_backend(backend: str) -> str:
         "porespy_imperial": "porespy_snow2_imperial",
         "imperial_snow2": "porespy_snow2_imperial",
         "snow2_imperial": "porespy_snow2_imperial",
+        "maximal_ball": "native_maximal_ball",
+        "native_maximal_ball": "native_maximal_ball",
+        "maxball": "native_maximal_ball",
         "pnflow_cnm": "pnflow_cnm",
         "imperial_cnm": "pnflow_cnm",
         "pnextract_cnm": "pnflow_cnm",
@@ -259,6 +269,7 @@ def _extract_network_dict(
     phases: np.ndarray,
     *,
     backend: str,
+    voxel_size: float,
     extraction_kwargs: dict[str, object] | None,
 ) -> dict[str, object]:
     """Dispatch image extraction to the requested backend."""
@@ -272,6 +283,30 @@ def _extract_network_dict(
             **dict(extraction_kwargs or {}),
         }
         return _snow2_network_dict(phases, snow2_kwargs=kwargs)
+    if backend_normalized == "native_maximal_ball":
+        kwargs = dict(extraction_kwargs or {})
+        settings_value = kwargs.pop("settings", kwargs.pop("maximal_ball_settings", None))
+        if isinstance(settings_value, dict):
+            settings_value = MaximalBallSettings(**settings_value)
+        if settings_value is not None and not isinstance(settings_value, MaximalBallSettings):
+            raise TypeError(
+                "maximal-ball extraction settings must be a MaximalBallSettings instance,"
+                " a mapping, or None"
+            )
+        distance_map_backend = str(kwargs.pop("distance_map_backend", "auto"))
+        apply_boundary_clipping = bool(kwargs.pop("apply_boundary_clipping", True))
+        if kwargs:
+            unexpected_keys = ", ".join(sorted(kwargs))
+            raise ValueError(
+                f"Unexpected extraction_kwargs for backend='maximal_ball': {unexpected_keys}"
+            )
+        return extract_maximal_ball_network_dict(
+            np.asarray(phases, dtype=bool),
+            voxel_size=float(voxel_size),
+            distance_map_backend=distance_map_backend,
+            settings=settings_value,
+            apply_boundary_clipping=apply_boundary_clipping,
+        ).network_dict
     raise AssertionError(f"Unhandled normalized backend {backend_normalized!r}")
 
 
@@ -300,11 +335,10 @@ def extract_spanning_pore_network(
         Edge length of one voxel in the declared ``length_unit``.
     backend :
         Image-to-network extraction backend. Currently supported values are
-        ``"porespy"``, ``"snow2"``, ``"porespy_snow2"``, plus the calibrated
+        ``"porespy"``, ``"snow2"``, ``"porespy_snow2"``, the calibrated
         approximation aliases ``"porespy_imperial"``, ``"imperial_snow2"``,
-        and ``"snow2_imperial"``. The explicit backend parameter keeps the
-        public workflow ready for future `pnextract`-like alternatives while
-        preserving the current default.
+        and ``"snow2_imperial"``, plus the native maximal-ball aliases
+        ``"maximal_ball"``, ``"native_maximal_ball"``, and ``"maxball"``.
     flow_axis :
         Requested spanning axis. When omitted, the longest image axis is used.
     length_unit, pressure_unit :
@@ -313,6 +347,9 @@ def extract_spanning_pore_network(
         Keyword arguments forwarded to the extraction backend call. For the
         Imperial-calibrated `snow2` aliases, user-supplied values override the
         built-in defaults ``sigma=1.0``, ``r_max=4``, and ``boundary_width=1``.
+        For the native maximal-ball backend, supported keys are
+        ``distance_map_backend``, ``apply_boundary_clipping``, and either
+        ``settings`` or ``maximal_ball_settings``.
     provenance_notes :
         Optional extra provenance metadata attached to the resulting network.
     strict :
@@ -353,10 +390,12 @@ def extract_spanning_pore_network(
     network_dict = _extract_network_dict(
         arr,
         backend=backend_normalized,
+        voxel_size=float(voxel_size),
         extraction_kwargs=extraction_kwargs,
     )
-    network_dict = scale_porespy_geometry(network_dict, voxel_size=voxel_size)
-    network_dict = ensure_cartesian_boundary_labels(network_dict, axes=(selected_axis,))
+    if backend_normalized != "native_maximal_ball":
+        network_dict = scale_porespy_geometry(network_dict, voxel_size=voxel_size)
+        network_dict = ensure_cartesian_boundary_labels(network_dict, axes=(selected_axis,))
 
     shape_2d_or_3d = tuple(int(n) for n in arr.shape)
     bulk_shape: tuple[int, int, int] = (
@@ -428,7 +467,8 @@ def construct_spanning_network(
     backend :
         Construction backend identifier. Supported values include the existing
         image-extraction aliases ``"porespy"``, ``"snow2"``,
-        ``"porespy_snow2"``, and the imported-network aliases
+        ``"porespy_snow2"``, the native maximal-ball aliases
+        ``"maximal_ball"``, ``"native_maximal_ball"``, ``"maxball"``, and the imported-network aliases
         ``"pnflow_cnm"``, ``"imperial_cnm"``, and ``"pnextract_cnm"``.
     phases, voxel_size :
         Required for image-based backends and forwarded to
@@ -452,7 +492,11 @@ def construct_spanning_network(
     """
 
     backend_normalized = _normalize_construction_backend(backend)
-    if backend_normalized in {"porespy_snow2", "porespy_snow2_imperial"}:
+    if backend_normalized in {
+        "porespy_snow2",
+        "porespy_snow2_imperial",
+        "native_maximal_ball",
+    }:
         if phases is None:
             raise ValueError("phases is required for the image-extraction backends")
         if voxel_size is None:

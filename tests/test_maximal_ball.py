@@ -5,12 +5,16 @@ import pytest
 
 from voids.image.maximal_ball import (
     MaximalBallCandidates,
+    MaximalBallExtractionResult,
+    MaximalBallHierarchy,
     MaximalBallSettings,
     MaximalBallVoxelRegions,
     assign_voxel_regions_from_hierarchy,
+    build_network_dict_from_maximal_ball_regions,
     build_maximal_ball_hierarchy,
     clip_distance_map_to_domain_boundaries,
     compute_void_distance_map,
+    extract_maximal_ball_network_dict,
     extract_maximal_ball_regions,
     extract_maximal_ball_candidates,
     find_maximal_ball_candidates,
@@ -372,6 +376,86 @@ def test_measure_region_adjacency_reports_boundary_contact_faces() -> None:
         region_adjacency.region_surface_face_counts,
         np.array([22, 14], dtype=np.int64),
     )
+
+
+def test_build_network_dict_from_maximal_ball_regions_assembles_expected_fields() -> None:
+    """Region geometry should assemble into a consistent pore-network mapping."""
+
+    void_phase_mask = np.ones((3, 3, 1), dtype=bool)
+    label_image = np.full((3, 3, 1), -1, dtype=np.int64)
+    label_image[0:2, :, :] = 0
+    label_image[2:3, :, :] = 1
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0, 1], dtype=np.int64),
+        root_labels=np.array([0, 1], dtype=np.int64),
+        root_center_indices=np.array([[0, 1, 0], [2, 1, 0]], dtype=np.int64),
+        root_radii_voxels=np.array([1.5, 1.0], dtype=float),
+        root_of_ball_index=np.array([0, 1], dtype=np.int64),
+        unassigned_label=-1,
+    )
+    settings = resolve_maximal_ball_settings(
+        np.array([1.0, 1.5, 2.0], dtype=float),
+        MaximalBallSettings(minimal_pore_radius_voxels=1.0),
+    )
+    hierarchy = MaximalBallHierarchy(
+        center_indices=voxel_regions.root_center_indices.copy(),
+        radii_voxels=voxel_regions.root_radii_voxels.copy(),
+        parent_indices=np.array([0, 1], dtype=np.int64),
+        master_indices=np.array([0, 1], dtype=np.int64),
+        hierarchy_levels=np.array([0, 0], dtype=np.int64),
+        distance_map=np.ones((3, 3, 1), dtype=float),
+        settings=settings,
+    )
+    extraction_result = MaximalBallExtractionResult(
+        candidates=MaximalBallCandidates(
+            center_indices=voxel_regions.root_center_indices.copy(),
+            radii_voxels=voxel_regions.root_radii_voxels.copy(),
+            candidate_mask=np.zeros((3, 3, 1), dtype=bool),
+            retained_mask=np.array([True, True], dtype=bool),
+            distance_map=np.ones((3, 3, 1), dtype=float),
+            settings=settings,
+        ),
+        hierarchy=hierarchy,
+        voxel_regions=voxel_regions,
+        region_adjacency=measure_region_adjacency(void_phase_mask, voxel_regions),
+    )
+
+    network_dict = build_network_dict_from_maximal_ball_regions(
+        extraction_result,
+        voxel_size=2.0,
+    )
+
+    assert network_dict["pore.coords"].shape == (2, 3)
+    assert np.array_equal(network_dict["throat.conns"], np.array([[0, 1]], dtype=np.int64))
+    assert np.array_equal(network_dict["pore.inlet_xmin"], np.array([True, False]))
+    assert np.array_equal(network_dict["pore.outlet_xmax"], np.array([False, True]))
+    assert np.all(network_dict["throat.total_length"] > 0.0)
+    assert np.all(network_dict["throat.conduit_lengths.pore1"] > 0.0)
+    assert np.all(network_dict["throat.conduit_lengths.throat"] > 0.0)
+    assert np.all(network_dict["throat.conduit_lengths.pore2"] > 0.0)
+    assert network_dict["pore.volume"][0] == pytest.approx(48.0)
+    assert network_dict["pore.volume"][1] == pytest.approx(24.0)
+    assert network_dict["throat.cross_sectional_area"][0] == pytest.approx(12.0)
+
+
+def test_extract_maximal_ball_network_dict_wraps_extraction_and_assembly() -> None:
+    """The high-level network-dict wrapper should expose both mapping and staged outputs."""
+
+    void_phase_mask = np.zeros((7, 7, 7), dtype=bool)
+    void_phase_mask[1:6, 1:6, 1:6] = True
+
+    result = extract_maximal_ball_network_dict(
+        void_phase_mask,
+        voxel_size=1.0,
+        distance_map_backend="scipy",
+        settings=MaximalBallSettings(minimal_pore_radius_voxels=1.0),
+        apply_boundary_clipping=False,
+    )
+
+    assert "pore.coords" in result.network_dict
+    assert "throat.conns" in result.network_dict
+    assert result.extraction.voxel_regions.label_image.shape == void_phase_mask.shape
 
 
 def test_extract_maximal_ball_regions_returns_consistent_staged_outputs() -> None:

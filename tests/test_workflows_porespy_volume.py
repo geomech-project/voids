@@ -395,9 +395,10 @@ def test_extract_spanning_pore_network_normalizes_backend_aliases(
 
     captured: dict[str, object] = {}
 
-    def fake_extract(phases, *, backend, extraction_kwargs):
+    def fake_extract(phases, *, backend, voxel_size, extraction_kwargs):
         captured["phases"] = phases
         captured["backend"] = backend
+        captured["voxel_size"] = voxel_size
         captured["kwargs"] = extraction_kwargs
         return {
             "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
@@ -416,6 +417,7 @@ def test_extract_spanning_pore_network_normalizes_backend_aliases(
 
     assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=int))
     assert captured["backend"] == "porespy_snow2"
+    assert captured["voxel_size"] == pytest.approx(1.0)
     assert captured["kwargs"] is None
     assert result.backend == "porespy_snow2"
     assert result.provenance.extraction_method == "porespy_snow2"

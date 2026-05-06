@@ -80,6 +80,39 @@ def test_construct_spanning_network_dispatches_to_image_backend(
     assert captured["backend"] == "porespy_snow2_imperial"
     assert result.backend == "porespy_snow2_imperial"
 
+    result = nex.construct_spanning_network(
+        backend="maximal_ball",
+        phases=np.ones((3, 3, 3), dtype=int),
+        voxel_size=2.5,
+    )
+    assert captured["backend"] == "native_maximal_ball"
+    assert result.backend == "native_maximal_ball"
+
+
+def test_construct_spanning_network_supports_native_maximal_ball_backend() -> None:
+    """The unified constructor should assemble a native maximal-ball network."""
+
+    phases = np.zeros((7, 5, 5), dtype=int)
+    phases[:, 1:4, 1:4] = 1
+
+    result = nex.construct_spanning_network(
+        backend="native_maximal_ball",
+        phases=phases,
+        voxel_size=1.0,
+        extraction_kwargs={
+            "distance_map_backend": "scipy",
+            "apply_boundary_clipping": False,
+            "settings": {"minimal_pore_radius_voxels": 1.0},
+        },
+    )
+
+    assert result.backend == "native_maximal_ball"
+    assert result.image is not None
+    assert result.network_dict is not None
+    assert result.net_full.Np >= 1
+    assert result.net.pore_labels["inlet_xmin"].any()
+    assert result.net.pore_labels["outlet_xmax"].any()
+
 
 def test_construct_spanning_network_supports_imported_pnflow_cnm_backend() -> None:
     """Imperial CNM imports should be available through the unified constructor."""
