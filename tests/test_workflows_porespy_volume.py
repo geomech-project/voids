@@ -357,6 +357,50 @@ def test_extract_spanning_pore_network_forwards_extraction_kwargs(
     assert captured["kwargs"] == {"sigma": 0.5}
 
 
+def test_extract_spanning_pore_network_normalizes_backend_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Public extraction should expose an explicit backend choice with aliases."""
+
+    captured: dict[str, object] = {}
+
+    def fake_extract(phases, *, backend, extraction_kwargs):
+        captured["phases"] = phases
+        captured["backend"] = backend
+        captured["kwargs"] = extraction_kwargs
+        return {
+            "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+            "throat.conns": np.array([[0, 1]], dtype=int),
+            "pore.xmin": np.array([True, False], dtype=bool),
+            "pore.xmax": np.array([False, True], dtype=bool),
+        }
+
+    monkeypatch.setattr(nex, "_extract_network_dict", fake_extract)
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="snow2",
+        flow_axis="x",
+    )
+
+    assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=int))
+    assert captured["backend"] == "porespy_snow2"
+    assert captured["kwargs"] is None
+    assert result.backend == "porespy_snow2"
+    assert result.provenance.extraction_method == "porespy_snow2"
+
+
+def test_extract_spanning_pore_network_rejects_unsupported_backend() -> None:
+    """Unsupported image-extraction backends should fail before backend work starts."""
+
+    with pytest.raises(ValueError, match="Unsupported extraction backend"):
+        extract_spanning_pore_network(
+            np.ones((4, 5, 6), dtype=int),
+            voxel_size=1.0,
+            backend="pnextract_like",
+        )
+
+
 def test_extract_spanning_pore_network_enables_imperial_export_repairs_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

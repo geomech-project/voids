@@ -130,6 +130,7 @@ def test_benchmark_segmented_volume_with_openpnm_uses_harmonized_pressure_defaul
         phases_arg,
         *,
         voxel_size,
+        backend,
         flow_axis,
         length_unit,
         pressure_unit,
@@ -140,6 +141,7 @@ def test_benchmark_segmented_volume_with_openpnm_uses_harmonized_pressure_defaul
         captured["extract_args"] = {
             "phases": np.asarray(phases_arg),
             "voxel_size": voxel_size,
+            "backend": backend,
             "flow_axis": flow_axis,
             "length_unit": length_unit,
             "pressure_unit": pressure_unit,
@@ -187,6 +189,7 @@ def test_benchmark_segmented_volume_with_openpnm_uses_harmonized_pressure_defaul
     result = benchmark_segmented_volume_with_openpnm(
         phases,
         voxel_size=2.5e-6,
+        extraction_backend="snow2",
         extraction_kwargs={"sigma": 1.2},
         provenance_notes={"case": "tiny"},
         strict=False,
@@ -196,6 +199,7 @@ def test_benchmark_segmented_volume_with_openpnm_uses_harmonized_pressure_defaul
     extract_args = captured["extract_args"]
     assert np.array_equal(extract_args["phases"], phases)
     assert extract_args["voxel_size"] == pytest.approx(2.5e-6)
+    assert extract_args["backend"] == "snow2"
     assert extract_args["flow_axis"] is None
     assert extract_args["length_unit"] == "m"
     assert extract_args["pressure_unit"] == "Pa"
