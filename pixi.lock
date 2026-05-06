@@ -18838,8 +18838,8 @@ packages:
   timestamp: 1765513303522
 - pypi: ./
   name: voids
-  version: 0.1.6
-  sha256: 570f0e6c66828ae873e6a82d35562d4d3d357bb9193620a77e7f81b9090804a0
+  version: 0.1.7
+  sha256: 8701e329d67e7623ede022884e900eae77cd6ee4554472668f4c9151ce03502f
   requires_dist:
   - numpy>=1.26,<2.2
   - scipy>=1.11
