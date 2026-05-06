@@ -33,6 +33,7 @@ Scientific scope and caveats:
 ```python
 from __future__ import annotations
 
+import io
 import re
 from pathlib import Path
 
@@ -54,6 +55,20 @@ from voids.physics.singlephase import (
     SinglePhaseOptions,
     solve,
 )
+
+
+def _render_inline_and_close_figure(fig: object) -> None:
+    """Render notebook figures inline while keeping script and CI runs non-interactive."""
+
+    get_ipython_shell = globals().get("get_ipython")
+    shell = get_ipython_shell() if callable(get_ipython_shell) else None
+    if shell is not None and shell.__class__.__name__ == "ZMQInteractiveShell":
+        from IPython.display import Image, display
+
+        figure_buffer = io.BytesIO()
+        fig.savefig(figure_buffer, format="png", bbox_inches="tight", dpi=160)
+        display(Image(data=figure_buffer.getvalue()))
+    plt.close(fig)
 
 
 def _require_match(pattern: str, text: str, *, label: str) -> re.Match[str]:
@@ -175,7 +190,9 @@ def _summarize_voids_construction_transport(
         axis=flow_axis,
         options=options,
     )
-    helper_pore_mask = _flow_reservoir_helper_pore_mask(construction.net, flow_axis=flow_axis)
+    helper_pore_mask = _flow_reservoir_helper_pore_mask(
+        construction.net, flow_axis=flow_axis
+    )
     return {
         "phi_image": float(np.asarray(image, dtype=bool).mean()),
         f"phi_abs_{metric_prefix}_voids": float(absolute_porosity(construction.net)),
@@ -186,7 +203,9 @@ def _summarize_voids_construction_transport(
         f"Np_{metric_prefix}_physical_voids": int(
             construction.net.Np - np.count_nonzero(helper_pore_mask)
         ),
-        f"Np_{metric_prefix}_reservoir_helper_voids": int(np.count_nonzero(helper_pore_mask)),
+        f"Np_{metric_prefix}_reservoir_helper_voids": int(
+            np.count_nonzero(helper_pore_mask)
+        ),
         f"Nt_{metric_prefix}_voids": int(construction.net.Nt),
         f"k_{metric_prefix}_voids": float(result.permeability[flow_axis]),
         f"Q_{metric_prefix}_voids": float(result.total_flow_rate),
@@ -260,9 +279,7 @@ def _geometry_comparison_metrics(
         flow_axis=flow_axis,
     )
     candidate_physical_mask = (
-        ~candidate_helper_mask
-        if np.any(candidate_helper_mask)
-        else None
+        ~candidate_helper_mask if np.any(candidate_helper_mask) else None
     )
     comparison = compare_network_geometry(
         imported_full_net,
@@ -478,7 +495,7 @@ def _make_permeability_comparison_figure(
     fig.suptitle("External pnflow benchmark", fontsize=13)
     plt.tight_layout()
     fig.savefig(output_path, dpi=160, bbox_inches="tight")
-    plt.show()
+    _render_inline_and_close_figure(fig)
 
 
 def _make_porosity_trend_figure(
@@ -525,7 +542,7 @@ def _make_porosity_trend_figure(
 
     plt.tight_layout()
     fig.savefig(output_path, dpi=160, bbox_inches="tight")
-    plt.show()
+    _render_inline_and_close_figure(fig)
 
 
 examples_data = data_path()
@@ -705,7 +722,7 @@ fig.suptitle(
     f"Representative committed input: {representative_row['case']}", fontsize=13
 )
 plt.tight_layout()
-plt.show()
+_render_inline_and_close_figure(fig)
 
 print("shape =", representative_volume.shape)
 print("void fraction =", float(representative_volume.mean()))
