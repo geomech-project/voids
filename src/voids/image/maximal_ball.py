@@ -2167,6 +2167,24 @@ def _resolve_throat_area_mode(throat_area_mode: str) -> str:
     return aliases[normalized_mode]
 
 
+def _resolve_throat_shape_factor_radius_mode(throat_shape_factor_radius_mode: str) -> str:
+    """Normalize the radius convention used when deriving throat shape factors."""
+
+    normalized_mode = str(throat_shape_factor_radius_mode).strip().lower()
+    aliases = {
+        "inscribed": "inscribed",
+        "exported": "inscribed",
+        "radius_inscribed": "inscribed",
+        "surface_ball": "surface_ball",
+        "interface_support": "surface_ball",
+    }
+    if normalized_mode not in aliases:
+        raise ValueError(
+            "throat_shape_factor_radius_mode must be one of {'inscribed', 'surface_ball'}"
+        )
+    return aliases[normalized_mode]
+
+
 def _max_boundary_touch_radii_by_side(
     label_image: np.ndarray,
     region_labels: np.ndarray,
@@ -2209,6 +2227,7 @@ def build_network_dict_from_maximal_ball_regions(
     boundary_length_epsilon: float = 1.0e-300,
     boundary_radius_scale: float = 1.1,
     throat_area_mode: str = "face_count",
+    throat_shape_factor_radius_mode: str = "inscribed",
 ) -> dict[str, np.ndarray]:
     """Assemble a PoreSpy-style network mapping from maximal-ball regions.
 
@@ -2253,6 +2272,9 @@ def build_network_dict_from_maximal_ball_regions(
         raise ValueError("voxel_size must be positive")
     normalized_flow_boundary_mode = _resolve_flow_boundary_mode(flow_boundary_mode)
     normalized_throat_area_mode = _resolve_throat_area_mode(throat_area_mode)
+    normalized_throat_shape_factor_radius_mode = _resolve_throat_shape_factor_radius_mode(
+        throat_shape_factor_radius_mode
+    )
     if boundary_length_epsilon <= 0.0:
         raise ValueError("boundary_length_epsilon must be positive")
     if boundary_radius_scale <= 0.0:
@@ -2347,6 +2369,7 @@ def build_network_dict_from_maximal_ball_regions(
     pore_radius_by_region = root_radii_voxels
     equivalent_interface_radius = np.sqrt(np.maximum(throat_area, 0.0) / np.pi) / float(voxel_size)
     throat_support_radius_voxels = np.empty(throat_count, dtype=float)
+    throat_shape_factor_radius_voxels = np.empty(throat_count, dtype=float)
     for throat_index, region_pair in enumerate(throat_region_pairs):
         first_region_label = int(region_pair[0])
         second_region_label = int(region_pair[1])
@@ -2367,7 +2390,19 @@ def build_network_dict_from_maximal_ball_regions(
             float(pore_radius_by_region[first_region_label]),
             float(pore_radius_by_region[second_region_label]),
         )
+        surface_ball_radius_voxels = min(
+            max(second_radius_voxels, 0.5),
+            float(pore_radius_by_region[first_region_label]),
+            float(pore_radius_by_region[second_region_label]),
+        )
+        if normalized_throat_shape_factor_radius_mode == "surface_ball":
+            throat_shape_factor_radius_voxels[throat_index] = surface_ball_radius_voxels
+        else:
+            throat_shape_factor_radius_voxels[throat_index] = throat_support_radius_voxels[
+                throat_index
+            ]
     throat_radius = throat_support_radius_voxels * float(voxel_size)
+    throat_shape_factor_radius = throat_shape_factor_radius_voxels * float(voxel_size)
     first_side_radius_physical = np.where(
         np.isfinite(first_side_radius_voxels),
         first_side_radius_voxels * float(voxel_size),
@@ -2478,6 +2513,7 @@ def build_network_dict_from_maximal_ball_regions(
         boundary_throat_connections: list[tuple[int, int]] = []
         boundary_throat_area: list[float] = []
         boundary_throat_radius: list[float] = []
+        boundary_throat_shape_factor_radius: list[float] = []
         boundary_throat_pore1_length: list[float] = []
         boundary_throat_core_length: list[float] = []
         boundary_throat_pore2_length: list[float] = []
@@ -2539,6 +2575,7 @@ def build_network_dict_from_maximal_ball_regions(
                 helper_surface_areas.append(0.0)
                 boundary_throat_area.append(contact_area)
                 boundary_throat_radius.append(contact_radius)
+                boundary_throat_shape_factor_radius.append(contact_radius)
                 boundary_throat_centroids.append(helper_coordinate.copy())
                 boundary_throat_face_counts.append(float(face_count))
                 axis_balance = np.zeros(image_ndim, dtype=float)
@@ -2583,6 +2620,12 @@ def build_network_dict_from_maximal_ball_regions(
             )
             throat_radius = np.concatenate(
                 [throat_radius, np.asarray(boundary_throat_radius, dtype=float)]
+            )
+            throat_shape_factor_radius = np.concatenate(
+                [
+                    throat_shape_factor_radius,
+                    np.asarray(boundary_throat_shape_factor_radius, dtype=float),
+                ]
             )
             pore1_length = np.concatenate(
                 [pore1_length, np.asarray(boundary_throat_pore1_length, dtype=float)]
@@ -2661,6 +2704,7 @@ def build_network_dict_from_maximal_ball_regions(
     }
     throat_data: dict[str, np.ndarray] = {
         "radius_inscribed": throat_radius.copy(),
+        "shape_factor_radius": throat_shape_factor_radius.copy(),
         "area": throat_area.copy(),
         "shape_factor": np.full(throat_count, _CIRCULAR_SHAPE_FACTOR, dtype=float),
         "volume": np.zeros(throat_count, dtype=float),
@@ -2712,6 +2756,7 @@ def build_network_dict_from_maximal_ball_regions(
         "pore.region_volume": pore_data["region_volume"],
         "pore.surface_area": pore_data["surface_area"],
         "throat.radius_inscribed": throat_data["radius_inscribed"],
+        "throat.shape_factor_radius": throat_data["shape_factor_radius"],
         "throat.cross_sectional_area": throat_data["area"],
         "throat.shape_factor": throat_data["shape_factor"],
         "throat.volume": throat_data["volume"],
@@ -2754,6 +2799,7 @@ def extract_maximal_ball_network_dict(
     boundary_length_epsilon: float = 1.0e-300,
     boundary_radius_scale: float = 1.1,
     throat_area_mode: str = "face_count",
+    throat_shape_factor_radius_mode: str = "inscribed",
 ) -> MaximalBallNetworkDictResult:
     """Run the staged native maximal-ball path and assemble a network mapping."""
 
@@ -2772,6 +2818,7 @@ def extract_maximal_ball_network_dict(
         boundary_length_epsilon=boundary_length_epsilon,
         boundary_radius_scale=boundary_radius_scale,
         throat_area_mode=throat_area_mode,
+        throat_shape_factor_radius_mode=throat_shape_factor_radius_mode,
     )
     return MaximalBallNetworkDictResult(
         network_dict=network_dict,

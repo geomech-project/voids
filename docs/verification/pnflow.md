@@ -245,11 +245,14 @@ The checked `pnextract` writer computes throat shape factors from
 `R^2 / (4 * |CrosArea|)`, where `CrosArea` is a vector of oriented interface
 face counts. `voids` now exposes this convention for controlled experiments via
 native maximal-ball `extraction_kwargs={"throat_area_mode": "vector_magnitude"}`.
-It is not the default for the five-case benchmark because using it alone
-worsened the end-to-end permeability error, indicating that other `pnextract`
-details, such as throat-surface ball selection and exported/raw throat-radius
-semantics, must be matched together rather than one scalar convention at a
-time.
+`voids` also exposes a separate radius convention for the shape-factor
+calculation via
+`extraction_kwargs={"throat_shape_factor_radius_mode": "surface_ball"}`. These
+are not defaults for the five-case benchmark because changing either scalar
+convention alone did not improve the end-to-end permeability error. This
+indicates that the remaining `pnextract` details, such as throat-surface ball
+selection, oriented cross-area, and exported/raw throat-radius semantics, must
+be matched together rather than one scalar convention at a time.
 
 We also tested a dependency-free internal approximation mode exposed as
 `backend="porespy_imperial"`. This still uses `snow2`, but starts from a

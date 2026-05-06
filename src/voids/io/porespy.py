@@ -40,6 +40,7 @@ _PORESPY_KEYMAP = {
     "pore.radius": ("pore", "radius_inscribed", None),
     "throat.radius_inscribed": ("throat", "radius_inscribed", None),
     "pore.radius_inscribed": ("pore", "radius_inscribed", None),
+    "throat.shape_factor_radius": ("throat", "shape_factor_radius", None),
     # Conduit lengths (OpenPNM style)
     "throat.conduit_lengths.pore1": ("throat", "pore1_length", None),
     "throat.conduit_lengths.throat": ("throat", "core_length", None),
@@ -80,6 +81,7 @@ _LENGTH_KEYS = frozenset(
         "throat.total_length",
         "throat.equivalent_diameter",
         "throat.inscribed_diameter",
+        "throat.shape_factor_radius",
     }
 )
 _VOLUME_KEYS = frozenset({"pore.volume", "pore.region_volume", "throat.volume"})
@@ -406,8 +408,9 @@ def _apply_imperial_export_geometry_repairs(
     This follows the reference Imperial College `pnextract`
     `blockNet_write_cnm.cpp` logic closely:
 
-    - throats prefer ``G = r^2 / (4A)`` when both ``radius_inscribed`` and
-      ``area`` are available
+    - throats prefer ``G = r^2 / (4A)`` when a shape-factor radius and
+      ``area`` are available; when no separate shape-factor radius is provided,
+      ``radius_inscribed`` is used
     - very large throat shape factors are repaired with ``min(0.079, G/2)``
     - very small throat shape factors are replaced by the reference-style
       randomized admissible distribution, floored at ``0.01``
@@ -433,19 +436,30 @@ def _apply_imperial_export_geometry_repairs(
 
     throat_area_weight = throat_data.get("area")
     throat_radius = throat_data.get("radius_inscribed")
+    throat_shape_factor_radius = throat_data.get("shape_factor_radius", throat_radius)
 
     if throat_area_weight is not None:
         throat_area_weight = np.asarray(throat_area_weight, dtype=float).copy()
 
-    if throat_radius is not None and throat_area_weight is not None:
+    if throat_shape_factor_radius is not None and throat_area_weight is not None:
         if not np.all(np.isfinite(throat_area_weight)) or not np.all(throat_area_weight > 0.0):
             raise ValueError(
                 "throat area values must be positive and finite for all elements when"
                 " deriving shape factors via r^2/(4A); found non-positive or"
                 " non-finite values in throat area"
             )
-        throat_shape = np.asarray(throat_radius, dtype=float) ** 2 / (4.0 * throat_area_weight)
-        summary["throat_shape_factor_source"] = "radius_area"
+        throat_shape_factor_radius = np.asarray(throat_shape_factor_radius, dtype=float)
+        if not np.all(np.isfinite(throat_shape_factor_radius)) or not np.all(
+            throat_shape_factor_radius > 0.0
+        ):
+            raise ValueError(
+                "throat shape-factor radius values must be positive and finite for all"
+                " elements when deriving shape factors via r^2/(4A)"
+            )
+        throat_shape = throat_shape_factor_radius**2 / (4.0 * throat_area_weight)
+        summary["throat_shape_factor_source"] = (
+            "shape_factor_radius_area" if "shape_factor_radius" in throat_data else "radius_area"
+        )
     elif "shape_factor" in throat_data:
         throat_shape = np.asarray(throat_data["shape_factor"], dtype=float).copy()
     else:

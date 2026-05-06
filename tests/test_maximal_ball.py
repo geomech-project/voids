@@ -731,9 +731,18 @@ def test_build_network_dict_from_maximal_ball_regions_supports_vector_magnitude_
         voxel_size=1.0,
         throat_area_mode="vector_magnitude",
     )
+    surface_radius_network = build_network_dict_from_maximal_ball_regions(
+        extraction_result,
+        voxel_size=1.0,
+        throat_shape_factor_radius_mode="surface_ball",
+    )
 
     assert face_count_network["throat.cross_sectional_area"][0] == pytest.approx(2.0)
     assert vector_area_network["throat.cross_sectional_area"][0] == pytest.approx(np.sqrt(2.0))
+    assert "throat.shape_factor_radius" in surface_radius_network
+    assert surface_radius_network["throat.shape_factor_radius"][0] == pytest.approx(
+        np.sqrt(2.0 / np.pi)
+    )
 
 
 def test_build_network_dict_from_maximal_ball_regions_resolves_overlapping_boundary_labels() -> (
