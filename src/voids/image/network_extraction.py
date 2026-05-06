@@ -302,6 +302,7 @@ def _extract_network_dict(
             boundary_axis = str(boundary_axis)
         boundary_length_epsilon = float(kwargs.pop("boundary_length_epsilon", 1.0e-300))
         boundary_radius_scale = float(kwargs.pop("boundary_radius_scale", 1.1))
+        throat_area_mode = str(kwargs.pop("throat_area_mode", "face_count"))
         if kwargs:
             unexpected_keys = ", ".join(sorted(kwargs))
             raise ValueError(
@@ -317,6 +318,7 @@ def _extract_network_dict(
             boundary_axis=boundary_axis,
             boundary_length_epsilon=boundary_length_epsilon,
             boundary_radius_scale=boundary_radius_scale,
+            throat_area_mode=throat_area_mode,
         ).network_dict
     raise AssertionError(f"Unhandled normalized backend {backend_normalized!r}")
 
@@ -361,8 +363,9 @@ def extract_spanning_pore_network(
         For the native maximal-ball backend, supported keys are
         ``distance_map_backend``, ``apply_boundary_clipping``,
         ``flow_boundary_mode``, ``boundary_axis``,
-        ``boundary_length_epsilon``, ``boundary_radius_scale``, and either
-        ``settings`` or ``maximal_ball_settings``.
+        ``boundary_length_epsilon``, ``boundary_radius_scale``,
+        ``throat_area_mode``, and either ``settings`` or
+        ``maximal_ball_settings``.
     provenance_notes :
         Optional extra provenance metadata attached to the resulting network.
     strict :

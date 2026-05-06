@@ -2152,6 +2152,21 @@ def _resolve_flow_boundary_mode(flow_boundary_mode: str) -> str:
     return normalized_mode
 
 
+def _resolve_throat_area_mode(throat_area_mode: str) -> str:
+    """Normalize the throat cross-section area convention."""
+
+    normalized_mode = str(throat_area_mode).strip().lower()
+    aliases = {
+        "face_count": "face_count",
+        "interface_face_count": "face_count",
+        "vector_magnitude": "vector_magnitude",
+        "cross_area_magnitude": "vector_magnitude",
+    }
+    if normalized_mode not in aliases:
+        raise ValueError("throat_area_mode must be one of {'face_count', 'vector_magnitude'}")
+    return aliases[normalized_mode]
+
+
 def _max_boundary_touch_radii_by_side(
     label_image: np.ndarray,
     region_labels: np.ndarray,
@@ -2193,6 +2208,7 @@ def build_network_dict_from_maximal_ball_regions(
     boundary_axis: str | None = None,
     boundary_length_epsilon: float = 1.0e-300,
     boundary_radius_scale: float = 1.1,
+    throat_area_mode: str = "face_count",
 ) -> dict[str, np.ndarray]:
     """Assemble a PoreSpy-style network mapping from maximal-ball regions.
 
@@ -2236,6 +2252,7 @@ def build_network_dict_from_maximal_ball_regions(
     if voxel_size <= 0.0:
         raise ValueError("voxel_size must be positive")
     normalized_flow_boundary_mode = _resolve_flow_boundary_mode(flow_boundary_mode)
+    normalized_throat_area_mode = _resolve_throat_area_mode(throat_area_mode)
     if boundary_length_epsilon <= 0.0:
         raise ValueError("boundary_length_epsilon must be positive")
     if boundary_radius_scale <= 0.0:
@@ -2301,7 +2318,17 @@ def build_network_dict_from_maximal_ball_regions(
         throat_region_pairs = np.zeros((0, 2), dtype=np.int64)
     throat_count = int(throat_region_pairs.shape[0])
     throat_face_counts = np.asarray(region_adjacency.throat_face_counts, dtype=float)
-    throat_area = throat_face_counts * float(voxel_size) ** 2
+    axis_face_balance = np.asarray(region_adjacency.throat_axis_face_balance, dtype=float)
+    if normalized_throat_area_mode == "vector_magnitude":
+        throat_cross_area_face_counts = np.linalg.norm(axis_face_balance, axis=1)
+        throat_cross_area_face_counts = np.where(
+            throat_cross_area_face_counts > 0.0,
+            throat_cross_area_face_counts,
+            np.maximum(throat_face_counts, 0.1),
+        )
+    else:
+        throat_cross_area_face_counts = throat_face_counts
+    throat_area = throat_cross_area_face_counts * float(voxel_size) ** 2
     throat_centroid_indices = np.asarray(region_adjacency.throat_centroid_indices, dtype=float)
     if throat_centroid_indices.shape[0] != throat_count:
         raise ValueError("throat_centroid_indices must align with throat_region_pairs")
@@ -2580,7 +2607,7 @@ def build_network_dict_from_maximal_ball_regions(
             )
             axis_face_balance = np.vstack(
                 [
-                    np.asarray(region_adjacency.throat_axis_face_balance, dtype=float),
+                    axis_face_balance,
                     np.asarray(boundary_axis_face_balance, dtype=float),
                 ]
             )
@@ -2623,10 +2650,6 @@ def build_network_dict_from_maximal_ball_regions(
             direct_boundary_label_masks[boundary_axis] = (inlet_label, outlet_label)
             region_count = int(pore_coords.shape[0])
             throat_count = int(throat_region_pairs.shape[0])
-        else:
-            axis_face_balance = np.asarray(region_adjacency.throat_axis_face_balance, dtype=float)
-    else:
-        axis_face_balance = np.asarray(region_adjacency.throat_axis_face_balance, dtype=float)
 
     pore_data: dict[str, np.ndarray] = {
         "radius_inscribed": pore_radius.copy(),
@@ -2730,6 +2753,7 @@ def extract_maximal_ball_network_dict(
     boundary_axis: str | None = None,
     boundary_length_epsilon: float = 1.0e-300,
     boundary_radius_scale: float = 1.1,
+    throat_area_mode: str = "face_count",
 ) -> MaximalBallNetworkDictResult:
     """Run the staged native maximal-ball path and assemble a network mapping."""
 
@@ -2747,6 +2771,7 @@ def extract_maximal_ball_network_dict(
         boundary_axis=boundary_axis,
         boundary_length_epsilon=boundary_length_epsilon,
         boundary_radius_scale=boundary_radius_scale,
+        throat_area_mode=throat_area_mode,
     )
     return MaximalBallNetworkDictResult(
         network_dict=network_dict,

@@ -681,6 +681,61 @@ def test_build_network_dict_from_maximal_ball_regions_assembles_expected_fields(
     assert np.all(reservoir_network_dict["throat.conduit_lengths.pore2"] >= 0.0)
 
 
+def test_build_network_dict_from_maximal_ball_regions_supports_vector_magnitude_area() -> None:
+    """The optional vector area mode should use the oriented interface-face norm."""
+
+    void_phase_mask = np.ones((2, 2, 1), dtype=bool)
+    label_image = np.array([[[0], [0]], [[0], [1]]], dtype=np.int64)
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0, 1], dtype=np.int64),
+        root_labels=np.array([0, 1], dtype=np.int64),
+        root_center_indices=np.array([[0, 0, 0], [1, 1, 0]], dtype=np.int64),
+        root_radii_voxels=np.array([1.0, 1.0], dtype=float),
+        root_of_ball_index=np.array([0, 1], dtype=np.int64),
+        unassigned_label=-1,
+    )
+    settings = resolve_maximal_ball_settings(
+        np.ones((2, 2, 1), dtype=float),
+        MaximalBallSettings(minimal_pore_radius_voxels=0.5),
+    )
+    extraction_result = MaximalBallExtractionResult(
+        candidates=MaximalBallCandidates(
+            center_indices=voxel_regions.root_center_indices.copy(),
+            radii_voxels=voxel_regions.root_radii_voxels.copy(),
+            candidate_mask=np.zeros((2, 2, 1), dtype=bool),
+            retained_mask=np.array([True, True], dtype=bool),
+            distance_map=np.ones((2, 2, 1), dtype=float),
+            settings=settings,
+        ),
+        hierarchy=MaximalBallHierarchy(
+            center_indices=voxel_regions.root_center_indices.copy(),
+            center_coordinates=voxel_regions.root_center_indices.astype(float),
+            radii_voxels=voxel_regions.root_radii_voxels.copy(),
+            parent_indices=np.array([0, 1], dtype=np.int64),
+            master_indices=np.array([0, 1], dtype=np.int64),
+            hierarchy_levels=np.array([0, 0], dtype=np.int64),
+            distance_map=np.ones((2, 2, 1), dtype=float),
+            settings=settings,
+        ),
+        voxel_regions=voxel_regions,
+        region_adjacency=measure_region_adjacency(void_phase_mask, voxel_regions),
+    )
+
+    face_count_network = build_network_dict_from_maximal_ball_regions(
+        extraction_result,
+        voxel_size=1.0,
+    )
+    vector_area_network = build_network_dict_from_maximal_ball_regions(
+        extraction_result,
+        voxel_size=1.0,
+        throat_area_mode="vector_magnitude",
+    )
+
+    assert face_count_network["throat.cross_sectional_area"][0] == pytest.approx(2.0)
+    assert vector_area_network["throat.cross_sectional_area"][0] == pytest.approx(np.sqrt(2.0))
+
+
 def test_build_network_dict_from_maximal_ball_regions_resolves_overlapping_boundary_labels() -> (
     None
 ):
