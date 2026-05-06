@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from voids.generators import generate_spanning_multiscale_blobs_matrix
+from voids.generators import porous_image as pimg
 from voids.image import has_spanning_cluster_2d
 
 
@@ -42,6 +43,18 @@ def test_generate_spanning_multiscale_blobs_matrix_validation() -> None:
             max_tries=1,
         )
 
+    with pytest.raises(ValueError, match="max_tries must be >= 1"):
+        generate_spanning_multiscale_blobs_matrix(
+            shape=(32, 32),
+            porosity=0.4,
+            blobiness_primary=1.0,
+            blobiness_secondary=2.0,
+            primary_weight=0.75,
+            axis_index=0,
+            seed_start=0,
+            max_tries=0,
+        )
+
     with pytest.raises(ValueError, match="primary_weight must be in"):
         generate_spanning_multiscale_blobs_matrix(
             shape=(32, 32),
@@ -65,6 +78,18 @@ def test_generate_spanning_multiscale_blobs_matrix_validation() -> None:
             seed_start=0,
             max_tries=1,
         )
+
+
+def test_coerce_blobiness_accepts_scalar_and_rejects_nonpositive_values() -> None:
+    """Blobiness coercion should preserve scalar inputs and reject invalid values."""
+
+    assert pimg._coerce_blobiness(1.5, ndim=2, name="blobiness") == pytest.approx(1.5)
+
+    with pytest.raises(ValueError, match="blobiness must be positive"):
+        pimg._coerce_blobiness(0.0, ndim=2, name="blobiness")
+
+    with pytest.raises(ValueError, match="All entries in blobiness must be positive"):
+        pimg._coerce_blobiness((1.0, -2.0), ndim=2, name="blobiness")
 
 
 def test_generate_spanning_multiscale_blobs_matrix_can_fail_cleanly() -> None:

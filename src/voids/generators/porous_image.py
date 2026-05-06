@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
 import numpy as np
 import porespy as ps
@@ -18,12 +19,12 @@ def _coerce_blobiness(
     """Normalize blobiness controls to the format expected by PoreSpy."""
 
     if np.isscalar(blobiness):
-        value = float(blobiness)
+        value = float(cast(float, blobiness))
         if value <= 0:
             raise ValueError(f"{name} must be positive")
         return value
 
-    values = tuple(float(v) for v in blobiness)
+    values = tuple(float(v) for v in cast(Sequence[float], blobiness))
     if len(values) != ndim:
         raise ValueError(f"{name} must have length {ndim}")
     if min(values) <= 0:
@@ -527,11 +528,10 @@ def generate_spanning_matrix_2d(
                 continue
             return matrix, seed, float(porosity_try)
 
-        if last_error is not None:
-            raise RuntimeError(
-                "Could not generate spanning blobs matrix for requested or fallback porosities"
-            ) from last_error
-        raise RuntimeError("No porosity trial values were available for blobs generation")
+        assert last_error is not None
+        raise RuntimeError(
+            "Could not generate spanning blobs matrix for requested or fallback porosities"
+        ) from last_error
 
     raise ValueError(f"Unsupported generator_name: {generator_name}")
 
