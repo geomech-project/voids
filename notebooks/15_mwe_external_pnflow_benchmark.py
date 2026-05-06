@@ -131,12 +131,16 @@ def _run_voids_from_volume_case(
     flow_axis: str,
     fluid: FluidSinglePhase,
     options: SinglePhaseOptions,
+    backend: str,
+    metric_prefix: str,
+    extraction_kwargs: dict[str, object] | None = None,
 ) -> dict[str, float | int]:
     construction = construct_spanning_network(
-        backend="porespy",
+        backend=backend,
         phases=volume.astype(int),
         voxel_size=voxel_size,
         flow_axis=flow_axis,
+        extraction_kwargs=extraction_kwargs,
         provenance_notes={"benchmark_kind": "external_pnflow_reference"},
     )
     bc = PressureBC(
@@ -154,14 +158,14 @@ def _run_voids_from_volume_case(
     )
     return {
         "phi_image": float(np.asarray(volume, dtype=bool).mean()),
-        "phi_abs_porespy_voids": float(absolute_porosity(construction.net)),
-        "phi_eff_porespy_voids": float(
+        f"phi_abs_{metric_prefix}_voids": float(absolute_porosity(construction.net)),
+        f"phi_eff_{metric_prefix}_voids": float(
             effective_porosity(construction.net, axis=flow_axis)
         ),
-        "Np_porespy_voids": int(construction.net.Np),
-        "Nt_porespy_voids": int(construction.net.Nt),
-        "k_porespy_voids": float(result.permeability[flow_axis]),
-        "Q_porespy_voids": float(result.total_flow_rate),
+        f"Np_{metric_prefix}_voids": int(construction.net.Np),
+        f"Nt_{metric_prefix}_voids": int(construction.net.Nt),
+        f"k_{metric_prefix}_voids": float(result.permeability[flow_axis]),
+        f"Q_{metric_prefix}_voids": float(result.total_flow_rate),
     }
 
 
@@ -219,6 +223,7 @@ def _make_permeability_comparison_figure(
         min(
             summary_frame["k_imported_voids"].min(),
             summary_frame["k_porespy_voids"].min(),
+            summary_frame["k_maxball_voids"].min(),
             summary_frame["k_pnflow"].min(),
         )
     )
@@ -226,6 +231,7 @@ def _make_permeability_comparison_figure(
         max(
             summary_frame["k_imported_voids"].max(),
             summary_frame["k_porespy_voids"].max(),
+            summary_frame["k_maxball_voids"].max(),
             summary_frame["k_pnflow"].max(),
         )
     )
@@ -244,6 +250,13 @@ def _make_permeability_comparison_figure(
         s=65,
         color="tab:blue",
         label="voids on PoreSpy extraction",
+    )
+    axes[0].scatter(
+        summary_frame["k_pnflow"],
+        summary_frame["k_maxball_voids"],
+        s=65,
+        color="tab:red",
+        label="voids on native maximal-ball extraction",
     )
     axes[0].plot(
         [kmin - pad, kmax + pad],
@@ -266,20 +279,27 @@ def _make_permeability_comparison_figure(
     axes[0].legend()
 
     x = np.arange(len(summary_frame))
-    width = 0.36
+    width = 0.26
     axes[1].bar(
-        x - 0.5 * width,
+        x - width,
         100.0 * summary_frame["k_rel_diff_imported"],
         width=width,
         color="tab:green",
         label="imported CNM",
     )
     axes[1].bar(
-        x + 0.5 * width,
+        x,
         100.0 * summary_frame["k_rel_diff_porespy"],
         width=width,
         color="tab:orange",
         label="PoreSpy extraction",
+    )
+    axes[1].bar(
+        x + width,
+        100.0 * summary_frame["k_rel_diff_maxball"],
+        width=width,
+        color="tab:red",
+        label="native maximal-ball extraction",
     )
     axes[1].set_xticks(x, summary_frame["case"], rotation=25)
     axes[1].set_xlabel("case")
@@ -321,6 +341,13 @@ def _make_porosity_trend_figure(
         marker="s",
         lw=1.5,
         label="voids on PoreSpy extraction",
+    )
+    ax.semilogy(
+        plot_df["phi_image"],
+        plot_df["k_maxball_voids"],
+        marker="D",
+        lw=1.5,
+        label="voids on native maximal-ball extraction",
     )
     ax.set_xlabel("image porosity [-]")
     ax.set_ylabel("permeability [m$^2$]")
@@ -409,8 +436,10 @@ print("void fraction =", float(representative_volume.mean()))
 #
 # - imported CNM: reuse the saved `pnextract` network and compare the `voids` single-phase solve
 #   directly against `pnflow`
-# - image extraction: re-extract the saved binary volume with the current `voids` `snow2` workflow
-#   and compare that full path against `pnflow`
+# - image extraction with `snow2`: re-extract the saved binary volume with the current `voids`
+#   `snow2` workflow and compare that full path against `pnflow`
+# - image extraction with native maximal-ball: run the current in-progress `voids` maximal-ball
+#   path and compare that full path against `pnflow`
 #
 # This split helps identify whether a mismatch is dominated by extraction or by the single-phase
 # solver/geometry interpretation on the same network.
@@ -434,6 +463,20 @@ for row in manifest_df.itertuples(index=False):
         flow_axis=str(row_series["flow_axis"]),
         fluid=fluid,
         options=options,
+        backend="porespy",
+        metric_prefix="porespy",
+    )
+    maxball_metrics = _run_voids_from_volume_case(
+        volume,
+        voxel_size=float(row_series["voxel_size_m"]),
+        flow_axis=str(row_series["flow_axis"]),
+        fluid=fluid,
+        options=options,
+        backend="native_maximal_ball",
+        metric_prefix="maxball",
+        extraction_kwargs={
+            "distance_map_backend": "scipy",
+        },
     )
     rows.append(
         {
@@ -441,6 +484,7 @@ for row in manifest_df.itertuples(index=False):
             **pnflow_metrics,
             **imported_metrics,
             **porespy_metrics,
+            **maxball_metrics,
         }
     )
 
@@ -450,6 +494,9 @@ summary_df["k_ratio_imported_to_pnflow"] = (
 )
 summary_df["k_ratio_porespy_to_pnflow"] = (
     summary_df["k_porespy_voids"] / summary_df["k_pnflow"]
+)
+summary_df["k_ratio_maxball_to_pnflow"] = (
+    summary_df["k_maxball_voids"] / summary_df["k_pnflow"]
 )
 summary_df["k_rel_diff_imported"] = np.abs(
     summary_df["k_imported_voids"] - summary_df["k_pnflow"]
@@ -463,11 +510,20 @@ summary_df["k_rel_diff_porespy"] = np.abs(
     np.maximum(np.abs(summary_df["k_porespy_voids"]), np.abs(summary_df["k_pnflow"])),
     1.0e-30,
 )
+summary_df["k_rel_diff_maxball"] = np.abs(
+    summary_df["k_maxball_voids"] - summary_df["k_pnflow"]
+) / np.maximum(
+    np.maximum(np.abs(summary_df["k_maxball_voids"]), np.abs(summary_df["k_pnflow"])),
+    1.0e-30,
+)
 summary_df["phi_abs_diff_imported"] = (
     summary_df["phi_abs_imported_voids"] - summary_df["phi_pnflow"]
 )
 summary_df["phi_abs_diff_porespy"] = (
     summary_df["phi_abs_porespy_voids"] - summary_df["phi_pnflow"]
+)
+summary_df["phi_abs_diff_maxball"] = (
+    summary_df["phi_abs_maxball_voids"] - summary_df["phi_pnflow"]
 )
 summary_df["np_rel_diff_imported"] = np.abs(
     summary_df["Np_imported_physical"] - summary_df["pnflow_n_pores"]
@@ -481,6 +537,12 @@ summary_df["nt_rel_diff_imported"] = np.abs(
 summary_df["nt_rel_diff_porespy"] = np.abs(
     summary_df["Nt_porespy_voids"] - summary_df["pnflow_n_throats"]
 ) / np.maximum(summary_df["pnflow_n_throats"], 1.0)
+summary_df["np_rel_diff_maxball"] = np.abs(
+    summary_df["Np_maxball_voids"] - summary_df["pnflow_n_pores"]
+) / np.maximum(summary_df["pnflow_n_pores"], 1.0)
+summary_df["nt_rel_diff_maxball"] = np.abs(
+    summary_df["Nt_maxball_voids"] - summary_df["pnflow_n_throats"]
+) / np.maximum(summary_df["pnflow_n_throats"], 1.0)
 
 display_columns = [
     "case",
@@ -490,18 +552,23 @@ display_columns = [
     "phi_image",
     "phi_abs_imported_voids",
     "phi_abs_porespy_voids",
+    "phi_abs_maxball_voids",
     "phi_pnflow",
     "Np_imported_physical",
     "Np_porespy_voids",
+    "Np_maxball_voids",
     "pnflow_n_pores",
     "Nt_imported_voids",
     "Nt_porespy_voids",
+    "Nt_maxball_voids",
     "pnflow_n_throats",
     "k_imported_voids",
     "k_porespy_voids",
+    "k_maxball_voids",
     "k_pnflow",
     "k_rel_diff_imported",
     "k_rel_diff_porespy",
+    "k_rel_diff_maxball",
 ]
 summary_df.loc[:, display_columns]
 
@@ -542,8 +609,10 @@ print("Saved:", porosity_figure_path)
 # - imported-CNM and PoreSpy-extracted `voids` porosities are not identical diagnostics:
 #   the imported CNM includes the saved `pnextract` conduit volumes, while the PoreSpy path uses
 #   the current `voids` extraction and pruning workflow
-# - if imported-CNM permeability is much closer to `pnflow` than the PoreSpy path, the dominant
-#   remaining mismatch is likely extraction rather than the single-phase solver itself
+# - if imported-CNM permeability is much closer to `pnflow` than both image-extraction paths, the
+#   dominant remaining mismatch is likely extraction rather than the single-phase solver itself
+# - if the native maximal-ball path improves over the `snow2` path, that is evidence that moving
+#   toward the Imperial extractor structure is helping even before full parity is reached
 # - a close permeability match on the imported CNM is encouraging, but it still does not prove full
 #   geometric equivalence between implementations
 # - a large mismatch is not automatically a bug in `voids`; it may reflect different extraction and
