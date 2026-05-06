@@ -33,7 +33,7 @@ class MaximalBallSettings:
     radius_smoothing_iterations: int = 3
     retention_radius_factor: float = 0.15
     retention_radius_offset_voxels: float | None = None
-    radius_field_mode: str = "imperial_pnextract"
+    radius_field_mode: str = "half_voxel"
     candidate_selection_mode: str = "threshold_all"
 
 
@@ -237,7 +237,7 @@ def compute_maximal_ball_radius_field(
     void_phase_mask: np.ndarray,
     *,
     backend: str = "auto",
-    mode: str = "imperial_pnextract",
+    mode: str = "half_voxel",
 ) -> np.ndarray:
     """Compute the radius field used by the maximal-ball extractor.
 
@@ -249,15 +249,13 @@ def compute_maximal_ball_radius_field(
         Distance-transform backend passed through to
         :func:`compute_void_distance_map`.
     mode :
-        Radius-field convention. ``"imperial_pnextract"`` reproduces the
-        checked Imperial radius semantics, which are the nearest non-void
+        Radius-field convention. ``"half_voxel"`` returns the nearest non-void
         Euclidean distance minus half a voxel. ``"edt"`` returns the plain
-        Euclidean distance map unchanged.
+        Euclidean distance map unchanged. ``"imperial_pnextract"`` is accepted
+        as a backward-compatible alias for ``"half_voxel"``.
     """
 
-    normalized_mode = str(mode).strip().lower()
-    if normalized_mode not in {"imperial_pnextract", "edt"}:
-        raise ValueError("mode must be one of {'imperial_pnextract', 'edt'}")
+    normalized_mode = _normalize_radius_field_mode(mode)
 
     distance_map = compute_void_distance_map(void_phase_mask, backend=backend)
     if normalized_mode == "edt":
@@ -319,6 +317,17 @@ def smooth_radius_field_local_relaxation(
     return smoothed_radius
 
 
+def _normalize_radius_field_mode(mode: str) -> str:
+    """Normalize public radius-field mode names and legacy aliases."""
+
+    normalized_mode = str(mode).strip().lower()
+    if normalized_mode in {"half_voxel", "half-voxel", "imperial_pnextract"}:
+        return "half_voxel"
+    if normalized_mode == "edt":
+        return "edt"
+    raise ValueError("radius field mode must be one of {'half_voxel', 'edt'}")
+
+
 def resolve_maximal_ball_settings(
     distance_map: np.ndarray,
     settings: MaximalBallSettings | None = None,
@@ -360,9 +369,7 @@ def resolve_maximal_ball_settings(
         raise ValueError("retention_radius_offset_voxels must be positive")
     if raw_settings.radius_smoothing_iterations < 0:
         raise ValueError("radius_smoothing_iterations must be nonnegative")
-    radius_field_mode = str(raw_settings.radius_field_mode).strip().lower()
-    if radius_field_mode not in {"imperial_pnextract", "edt"}:
-        raise ValueError("radius_field_mode must be one of {'imperial_pnextract', 'edt'}")
+    radius_field_mode = _normalize_radius_field_mode(raw_settings.radius_field_mode)
     candidate_selection_mode = str(raw_settings.candidate_selection_mode).strip().lower()
     if candidate_selection_mode not in {"threshold_all", "local_maxima"}:
         raise ValueError(
@@ -2145,6 +2152,38 @@ def _resolve_flow_boundary_mode(flow_boundary_mode: str) -> str:
     return normalized_mode
 
 
+def _max_boundary_touch_radii_by_side(
+    label_image: np.ndarray,
+    region_labels: np.ndarray,
+    distance_map: np.ndarray,
+) -> np.ndarray:
+    """Return max boundary-contact radius for each compact region and side."""
+
+    labels = np.asarray(label_image, dtype=np.int64)
+    radii = np.asarray(distance_map, dtype=float)
+    if labels.shape != radii.shape:
+        raise ValueError("label_image and distance_map must have the same shape")
+
+    retained_region_labels = np.asarray(region_labels, dtype=np.int64)
+    boundary_touch_radii = np.full(
+        (retained_region_labels.size, 2 * labels.ndim),
+        np.nan,
+        dtype=float,
+    )
+    for compact_region_index, original_region_label in enumerate(retained_region_labels):
+        for axis_index in range(labels.ndim):
+            for side_offset, side_index in enumerate((0, labels.shape[axis_index] - 1)):
+                boundary_selector = [slice(None)] * labels.ndim
+                boundary_selector[axis_index] = side_index
+                selector_tuple = tuple(boundary_selector)
+                side_region_mask = labels[selector_tuple] == int(original_region_label)
+                if np.any(side_region_mask):
+                    boundary_touch_radii[compact_region_index, 2 * axis_index + side_offset] = (
+                        float(np.max(radii[selector_tuple][side_region_mask]))
+                    )
+    return boundary_touch_radii
+
+
 def build_network_dict_from_maximal_ball_regions(
     extraction_result: MaximalBallExtractionResult,
     *,
@@ -2360,6 +2399,11 @@ def build_network_dict_from_maximal_ball_regions(
 
     direct_boundary_label_masks: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     connected_boundary_label_masks: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    boundary_touch_radii_voxels = _max_boundary_touch_radii_by_side(
+        voxel_regions.label_image,
+        retained_region_labels,
+        hierarchy.distance_map,
+    )
     pore_boundary = np.zeros(region_count, dtype=bool)
     for axis_index, axis_name in enumerate(active_axis_names):
         lower_face_count = np.asarray(
@@ -2432,10 +2476,20 @@ def build_network_dict_from_maximal_ball_regions(
                 helper_coordinate[boundary_axis_index] = boundary_coordinate
                 face_count = max(int(face_counts[pore_index]), 1)
                 contact_area = float(face_count) * float(voxel_size) ** 2
-                contact_radius = min(
-                    float(pore_radius[pore_index]),
-                    float(np.sqrt(contact_area / np.pi)),
-                )
+                boundary_touch_radius_voxels = boundary_touch_radii_voxels[
+                    pore_index,
+                    2 * boundary_axis_index + (0 if side == "lower" else 1),
+                ]
+                if np.isfinite(boundary_touch_radius_voxels):
+                    contact_radius = min(
+                        float(pore_radius[pore_index]),
+                        float(boundary_touch_radius_voxels) * float(voxel_size),
+                    )
+                else:
+                    contact_radius = min(
+                        float(pore_radius[pore_index]),
+                        float(np.sqrt(contact_area / np.pi)),
+                    )
                 contact_radius = max(contact_radius, 0.5 * float(voxel_size))
                 helper_radius = boundary_radius_scale * contact_radius
                 center_to_boundary_length = abs(
@@ -2605,7 +2659,7 @@ def build_network_dict_from_maximal_ball_regions(
         throat_data,
         throat_region_pairs,
         num_pores=region_count,
-        random_seed=0,
+        random_seed=1001,
     )
     _redistribute_region_volumes_like_imperial_export(
         pore_data,

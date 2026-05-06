@@ -46,8 +46,8 @@ def test_compute_void_distance_map_matches_expected_center_radius() -> None:
     assert np.count_nonzero(distance_map) == 27
 
 
-def test_compute_maximal_ball_radius_field_matches_imperial_half_voxel_shift() -> None:
-    """The Imperial radius field should equal EDT minus half a voxel in the void."""
+def test_compute_maximal_ball_radius_field_matches_half_voxel_shift() -> None:
+    """The half-voxel radius field should equal EDT minus half a voxel in the void."""
 
     void_phase_mask = np.zeros((5, 5, 5), dtype=bool)
     void_phase_mask[1:4, 1:4, 1:4] = True
@@ -55,13 +55,33 @@ def test_compute_maximal_ball_radius_field_matches_imperial_half_voxel_shift() -
     radius_field = compute_maximal_ball_radius_field(
         void_phase_mask,
         backend="scipy",
-        mode="imperial_pnextract",
+        mode="half_voxel",
     )
 
     assert radius_field.shape == void_phase_mask.shape
     assert radius_field[2, 2, 2] == pytest.approx(1.5)
     assert radius_field[1, 1, 1] == pytest.approx(0.5)
     assert np.count_nonzero(radius_field) == 27
+
+
+def test_compute_maximal_ball_radius_field_accepts_legacy_radius_mode_alias() -> None:
+    """Older benchmark configs should still map to the neutral half-voxel mode."""
+
+    void_phase_mask = np.zeros((5, 5, 5), dtype=bool)
+    void_phase_mask[1:4, 1:4, 1:4] = True
+
+    neutral_radius_field = compute_maximal_ball_radius_field(
+        void_phase_mask,
+        backend="scipy",
+        mode="half_voxel",
+    )
+    legacy_radius_field = compute_maximal_ball_radius_field(
+        void_phase_mask,
+        backend="scipy",
+        mode="imperial_pnextract",
+    )
+
+    assert np.array_equal(legacy_radius_field, neutral_radius_field)
 
 
 def test_resolve_maximal_ball_settings_matches_imperial_default_logic() -> None:
