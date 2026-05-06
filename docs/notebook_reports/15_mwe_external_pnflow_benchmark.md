@@ -907,18 +907,20 @@ summary_df.loc[:, display_columns]
       <th>phi_image</th>
       <th>phi_abs_imported_voids</th>
       <th>phi_abs_porespy_voids</th>
+      <th>phi_abs_maxball_voids</th>
       <th>phi_pnflow</th>
       <th>Np_imported_physical</th>
-      <th>Np_porespy_voids</th>
-      <th>pnflow_n_pores</th>
-      <th>Nt_imported_voids</th>
-      <th>Nt_porespy_voids</th>
-      <th>pnflow_n_throats</th>
-      <th>k_imported_voids</th>
-      <th>k_porespy_voids</th>
-      <th>k_pnflow</th>
-      <th>k_rel_diff_imported</th>
-      <th>k_rel_diff_porespy</th>
+      <th>...</th>
+      <th>maxball_geom_pore_count_rel_diff</th>
+      <th>maxball_geom_throat_count_rel_diff</th>
+      <th>maxball_geom_throat_radius_ks</th>
+      <th>maxball_geom_coordination_ks</th>
+      <th>maxball_geom_n_components</th>
+      <th>maxball_geom_dead_end_fraction</th>
+      <th>maxball_diag_assigned_void_fraction</th>
+      <th>maxball_diag_unassigned_void_voxel_count</th>
+      <th>maxball_diag_zero_throat_region_count</th>
+      <th>maxball_diag_internal_zero_throat_region_count</th>
     </tr>
   </thead>
   <tbody>
@@ -931,18 +933,20 @@ summary_df.loc[:, display_columns]
       <td>0.320007</td>
       <td>0.276611</td>
       <td>0.320190</td>
+      <td>0.280884</td>
       <td>0.275787</td>
       <td>80</td>
-      <td>53</td>
-      <td>80</td>
-      <td>202</td>
-      <td>150</td>
-      <td>202</td>
-      <td>9.751927e-15</td>
-      <td>6.096766e-15</td>
-      <td>9.751930e-15</td>
-      <td>2.600277e-07</td>
-      <td>0.374814</td>
+      <td>...</td>
+      <td>0.310345</td>
+      <td>0.191176</td>
+      <td>0.806061</td>
+      <td>0.207328</td>
+      <td>3</td>
+      <td>0.344828</td>
+      <td>0.910357</td>
+      <td>940</td>
+      <td>1</td>
+      <td>0</td>
     </tr>
     <tr>
       <th>1</th>
@@ -953,18 +957,20 @@ summary_df.loc[:, display_columns]
       <td>0.350006</td>
       <td>0.297089</td>
       <td>0.349762</td>
+      <td>0.311859</td>
       <td>0.295502</td>
       <td>71</td>
-      <td>26</td>
-      <td>71</td>
-      <td>198</td>
-      <td>79</td>
-      <td>198</td>
-      <td>1.116236e-14</td>
-      <td>1.702232e-14</td>
-      <td>1.331850e-14</td>
-      <td>1.618904e-01</td>
-      <td>0.217586</td>
+      <td>...</td>
+      <td>0.330189</td>
+      <td>0.156566</td>
+      <td>0.814371</td>
+      <td>0.292851</td>
+      <td>1</td>
+      <td>0.377358</td>
+      <td>0.891011</td>
+      <td>1250</td>
+      <td>0</td>
+      <td>0</td>
     </tr>
     <tr>
       <th>2</th>
@@ -975,18 +981,20 @@ summary_df.loc[:, display_columns]
       <td>0.380005</td>
       <td>0.322083</td>
       <td>0.380005</td>
+      <td>0.336761</td>
       <td>0.316315</td>
       <td>64</td>
-      <td>36</td>
-      <td>64</td>
-      <td>180</td>
-      <td>106</td>
-      <td>180</td>
-      <td>1.125480e-14</td>
-      <td>2.091703e-14</td>
-      <td>1.199270e-14</td>
-      <td>6.152880e-02</td>
-      <td>0.426654</td>
+      <td>...</td>
+      <td>0.401869</td>
+      <td>0.243523</td>
+      <td>0.835616</td>
+      <td>0.273803</td>
+      <td>2</td>
+      <td>0.373832</td>
+      <td>0.887006</td>
+      <td>1407</td>
+      <td>1</td>
+      <td>0</td>
     </tr>
     <tr>
       <th>3</th>
@@ -997,18 +1005,20 @@ summary_df.loc[:, display_columns]
       <td>0.399994</td>
       <td>0.346832</td>
       <td>0.399994</td>
+      <td>0.365234</td>
       <td>0.343414</td>
       <td>83</td>
-      <td>45</td>
-      <td>83</td>
-      <td>280</td>
-      <td>134</td>
-      <td>280</td>
-      <td>1.457167e-14</td>
-      <td>2.033442e-14</td>
-      <td>1.575700e-14</td>
-      <td>7.522563e-02</td>
-      <td>0.225107</td>
+      <td>...</td>
+      <td>0.341270</td>
+      <td>0.160959</td>
+      <td>0.897959</td>
+      <td>0.284854</td>
+      <td>2</td>
+      <td>0.357143</td>
+      <td>0.915618</td>
+      <td>1106</td>
+      <td>0</td>
+      <td>0</td>
     </tr>
     <tr>
       <th>4</th>
@@ -1019,21 +1029,24 @@ summary_df.loc[:, display_columns]
       <td>0.410004</td>
       <td>0.354492</td>
       <td>0.410004</td>
+      <td>0.369812</td>
       <td>0.354004</td>
       <td>72</td>
-      <td>37</td>
-      <td>72</td>
-      <td>247</td>
-      <td>106</td>
-      <td>247</td>
-      <td>1.354748e-14</td>
-      <td>3.925603e-14</td>
-      <td>1.436830e-14</td>
-      <td>5.712710e-02</td>
-      <td>0.633985</td>
+      <td>...</td>
+      <td>0.339450</td>
+      <td>0.129032</td>
+      <td>0.879630</td>
+      <td>0.330020</td>
+      <td>2</td>
+      <td>0.348624</td>
+      <td>0.904429</td>
+      <td>1284</td>
+      <td>1</td>
+      <td>0</td>
     </tr>
   </tbody>
 </table>
+<p>5 rows × 39 columns</p>
 </div>
 
 
@@ -1062,6 +1075,101 @@ summary_df.loc[:, diagnostic_summary_columns].mean(numeric_only=True).to_frame(
     name="mean_over_cases"
 )
 ```
+
+
+
+
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>mean_over_cases</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>k_rel_diff_imported</th>
+      <td>0.000001</td>
+    </tr>
+    <tr>
+      <th>k_rel_diff_porespy</th>
+      <td>0.375629</td>
+    </tr>
+    <tr>
+      <th>k_rel_diff_maxball</th>
+      <td>0.150839</td>
+    </tr>
+    <tr>
+      <th>porespy_geom_pore_count_rel_diff</th>
+      <td>0.467732</td>
+    </tr>
+    <tr>
+      <th>porespy_geom_throat_count_rel_diff</th>
+      <td>0.370830</td>
+    </tr>
+    <tr>
+      <th>porespy_geom_coordination_ks</th>
+      <td>0.221289</td>
+    </tr>
+    <tr>
+      <th>porespy_geom_n_components</th>
+      <td>1.200000</td>
+    </tr>
+    <tr>
+      <th>maxball_geom_pore_count_rel_diff</th>
+      <td>0.344624</td>
+    </tr>
+    <tr>
+      <th>maxball_geom_throat_count_rel_diff</th>
+      <td>0.176251</td>
+    </tr>
+    <tr>
+      <th>maxball_geom_throat_radius_ks</th>
+      <td>0.846727</td>
+    </tr>
+    <tr>
+      <th>maxball_geom_coordination_ks</th>
+      <td>0.277771</td>
+    </tr>
+    <tr>
+      <th>maxball_geom_n_components</th>
+      <td>2.000000</td>
+    </tr>
+    <tr>
+      <th>maxball_geom_dead_end_fraction</th>
+      <td>0.360357</td>
+    </tr>
+    <tr>
+      <th>maxball_diag_assigned_void_fraction</th>
+      <td>0.901684</td>
+    </tr>
+    <tr>
+      <th>maxball_diag_zero_throat_region_count</th>
+      <td>0.600000</td>
+    </tr>
+    <tr>
+      <th>maxball_diag_internal_zero_throat_region_count</th>
+      <td>0.000000</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+
 
 ## Save derived comparison artifacts
 
@@ -1100,6 +1208,9 @@ summary_df.loc[:, maxball_step_diagnostic_columns].to_csv(
 )
 print("Saved:", maxball_diagnostics_csv)
 ```
+
+    Saved: /Users/dtvolpatto/Work/voids/docs/assets/verification/pnflow_maxball_step_diagnostics.csv
+
 
 
 ```python
