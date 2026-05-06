@@ -13,6 +13,7 @@ from voids.image.maximal_ball import (
     build_network_dict_from_maximal_ball_regions,
     build_maximal_ball_hierarchy,
     clip_distance_map_to_domain_boundaries,
+    compute_maximal_ball_radius_field,
     compute_void_distance_map,
     extract_maximal_ball_network_dict,
     extract_maximal_ball_regions,
@@ -43,6 +44,24 @@ def test_compute_void_distance_map_matches_expected_center_radius() -> None:
     assert distance_map.shape == void_phase_mask.shape
     assert distance_map[2, 2, 2] == pytest.approx(2.0)
     assert np.count_nonzero(distance_map) == 27
+
+
+def test_compute_maximal_ball_radius_field_matches_imperial_half_voxel_shift() -> None:
+    """The Imperial radius field should equal EDT minus half a voxel in the void."""
+
+    void_phase_mask = np.zeros((5, 5, 5), dtype=bool)
+    void_phase_mask[1:4, 1:4, 1:4] = True
+
+    radius_field = compute_maximal_ball_radius_field(
+        void_phase_mask,
+        backend="scipy",
+        mode="imperial_pnextract",
+    )
+
+    assert radius_field.shape == void_phase_mask.shape
+    assert radius_field[2, 2, 2] == pytest.approx(1.5)
+    assert radius_field[1, 1, 1] == pytest.approx(0.5)
+    assert np.count_nonzero(radius_field) == 27
 
 
 def test_resolve_maximal_ball_settings_matches_imperial_default_logic() -> None:
@@ -92,12 +111,36 @@ def test_find_maximal_ball_candidates_detects_single_center_peak() -> None:
     center_indices, radii_voxels, candidate_mask = find_maximal_ball_candidates(
         distance_map,
         minimal_radius_voxels=1.5,
+        selection_mode="local_maxima",
     )
 
     assert candidate_mask[2, 2, 2]
     assert center_indices.shape == (1, 3)
     assert np.array_equal(center_indices[0], np.array([2, 2, 2]))
     assert radii_voxels[0] == pytest.approx(2.0)
+
+
+def test_find_maximal_ball_candidates_threshold_mode_keeps_all_above_threshold_voxels() -> None:
+    """Threshold-all mode should keep every above-threshold voxel candidate."""
+
+    distance_map = np.array(
+        [
+            [0.0, 0.5, 0.0],
+            [0.7, 0.9, 0.7],
+            [0.0, 0.5, 0.0],
+        ]
+    )
+
+    center_indices, radii_voxels, candidate_mask = find_maximal_ball_candidates(
+        distance_map,
+        minimal_radius_voxels=0.6,
+        selection_mode="threshold_all",
+    )
+
+    assert candidate_mask.sum() == 3
+    assert center_indices.shape == (3, 2)
+    assert radii_voxels[0] == pytest.approx(0.9)
+    assert set(map(tuple, center_indices.tolist())) == {(1, 0), (1, 1), (1, 2)}
 
 
 def test_suppress_overlapping_maximal_balls_prefers_larger_candidates() -> None:

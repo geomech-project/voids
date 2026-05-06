@@ -33,6 +33,8 @@ class MaximalBallSettings:
     radius_smoothing_iterations: int = 3
     retention_radius_factor: float = 0.15
     retention_radius_offset_voxels: float | None = None
+    radius_field_mode: str = "imperial_pnextract"
+    candidate_selection_mode: str = "threshold_all"
 
 
 @dataclass(slots=True)
@@ -49,6 +51,8 @@ class ResolvedMaximalBallSettings:
     radius_smoothing_iterations: int
     retention_radius_factor: float
     retention_radius_offset_voxels: float
+    radius_field_mode: str
+    candidate_selection_mode: str
 
 
 @dataclass(slots=True)
@@ -224,6 +228,39 @@ def compute_void_distance_map(
     return np.asarray(ndi.distance_transform_edt(mask), dtype=float)
 
 
+def compute_maximal_ball_radius_field(
+    void_phase_mask: np.ndarray,
+    *,
+    backend: str = "auto",
+    mode: str = "imperial_pnextract",
+) -> np.ndarray:
+    """Compute the radius field used by the maximal-ball extractor.
+
+    Parameters
+    ----------
+    void_phase_mask :
+        Boolean array where ``True`` marks void voxels.
+    backend :
+        Distance-transform backend passed through to
+        :func:`compute_void_distance_map`.
+    mode :
+        Radius-field convention. ``"imperial_pnextract"`` reproduces the
+        checked Imperial radius semantics, which are the nearest non-void
+        Euclidean distance minus half a voxel. ``"edt"`` returns the plain
+        Euclidean distance map unchanged.
+    """
+
+    normalized_mode = str(mode).strip().lower()
+    if normalized_mode not in {"imperial_pnextract", "edt"}:
+        raise ValueError("mode must be one of {'imperial_pnextract', 'edt'}")
+
+    distance_map = compute_void_distance_map(void_phase_mask, backend=backend)
+    if normalized_mode == "edt":
+        return distance_map
+    radius_field = np.asarray(distance_map, dtype=float) - 0.5
+    return np.where(radius_field > 0.0, radius_field, 0.0)
+
+
 def resolve_maximal_ball_settings(
     distance_map: np.ndarray,
     settings: MaximalBallSettings | None = None,
@@ -265,6 +302,14 @@ def resolve_maximal_ball_settings(
         raise ValueError("retention_radius_offset_voxels must be positive")
     if raw_settings.radius_smoothing_iterations < 0:
         raise ValueError("radius_smoothing_iterations must be nonnegative")
+    radius_field_mode = str(raw_settings.radius_field_mode).strip().lower()
+    if radius_field_mode not in {"imperial_pnextract", "edt"}:
+        raise ValueError("radius_field_mode must be one of {'imperial_pnextract', 'edt'}")
+    candidate_selection_mode = str(raw_settings.candidate_selection_mode).strip().lower()
+    if candidate_selection_mode not in {"threshold_all", "local_maxima"}:
+        raise ValueError(
+            "candidate_selection_mode must be one of {'threshold_all', 'local_maxima'}"
+        )
 
     return ResolvedMaximalBallSettings(
         minimal_pore_radius_voxels=float(minimal_pore_radius_voxels),
@@ -277,6 +322,8 @@ def resolve_maximal_ball_settings(
         radius_smoothing_iterations=int(raw_settings.radius_smoothing_iterations),
         retention_radius_factor=float(raw_settings.retention_radius_factor),
         retention_radius_offset_voxels=float(retention_radius_offset_voxels),
+        radius_field_mode=radius_field_mode,
+        candidate_selection_mode=candidate_selection_mode,
     )
 
 
@@ -325,8 +372,9 @@ def find_maximal_ball_candidates(
     *,
     minimal_radius_voxels: float,
     footprint: np.ndarray | None = None,
+    selection_mode: str = "local_maxima",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Find local-maximal ball candidates from a void-space distance map."""
+    """Find maximal-ball candidates from a radius field."""
 
     if minimal_radius_voxels <= 0.0:
         raise ValueError("minimal_radius_voxels must be positive")
@@ -335,18 +383,21 @@ def find_maximal_ball_candidates(
     if working_distance_map.ndim not in {2, 3}:
         raise ValueError("distance_map must be a 2D or 3D array")
 
-    if footprint is None:
-        footprint = np.ones((3,) * working_distance_map.ndim, dtype=bool)
-    local_maxima = ndi.maximum_filter(
-        working_distance_map,
-        footprint=footprint,
-        mode="nearest",
-    )
-    candidate_mask = (
-        (working_distance_map > 0.0)
-        & (working_distance_map >= minimal_radius_voxels)
-        & np.isclose(working_distance_map, local_maxima)
-    )
+    normalized_selection_mode = str(selection_mode).strip().lower()
+    if normalized_selection_mode not in {"threshold_all", "local_maxima"}:
+        raise ValueError("selection_mode must be one of {'threshold_all', 'local_maxima'}")
+
+    candidate_mask = (working_distance_map > 0.0) & (working_distance_map >= minimal_radius_voxels)
+    if normalized_selection_mode == "local_maxima":
+        if footprint is None:
+            footprint = np.ones((3,) * working_distance_map.ndim, dtype=bool)
+        local_maxima = ndi.maximum_filter(
+            working_distance_map,
+            footprint=footprint,
+            mode="nearest",
+        )
+        candidate_mask &= np.isclose(working_distance_map, local_maxima)
+
     center_indices = np.argwhere(candidate_mask)
     candidate_radii = working_distance_map[candidate_mask]
     if center_indices.size == 0:
@@ -2061,8 +2112,13 @@ def extract_maximal_ball_candidates(
 ) -> MaximalBallCandidates:
     """Compute and suppress maximal-ball candidates for a void-phase image."""
 
-    distance_map = compute_void_distance_map(void_phase_mask, backend=distance_map_backend)
-    resolved_settings = resolve_maximal_ball_settings(distance_map, settings)
+    raw_settings = settings or MaximalBallSettings()
+    distance_map = compute_maximal_ball_radius_field(
+        void_phase_mask,
+        backend=distance_map_backend,
+        mode=raw_settings.radius_field_mode,
+    )
+    resolved_settings = resolve_maximal_ball_settings(distance_map, raw_settings)
     working_distance_map = (
         clip_distance_map_to_domain_boundaries(distance_map, settings=resolved_settings)
         if apply_boundary_clipping
@@ -2071,6 +2127,7 @@ def extract_maximal_ball_candidates(
     center_indices, radii_voxels, candidate_mask = find_maximal_ball_candidates(
         working_distance_map,
         minimal_radius_voxels=resolved_settings.minimal_pore_radius_voxels,
+        selection_mode=resolved_settings.candidate_selection_mode,
     )
     retained_mask = suppress_overlapping_maximal_balls(
         center_indices,
@@ -2101,6 +2158,7 @@ __all__ = [
     "build_network_dict_from_maximal_ball_regions",
     "build_maximal_ball_hierarchy",
     "clip_distance_map_to_domain_boundaries",
+    "compute_maximal_ball_radius_field",
     "compute_void_distance_map",
     "extract_maximal_ball_network_dict",
     "extract_maximal_ball_regions",
