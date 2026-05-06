@@ -35,8 +35,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from voids.image import extract_spanning_pore_network
-from voids.io import load_pnflow_cnm
+from voids.image import construct_spanning_network
 from voids.paths import data_path, project_root
 from voids.physics.petrophysics import absolute_porosity, effective_porosity
 from voids.physics.singlephase import (
@@ -130,8 +129,9 @@ def _run_voids_from_volume_case(
     fluid: FluidSinglePhase,
     options: SinglePhaseOptions,
 ) -> dict[str, float | int]:
-    extract = extract_spanning_pore_network(
-        volume.astype(int),
+    construction = construct_spanning_network(
+        backend="porespy",
+        phases=volume.astype(int),
         voxel_size=voxel_size,
         flow_axis=flow_axis,
         provenance_notes={"benchmark_kind": "external_pnflow_reference"},
@@ -143,7 +143,7 @@ def _run_voids_from_volume_case(
         pout=0.0,
     )
     result = solve(
-        extract.net,
+        construction.net,
         fluid=fluid,
         bc=bc,
         axis=flow_axis,
@@ -151,10 +151,12 @@ def _run_voids_from_volume_case(
     )
     return {
         "phi_image": float(np.asarray(volume, dtype=bool).mean()),
-        "phi_abs_porespy_voids": float(absolute_porosity(extract.net)),
-        "phi_eff_porespy_voids": float(effective_porosity(extract.net, axis=flow_axis)),
-        "Np_porespy_voids": int(extract.net.Np),
-        "Nt_porespy_voids": int(extract.net.Nt),
+        "phi_abs_porespy_voids": float(absolute_porosity(construction.net)),
+        "phi_eff_porespy_voids": float(
+            effective_porosity(construction.net, axis=flow_axis)
+        ),
+        "Np_porespy_voids": int(construction.net.Np),
+        "Nt_porespy_voids": int(construction.net.Nt),
         "k_porespy_voids": float(result.permeability[flow_axis]),
         "Q_porespy_voids": float(result.total_flow_rate),
     }
@@ -167,7 +169,12 @@ def _run_voids_on_imported_cnm_case(
     fluid: FluidSinglePhase,
     options: SinglePhaseOptions,
 ) -> dict[str, float | int]:
-    imported = load_pnflow_cnm(prefix)
+    construction = construct_spanning_network(
+        backend="pnflow_cnm",
+        pnflow_cnm_prefix=prefix,
+        flow_axis=flow_axis,
+        provenance_notes={"benchmark_kind": "external_pnflow_reference"},
+    )
     bc = PressureBC(
         f"inlet_{flow_axis}min",
         f"outlet_{flow_axis}max",
@@ -175,21 +182,23 @@ def _run_voids_on_imported_cnm_case(
         pout=0.0,
     )
     result = solve(
-        imported.net,
+        construction.net,
         fluid=fluid,
         bc=bc,
         axis=flow_axis,
         options=options,
     )
     return {
-        "phi_abs_imported_voids": float(absolute_porosity(imported.net)),
+        "phi_abs_imported_voids": float(absolute_porosity(construction.net)),
         "phi_eff_imported_voids": float(
-            effective_porosity(imported.net, axis=flow_axis)
+            effective_porosity(construction.net, axis=flow_axis)
         ),
-        "Np_imported_physical": int(imported.n_physical_pores),
-        "Np_imported_total": int(imported.net.Np),
-        "Np_imported_boundary_mirror": int(imported.n_boundary_mirror_pores),
-        "Nt_imported_voids": int(imported.net.Nt),
+        "Np_imported_physical": int(construction.backend_details["n_physical_pores"]),
+        "Np_imported_total": int(construction.net.Np),
+        "Np_imported_boundary_mirror": int(
+            construction.backend_details["n_boundary_mirror_pores"]
+        ),
+        "Nt_imported_voids": int(construction.net.Nt),
         "k_imported_voids": float(result.permeability[flow_axis]),
         "Q_imported_voids": float(result.total_flow_rate),
     }
