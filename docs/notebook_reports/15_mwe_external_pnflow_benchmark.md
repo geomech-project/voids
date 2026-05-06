@@ -934,9 +934,6 @@ display_columns = [
 summary_df.loc[:, display_columns]
 ```
 
-    OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
-
-
 
 
 
@@ -1169,7 +1166,7 @@ summary_df.loc[:, diagnostic_summary_columns].mean(numeric_only=True).to_frame(
     </tr>
     <tr>
       <th>k_rel_diff_maxball</th>
-      <td>0.150839</td>
+      <td>0.149495</td>
     </tr>
     <tr>
       <th>porespy_geom_pore_count_rel_diff</th>

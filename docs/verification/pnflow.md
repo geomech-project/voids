@@ -197,11 +197,11 @@ instrumented `pnextract` voxel-region outputs.
 
 | Case | `K_imported` [m^2] | `K_pnflow` [m^2] | Imported rel. diff. [%] | `K_snow2` [m^2] | `snow2` rel. diff. [%] | `K_maxball` [m^2] | maxball rel. diff. [%] |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `phi032_b14` | `9.752e-15` | `9.752e-15` | `0.000024` | `6.097e-15` | `37.48` | `1.014e-14` | `3.86` |
-| `phi035_b16` | `1.332e-14` | `1.332e-14` | `0.000031` | `1.702e-14` | `21.76` | `1.081e-14` | `18.87` |
-| `phi038_b18` | `1.199e-14` | `1.199e-14` | `0.000235` | `2.092e-14` | `42.67` | `1.025e-14` | `14.51` |
-| `phi040_b18` | `1.576e-14` | `1.576e-14` | `0.000301` | `2.033e-14` | `22.51` | `1.920e-14` | `17.94` |
-| `phi041_b20` | `1.437e-14` | `1.437e-14` | `0.000125` | `3.926e-14` | `63.40` | `1.801e-14` | `20.24` |
+| `phi032_b14` | `9.752e-15` | `9.752e-15` | `0.000024` | `6.097e-15` | `37.48` | `1.016e-14` | `4.00` |
+| `phi035_b16` | `1.332e-14` | `1.332e-14` | `0.000031` | `1.702e-14` | `21.76` | `1.084e-14` | `18.64` |
+| `phi038_b18` | `1.199e-14` | `1.199e-14` | `0.000235` | `2.092e-14` | `42.67` | `1.023e-14` | `14.68` |
+| `phi040_b18` | `1.576e-14` | `1.576e-14` | `0.000301` | `2.033e-14` | `22.51` | `1.909e-14` | `17.45` |
+| `phi041_b20` | `1.437e-14` | `1.437e-14` | `0.000125` | `3.926e-14` | `63.40` | `1.796e-14` | `19.98` |
 
 Summary statistics for this five-case set:
 
@@ -209,8 +209,8 @@ Summary statistics for this five-case set:
 - imported-CNM maximum relative permeability difference: `0.000301 %`
 - `snow2` mean relative permeability difference: `37.56 %`
 - `snow2` maximum relative permeability difference: `63.40 %`
-- native maximal-ball mean relative permeability difference: `15.08 %`
-- native maximal-ball maximum relative permeability difference: `20.24 %`
+- native maximal-ball mean relative permeability difference: `14.95 %`
+- native maximal-ball maximum relative permeability difference: `19.98 %`
 - imported-CNM physical pore counts match the saved `pnflow` pore counts on all
   five cases
 - imported-CNM throat counts match the saved `pnflow` throat counts on all five
@@ -224,8 +224,11 @@ Summary statistics for this five-case set:
 - the native maximal-ball branch now uses explicit helper boundary pores on the
   flow axis; this avoids imposing Dirichlet pressure directly at internal pore
   centers
+- native maximal-ball conduit lengths are anchored on the ordered pair's second
+  interface-supporting ball, matching the reference writer's use of its
+  second-side throat ball when computing pore-to-throat lengths
 
-Those last three points are the key outcome of the investigation: once the same
+Together, these checks are the key outcome of the investigation: once the same
 reduced network and the checked-in `pnflow` preprocessing are used, the
 single-phase `voids` solve agrees with `pnflow` to plotting precision. The
 remaining mismatch is therefore dominated by image-to-network extraction and
@@ -238,7 +241,7 @@ connections and `77-80 %` of reference physical connections by voxel-region
 overlap. On those matched physical throats, median radius differences are only
 about `0.4-0.6 %`, but median area differences are about `30-34 %`, median
 shape-factor differences are about `29 %`, and median equivalent-conductance
-differences are about `26-37 %`. This points to conduit cross-section and
+differences are about `27-37 %`. This points to conduit cross-section and
 shape-factor reduction as the main remaining target.
 
 The checked `pnextract` writer computes throat shape factors from
@@ -253,6 +256,13 @@ convention alone did not improve the end-to-end permeability error. This
 indicates that the remaining `pnextract` details, such as throat-surface ball
 selection, oriented cross-area, and exported/raw throat-radius semantics, must
 be matched together rather than one scalar convention at a time.
+
+The one reference-logic change promoted to the default is the throat-length
+anchor: the native maximal-ball builder now uses the second side of each
+ordered region pair rather than whichever side has the larger supporting
+radius. On the five committed cases this slightly reduced the native
+maximal-ball mean relative permeability difference, but the change was adopted
+primarily because it matches the reference length construction.
 
 We also tested a dependency-free internal approximation mode exposed as
 `backend="porespy_imperial"`. This still uses `snow2`, but starts from a
