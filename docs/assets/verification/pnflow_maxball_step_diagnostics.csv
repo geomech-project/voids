@@ -1,0 +1,6 @@
+case,maxball_diag_retained_ball_count,maxball_diag_root_region_count,maxball_diag_occupied_region_count,maxball_diag_assigned_void_fraction,maxball_diag_unassigned_void_voxel_count,maxball_diag_zero_throat_region_count,maxball_diag_internal_zero_throat_region_count,maxball_diag_boundary_zero_throat_region_count,maxball_diag_touch_radius_side1_mean_voxels,maxball_diag_touch_radius_side2_mean_voxels,maxball_diag_refined_support_radius_side1_mean_voxels,maxball_diag_refined_support_radius_side2_mean_voxels
+phi032_b14,139,81,81,0.9103566660308984,940,1,0,1,0.5,0.5075311556795108,0.5,0.5075311556795108
+phi035_b16,92,69,69,0.8910105501787426,1250,0,0,0,0.5,0.5025727550457956,0.5,0.5025727550457956
+phi038_b18,92,69,69,0.8870061034371989,1407,1,0,1,0.5,0.5,0.5,0.5
+phi040_b18,106,82,82,0.9156176089112688,1106,0,0,0,0.5,0.5016975965671029,0.5,0.5016975965671029
+phi041_b20,96,73,73,0.9044287309266841,1284,1,0,1,0.5039076751167273,0.5019538375583636,0.5039076751167273,0.5019538375583636

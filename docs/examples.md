@@ -46,7 +46,7 @@ In practice:
 | `12_mwe_synthetic_volume_openpnm_benchmark` | Benchmark extracted-volume transport against OpenPNM |
 | `13_mwe_synthetic_volume_xlb_benchmark` | Benchmark direct-image LBM transport against extracted-network PNM |
 | `14_mwe_shape_factor_conductance_comparison` | Compare conductance closures and shape-factor sensitivity |
-| `15_mwe_external_pnflow_benchmark` | Compare `voids` against a committed external `pnextract` / `pnflow` reference |
+| `15_mwe_external_pnflow_benchmark` | Compare `voids` against a committed external reference CNM workflow |
 | `16_mwe_viscosity_model_kabs_benchmark` | Quantify `Kabs` drift under constant vs thermodynamic viscosity |
 | `17_mwe_solver_options_benchmark` | Compare direct, Krylov, nonlinear, and preconditioned solver choices |
 | `18_mwe_drp317_berea_raw_porosity_perm` | Validate the DRP-317 Berea case against experimental porosity and permeability |
@@ -62,7 +62,7 @@ In practice:
 | `28_mwe_drp317_parker_raw_porosity_perm` | Run the DRP-317 Parker raw-volume workflow against the Table 1 experimental references |
 | `29_mwe_drp443_ifn_raw_porosity_perm` | Benchmark DRP-443 IFN fractured-media permeability against SPE 212849 Table 2 (LBM reference) |
 | `30_mwe_drp443_dilatedifn_raw_porosity_perm` | Benchmark DRP-443 Dilated IFN fractured-media permeability against SPE 212849 Table 2 (LBM reference) |
-| `31_mwe_drp10_estaillades_raw_porosity_perm` | Benchmark DRP-10 Estaillades v2 carbonate permeability against Muljadi et al. (2016) Table 2 (OpenFOAM reference) |
+| `31_mwe_drp10_estaillades_raw_porosity_perm` | Benchmark DRP-10 Estaillades v2 carbonate permeability and extraction-backend sensitivity against Muljadi et al. (2016) Table 2 (OpenFOAM reference) |
 
 ---
 
@@ -214,20 +214,25 @@ The corresponding narrative report is documented in
 
 ---
 
-### 15 — External `pnextract` / `pnflow` Benchmark
+### 15 — External Reference CNM Benchmark
 
 **`15_mwe_external_pnflow_benchmark`**
 
-Loads a committed reference dataset produced earlier with external `pnextract`
-and `pnflow`, reruns the current `voids` workflow on the same exact saved
-binary volumes, and compares permeability, porosity, and extracted-network
-size.
+Loads a committed external reference dataset, reruns the current `voids`
+workflow on the same exact saved binary volumes, and compares permeability,
+porosity, and extracted-network size.
+
+The notebook now separates two questions explicitly:
+
+- imported-CNM parity, using the saved external network with
+  a benchmark-specific compatibility switch enabled
+- full workflow mismatch, using `snow2` on the original saved binary image
 
 This is the notebook to use when the scientific question is whether the current
 `voids` image-to-network workflow tracks an independent external PNM workflow
 closely enough on controlled synthetic cases.
 The corresponding narrative report is documented in
-[Verification & Validation / Verification / External pnextract / pnflow Benchmark](verification/pnflow.md).
+[Verification & Validation / Verification / External Reference CNM Benchmark](verification/pnflow.md).
 
 ---
 
@@ -341,7 +346,11 @@ The corresponding report is documented in
 **`31_mwe_drp10_estaillades_raw_porosity_perm`**
 
 This notebook benchmarks `voids` on the DRP-10 Estaillades v2 carbonate volume
-using porosity and permeability references from Muljadi et al. (2016).
+using porosity and permeability references from Muljadi et al. (2016). It uses
+the native maximal-ball extractor as the primary workflow, then compares it
+against PoreSpy `snow2` default settings and a compatibility-repaired `snow2`
+configuration. The notebook solves `Kx`, `Ky`, and `Kz` for each backend and
+exports directional and mean-`Kabs` CSV summaries.
 
 The corresponding report is documented in
 [Verification & Validation / Verification / DRP-10 Estaillades Verification Overview](verification/drp10.md).
@@ -376,8 +385,8 @@ The DRP-317 experimental-comparison notebooks are documented separately under
 are written as experimental-validation reports rather than as frozen rendered
 notebook outputs.
 
-- [Notebook Reports Overview](notebook_reports/index.md)
+- [Notebook Reports Overview](notebook_reports/index.md) under the `Examples` navigation group
 - [14 — Shape-Factor Conductance Comparison](notebook_reports/14_mwe_shape_factor_conductance_comparison.md)
-- [15 — External `pnextract` / `pnflow` Benchmark](notebook_reports/15_mwe_external_pnflow_benchmark.md)
+- [15 — External Reference CNM Benchmark](notebook_reports/15_mwe_external_pnflow_benchmark.md)
 - [16 — `Kabs` Benchmark: Constant vs Thermodynamic Viscosity](notebook_reports/16_mwe_viscosity_model_kabs_benchmark.md)
 - [17 — Solver Options Benchmark](notebook_reports/17_mwe_solver_options_benchmark.md)

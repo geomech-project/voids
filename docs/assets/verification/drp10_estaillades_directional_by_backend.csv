@@ -1,0 +1,10 @@
+backend,backend_label,axis,k_m2,k_mD,n_pores,n_throats,conductance_model
+imperial_snow2,Imperial-style snow2,x,1.2032935244163911e-13,121.92371224961363,3132.0,5399.0,valvatne_blunt
+imperial_snow2,Imperial-style snow2,y,1.7678347775451546e-14,17.91258527937434,3132.0,5399.0,valvatne_blunt
+imperial_snow2,Imperial-style snow2,z,9.123609519381998e-14,92.44497033743147,3132.0,5399.0,valvatne_blunt
+native_maximal_ball,Native maximal-ball,x,3.6500236349334396e-13,369.83863233682285,2477.0,4392.0,valvatne_blunt
+native_maximal_ball,Native maximal-ball,y,5.960562776519048e-14,60.395400296244375,2477.0,4392.0,valvatne_blunt
+native_maximal_ball,Native maximal-ball,z,1.8741501842045297e-13,189.8982610102051,2477.0,4392.0,valvatne_blunt
+snow2,PoreSpy snow2 defaults,x,1.853494222906327e-13,187.80529580224996,4705.0,8524.0,valvatne_blunt
+snow2,PoreSpy snow2 defaults,y,2.0848416250462383e-14,21.12465705335195,4705.0,8524.0,valvatne_blunt
+snow2,PoreSpy snow2 defaults,z,9.686748195665609e-14,98.15097278244022,4705.0,8524.0,valvatne_blunt

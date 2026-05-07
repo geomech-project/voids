@@ -147,6 +147,33 @@ def test_from_porespy_imperial_export_repairs_shape_factors_and_recomputes_pore_
     assert net.extra["geometry_repairs"]["pore_shape_factor_weighted"] is True
 
 
+def test_from_porespy_imperial_export_can_use_separate_shape_factor_radius() -> None:
+    """Shape-factor radius should not overwrite the exported inscribed radius."""
+
+    d = {
+        "pore.coords": np.array([[0, 0, 0], [1, 0, 0]], dtype=float),
+        "throat.conns": np.array([[0, 1]], dtype=int),
+        "pore.radius_inscribed": np.array([2.0, 2.0]),
+        "throat.radius_inscribed": np.array([2.0]),
+        "throat.shape_factor_radius": np.array([1.0]),
+        "throat.area": np.array([2.0]),
+        "throat.total_length": np.array([1.0]),
+    }
+
+    net = from_porespy(
+        d,
+        sample=SampleGeometry(bulk_volume=10.0),
+        geometry_repairs="imperial_export",
+        repair_seed=0,
+    )
+
+    assert net.throat["shape_factor"][0] == pytest.approx(0.0625)
+    assert net.throat["area"][0] == pytest.approx(16.0)
+    assert net.throat["radius_inscribed"][0] == pytest.approx(2.0)
+    assert net.throat["shape_factor_radius"][0] == pytest.approx(1.0)
+    assert net.extra["geometry_repairs"]["throat_shape_factor_source"] == "shape_factor_radius_area"
+
+
 def test_from_porespy_accepts_legacy_geometry_repairs_alias_with_deprecation_warning() -> None:
     """Legacy repair-mode names should remain usable with a deprecation warning."""
 
@@ -379,6 +406,24 @@ def test_imperial_repairs_raises_on_invalid_throat_area(bad_area: float) -> None
         "area": np.array([1.0, bad_area]),
     }
     with pytest.raises(ValueError, match="throat area values must be positive and finite"):
+        _apply_imperial_export_geometry_repairs(
+            pore_data={},
+            throat_data=throat_data,
+            throat_conns=np.array([[0, 1], [1, 2]]),
+            num_pores=3,
+            random_seed=0,
+        )
+
+
+@pytest.mark.parametrize("bad_radius", [0.0, -1.0, float("nan"), float("inf")])
+def test_imperial_repairs_raises_on_invalid_shape_factor_radius(bad_radius: float) -> None:
+    """Test invalid shape-factor radius rejection when deriving throat shape factor."""
+
+    throat_data = {
+        "shape_factor_radius": np.array([1.0, bad_radius]),
+        "area": np.array([1.0, 1.0]),
+    }
+    with pytest.raises(ValueError, match="throat shape-factor radius values"):
         _apply_imperial_export_geometry_repairs(
             pore_data={},
             throat_data=throat_data,

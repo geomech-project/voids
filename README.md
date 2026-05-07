@@ -178,7 +178,7 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
 - `14_mwe_shape_factor_conductance_comparison`
   - synthetic and extracted-network comparison of conductance closures (`generic_poiseuille`, `valvatne_blunt_throat`, and `valvatne_blunt`) and permeability sensitivity to shape factors
 - `15_mwe_external_pnflow_benchmark`
-  - committed external `pnextract`/`pnflow` reference cases compared against the current `voids` extraction + solve workflow
+  - committed external `pnextract`/`pnflow` reference cases, including explicit same-network parity on the saved CNM and a separate `snow2` workflow comparison on the original images
 - `16_mwe_viscosity_model_kabs_benchmark`
   - benchmark of `Kabs` using constant viscosity versus pressure-dependent thermodynamic viscosity
 - `17_mwe_solver_options_benchmark`
@@ -271,6 +271,17 @@ pixi run bump-version <new-version>
 `voids` is still pre-alpha. The codebase is already useful for controlled PNM experiments,
 solver validation, and interoperability studies, but it should not be described as a
 complete pore-network simulation platform yet.
+
+## AI Usage Statement
+
+Starting with `v0.1.7`, `voids` development is aided by AI tools, including
+Codex and GitHub Copilot. These tools are used to assist with refactoring,
+fast code changes, code review, and documentation writing.
+
+All scientific choices, implementation decisions, and final content remain
+under human review and responsibility. This statement is intended as a
+transparency measure aligned with current scientific-integrity expectations for
+AI-assisted research and software development.
 
 ## Institutional Support
 

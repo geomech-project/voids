@@ -21,10 +21,10 @@ Current studies:
   machine-precision regime when both solve the same extracted network with the
   same throat conductances and the same pressure boundary conditions.
 
-- [External `pnextract` / `pnflow` benchmark](pnflow.md)
-  This report compares `voids` against a fixed external reference dataset
-  generated with `pnextract` and `pnflow`, so the mismatch includes extraction
-  and constitutive-model differences rather than just solver differences.
+- [External reference CNM benchmark](pnflow.md)
+  This report compares `voids` against a fixed external reference dataset. It
+  now cleanly separates same-network imported-CNM parity from the larger
+  image-to-network extraction gap.
 
 - [XLB direct-image permeability benchmark](xlb.md)
   This report includes the implemented LBM formulation, the permeability
@@ -44,7 +44,7 @@ The current studies answer different questions:
 | Reference | Geometry seen by reference | Main question | Expected agreement |
 |---|---|---|---|
 | OpenPNM | Same extracted network as `voids` | Are export/import, BC handling, and solver assembly consistent? | Machine precision |
-| `pnextract` + `pnflow` | Independently extracted pore network | How different is the current `voids` image-to-network workflow from an external PNM workflow? | Moderate mismatch is expected |
+| External reference CNM workflow | Saved external CNM plus original voxel image | Does `voids` match the saved single-phase solve on the same CNM, and how large is the remaining extraction gap from the image workflow? | Near machine precision on imported CNM; moderate mismatch for image re-extraction |
 | XLB | Original voxel image | How different is extracted-network PNM from a direct-image voxel-scale reference? | Larger morphology-dependent mismatch is expected |
 | DRP-443 paper reference | Published LBM simulation outputs | Does the current workflow reproduce paper-scale directional permeability trends on fractured-media volumes? | Moderate mismatch is expected |
 | DRP-10 paper reference | Published OpenFOAM simulation outputs | Does the current workflow reproduce paper porosity/permeability on the Estaillades volume? | Moderate mismatch is expected |

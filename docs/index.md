@@ -46,10 +46,12 @@ If you are new to the project, the shortest useful path is:
 1. [Getting Started](getting_started.md) for installation and the minimal solve
 2. [Concepts and Conventions](concepts.md) for the canonical data model and units
 3. [Scientific Workflow](workflow.md) for image-based or imported-network studies
-4. [Theoretical Background](background.md) for governing equations and assumptions
-5. [Examples](examples.md) for notebook-scale workflows
-6. [Verification & Validation](verification/index.md) for benchmark evidence
-7. [API Reference](api/index.md) for callable details
+4. [Image Segmentation & Network Extraction](image_segmentation_network_extraction.md)
+   for the segmented-image-to-network pipeline
+5. [Theoretical Background](background.md) for governing equations and assumptions
+6. [Examples](examples.md) for notebook-scale workflows
+7. [Verification & Validation](verification/index.md) for benchmark evidence
+8. [API Reference](api/index.md) for callable details
 
 ---
 
@@ -93,6 +95,26 @@ Those two goals are intentionally separated across the documentation tree:
 
 ---
 
+## Other User-Facing Capabilities
+
+Some parts of `voids` were already implemented but easier to miss in the previous
+docs structure because they mostly appeared under the API reference. The most
+important ones are:
+
+- [I/O](api/io.md): HDF5 persistence and import/export helpers for canonical
+  and external network formats
+- [Image Processing](api/image.md): segmentation helpers, spanning-cluster
+  checks, and the native maximal-ball extraction backend
+- [Generators](api/generators.md) and [Examples API](api/examples.md): synthetic
+  porous images, deterministic network generators, and mesh-like fixtures
+- [Visualization](api/visualization.md): Plotly and PyVista rendering for
+  inspection and communication
+- [Benchmarks](api/benchmarks.md): reusable wrappers for OpenPNM, segmented
+  volume, and XLB cross-check workflows
+- [Simulators](api/simulators.md): ready-to-run single-phase workflow entry points
+
+---
+
 ## Current Scope (v0.1.x)
 
 | Feature | Status |
@@ -112,7 +134,8 @@ Those two goals are intentionally separated across the documentation tree:
 | Plotly and PyVista visualization | ✅ |
 | OpenPNM cross-checks | ✅ |
 | Multiphase flow | ❌ Not yet |
-| Image segmentation | ❌ Delegated to PoreSpy |
+| Basic grayscale thresholding and cylindrical crop preprocessing | ✅ |
+| Advanced CT segmentation and manual/ML cleanup | ❌ Upstream preprocessing task |
 
 ---
 
@@ -152,6 +175,19 @@ provenance before solving.
 `voids` is pre-alpha. The codebase is already useful for controlled PNM experiments,
 solver validation, and interoperability studies, but it should not be described as a
 complete pore-network simulation platform yet.
+
+---
+
+## AI Usage Statement
+
+Starting with `v0.1.7`, `voids` development is aided by AI tools, including
+Codex and GitHub Copilot. These tools are used to assist with refactoring,
+fast code changes, code review, and documentation writing.
+
+All scientific choices, implementation decisions, and final content remain
+under human review and responsibility. This statement is intended as a
+transparency measure aligned with current scientific-integrity expectations for
+AI-assisted research and software development.
 
 ---
 

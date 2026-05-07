@@ -27,6 +27,8 @@ classifiers = [
 dependencies = [
   "numpy>=1.26,<2.2",
   "scipy>=1.11",
+  "edt>=3.0",
+  "numba>=0.60",
   "scikit-image>=0.22",
   "porespy>=2.4",
   "openpnm>=3.6,<3.7",
@@ -89,3 +91,8 @@ include = ["voids*"]
 minversion = "8.0"
 addopts = "-ra"
 testpaths = ["tests"]
+
+[tool.coverage.report]
+exclude_also = [
+    '@(?:numba\.)?(?:njit|jit|vectorize|guvectorize)\b',
+]

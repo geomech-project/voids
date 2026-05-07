@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from voids.examples.demo import make_linear_chain_network
 from voids.geom import (
     area_equivalent_diameter,
     characteristic_size,
@@ -355,6 +356,384 @@ def test_extract_spanning_pore_network_forwards_extraction_kwargs(
     assert result.net.Np >= 1
     assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=int))
     assert captured["kwargs"] == {"sigma": 0.5}
+
+
+def test_extract_network_dict_forwards_native_maximal_ball_threading_and_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native backend dispatch should forward EDT threading and normalized settings."""
+
+    captured: dict[str, object] = {}
+
+    class FakeExtractionResult:
+        def __init__(self) -> None:
+            self.network_dict = {
+                "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+                "throat.conns": np.array([[0, 1]], dtype=int),
+            }
+
+    def fake_extract_maximal_ball_network_dict(
+        phases,
+        *,
+        voxel_size,
+        distance_map_backend,
+        edt_parallel_threads,
+        settings,
+        apply_boundary_clipping,
+        flow_boundary_mode,
+        boundary_axis,
+        boundary_length_epsilon,
+        boundary_radius_scale,
+        throat_area_mode,
+        throat_shape_factor_radius_mode,
+        throat_anchor_mode,
+    ):
+        captured["phases"] = phases
+        captured["voxel_size"] = voxel_size
+        captured["distance_map_backend"] = distance_map_backend
+        captured["edt_parallel_threads"] = edt_parallel_threads
+        captured["settings"] = settings
+        captured["apply_boundary_clipping"] = apply_boundary_clipping
+        captured["flow_boundary_mode"] = flow_boundary_mode
+        captured["boundary_axis"] = boundary_axis
+        captured["boundary_length_epsilon"] = boundary_length_epsilon
+        captured["boundary_radius_scale"] = boundary_radius_scale
+        captured["throat_area_mode"] = throat_area_mode
+        captured["throat_shape_factor_radius_mode"] = throat_shape_factor_radius_mode
+        captured["throat_anchor_mode"] = throat_anchor_mode
+        return FakeExtractionResult()
+
+    monkeypatch.setattr(
+        nex, "extract_maximal_ball_network_dict", fake_extract_maximal_ball_network_dict
+    )
+
+    network_dict = nex._extract_network_dict(
+        np.ones((2, 2, 2), dtype=int),
+        backend="native_maximal_ball",
+        voxel_size=1.5,
+        extraction_kwargs={
+            "distance_map_backend": "edt",
+            "edt_parallel_threads": "7",
+            "settings": {"minimal_pore_radius_voxels": 1.0},
+            "apply_boundary_clipping": False,
+            "flow_boundary_mode": "direct",
+            "boundary_length_epsilon": "1e-12",
+            "boundary_radius_scale": "1.25",
+            "throat_area_mode": "face_count",
+            "throat_shape_factor_radius_mode": "inscribed",
+            "throat_anchor_mode": "second_side",
+        },
+        flow_axis="x",
+    )
+
+    assert set(network_dict) == {"pore.coords", "throat.conns"}
+    assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=bool))
+    assert captured["voxel_size"] == pytest.approx(1.5)
+    assert captured["distance_map_backend"] == "edt"
+    assert captured["edt_parallel_threads"] == 7
+    assert isinstance(captured["settings"], nex.MaximalBallSettings)
+    assert captured["apply_boundary_clipping"] is False
+    assert captured["flow_boundary_mode"] == "direct"
+    assert captured["boundary_axis"] == "x"
+    assert captured["boundary_length_epsilon"] == pytest.approx(1.0e-12)
+    assert captured["boundary_radius_scale"] == pytest.approx(1.25)
+    assert captured["throat_area_mode"] == "face_count"
+    assert captured["throat_shape_factor_radius_mode"] == "inscribed"
+    assert captured["throat_anchor_mode"] == "second_side"
+
+
+def test_extract_network_dict_rejects_invalid_native_maximal_ball_kwargs() -> None:
+    """Native backend dispatch should fail clearly on invalid settings or stray kwargs."""
+
+    with pytest.raises(TypeError, match="maximal-ball extraction settings must be"):
+        nex._extract_network_dict(
+            np.ones((2, 2, 2), dtype=int),
+            backend="native_maximal_ball",
+            voxel_size=1.0,
+            extraction_kwargs={"settings": 3.14},
+            flow_axis="x",
+        )
+
+    with pytest.raises(ValueError, match="Unexpected extraction_kwargs for backend='maximal_ball'"):
+        nex._extract_network_dict(
+            np.ones((2, 2, 2), dtype=int),
+            backend="native_maximal_ball",
+            voxel_size=1.0,
+            extraction_kwargs={"unexpected_key": True},
+            flow_axis="x",
+        )
+
+
+def test_extract_network_dict_asserts_on_unhandled_normalized_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The private dispatcher should guard against impossible backend normalization drift."""
+
+    monkeypatch.setattr(nex, "_normalize_extraction_backend", lambda backend: "unexpected_backend")
+
+    with pytest.raises(AssertionError, match="Unhandled normalized backend"):
+        nex._extract_network_dict(
+            np.ones((2, 2, 2), dtype=int),
+            backend="porespy",
+            voxel_size=1.0,
+            extraction_kwargs=None,
+            flow_axis="x",
+        )
+
+
+def test_normalize_construction_backend_rejects_unsupported_backend() -> None:
+    """Construction backend normalization should reject unsupported backend names."""
+
+    with pytest.raises(ValueError, match="Unsupported construction backend"):
+        nex._normalize_construction_backend("unsupported_backend")
+
+
+def test_extract_spanning_pore_network_applies_imperial_snow2_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The calibrated Imperial-style alias should inject benchmark-tuned defaults."""
+
+    captured: dict[str, object] = {}
+
+    def fake_snow2(phases, *, snow2_kwargs):
+        captured["phases"] = phases
+        captured["kwargs"] = snow2_kwargs
+        return {
+            "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+            "throat.conns": np.array([[0, 1]], dtype=int),
+            "pore.xmin": np.array([True, False], dtype=bool),
+            "pore.xmax": np.array([False, True], dtype=bool),
+        }
+
+    monkeypatch.setattr(nex, "_snow2_network_dict", fake_snow2)
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="porespy_imperial",
+        flow_axis="x",
+        extraction_kwargs={"sigma": 0.8},
+    )
+
+    assert result.backend == "porespy_snow2_imperial"
+    assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=int))
+    assert captured["kwargs"] == {"sigma": 0.8, "r_max": 4, "boundary_width": 1}
+
+
+def test_extract_spanning_pore_network_normalizes_backend_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Public extraction should expose an explicit backend choice with aliases."""
+
+    captured: dict[str, object] = {}
+
+    def fake_extract(phases, *, backend, voxel_size, extraction_kwargs, flow_axis):
+        captured["phases"] = phases
+        captured["backend"] = backend
+        captured["voxel_size"] = voxel_size
+        captured["kwargs"] = extraction_kwargs
+        captured["flow_axis"] = flow_axis
+        return {
+            "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+            "throat.conns": np.array([[0, 1]], dtype=int),
+            "pore.xmin": np.array([True, False], dtype=bool),
+            "pore.xmax": np.array([False, True], dtype=bool),
+        }
+
+    monkeypatch.setattr(nex, "_extract_network_dict", fake_extract)
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="snow2",
+        flow_axis="x",
+    )
+
+    assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=int))
+    assert captured["backend"] == "porespy_snow2"
+    assert captured["voxel_size"] == pytest.approx(1.0)
+    assert captured["kwargs"] is None
+    assert captured["flow_axis"] == "x"
+    assert result.backend == "porespy_snow2"
+    assert result.provenance.extraction_method == "porespy_snow2"
+
+    captured.clear()
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="snow2_imperial",
+        flow_axis="x",
+    )
+
+    assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=int))
+    assert captured["backend"] == "porespy_snow2_imperial"
+    assert captured["kwargs"] is None
+    assert captured["flow_axis"] == "x"
+    assert result.backend == "porespy_snow2_imperial"
+    assert result.provenance.extraction_method == "porespy_snow2_imperial"
+
+
+def test_extract_spanning_pore_network_skips_second_geometry_repair_for_native_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native maximal-ball assembly should not reapply importer geometry repairs."""
+
+    captured: dict[str, object] = {}
+    net = make_linear_chain_network(num_pores=2)
+
+    def fake_extract(phases, *, backend, voxel_size, extraction_kwargs, flow_axis):
+        assert backend == "native_maximal_ball"
+        assert voxel_size == pytest.approx(1.0)
+        assert flow_axis == "x"
+        return {
+            "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+            "throat.conns": np.array([[0, 1]], dtype=int),
+            "pore.inlet_xmin": np.array([True, False], dtype=bool),
+            "pore.outlet_xmax": np.array([False, True], dtype=bool),
+            "pore.radius_inscribed": np.array([1.0, 1.0], dtype=float),
+            "pore.area": np.array([1.0, 1.0], dtype=float),
+            "pore.shape_factor": np.array([0.03, 0.03], dtype=float),
+            "pore.volume": np.array([1.0, 1.0], dtype=float),
+            "throat.radius_inscribed": np.array([0.5], dtype=float),
+            "throat.cross_sectional_area": np.array([0.5], dtype=float),
+            "throat.shape_factor": np.array([0.02], dtype=float),
+            "throat.volume": np.array([0.1], dtype=float),
+            "throat.conduit_lengths.pore1": np.array([0.2], dtype=float),
+            "throat.conduit_lengths.throat": np.array([0.6], dtype=float),
+            "throat.conduit_lengths.pore2": np.array([0.2], dtype=float),
+        }
+
+    def fake_from_porespy(
+        network_dict,
+        *,
+        sample,
+        provenance,
+        strict,
+        geometry_repairs,
+        repair_seed,
+    ):
+        captured["geometry_repairs"] = geometry_repairs
+        captured["strict"] = strict
+        captured["repair_seed"] = repair_seed
+        return net
+
+    def fake_spanning_subnetwork(net_full, axis):
+        assert axis == "x"
+        return net_full, np.arange(net_full.Np, dtype=np.int64), np.ones(net_full.Nt, dtype=bool)
+
+    monkeypatch.setattr(nex, "_extract_network_dict", fake_extract)
+    monkeypatch.setattr(nex, "from_porespy", fake_from_porespy)
+    monkeypatch.setattr(nex, "spanning_subnetwork", fake_spanning_subnetwork)
+
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="native_maximal_ball",
+        flow_axis="x",
+    )
+
+    assert captured["geometry_repairs"] is None
+    assert captured["strict"] is True
+    assert captured["repair_seed"] == 0
+    assert result.backend == "native_maximal_ball"
+
+
+def _make_minimal_network_dict() -> dict[str, object]:
+    """Return a minimal network_dict accepted by from_porespy."""
+    return {
+        "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+        "throat.conns": np.array([[0, 1]], dtype=int),
+        "pore.inlet_xmin": np.array([True, False], dtype=bool),
+        "pore.outlet_xmax": np.array([False, True], dtype=bool),
+        "pore.radius_inscribed": np.array([1.0, 1.0], dtype=float),
+        "pore.area": np.array([1.0, 1.0], dtype=float),
+        "pore.shape_factor": np.array([0.03, 0.03], dtype=float),
+        "pore.volume": np.array([1.0, 1.0], dtype=float),
+        "throat.radius_inscribed": np.array([0.5], dtype=float),
+        "throat.cross_sectional_area": np.array([0.5], dtype=float),
+        "throat.shape_factor": np.array([0.02], dtype=float),
+        "throat.volume": np.array([0.1], dtype=float),
+        "throat.conduit_lengths.pore1": np.array([0.2], dtype=float),
+        "throat.conduit_lengths.throat": np.array([0.6], dtype=float),
+        "throat.conduit_lengths.pore2": np.array([0.2], dtype=float),
+    }
+
+
+def test_extract_spanning_pore_network_uses_voids_version_for_native_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """native_maximal_ball backend should record the voids version, not porespy."""
+    import porespy as ps
+
+    from voids.version import __version__ as voids_version
+
+    net = make_linear_chain_network(num_pores=2)
+
+    monkeypatch.setattr(nex, "_extract_network_dict", lambda *a, **kw: _make_minimal_network_dict())
+    monkeypatch.setattr(nex, "from_porespy", lambda *a, **kw: net)
+    monkeypatch.setattr(
+        nex,
+        "spanning_subnetwork",
+        lambda n, axis: (n, np.arange(n.Np, dtype=np.int64), np.ones(n.Nt, dtype=bool)),
+    )
+
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="native_maximal_ball",
+        flow_axis="x",
+    )
+
+    assert result.backend_version == voids_version
+    assert result.provenance.source_version == voids_version
+    porespy_ver = getattr(ps, "__version__", None)
+    assert porespy_ver is not None, "porespy must expose __version__ for this test to be meaningful"
+    assert result.backend_version != porespy_ver
+
+
+def test_extract_spanning_pore_network_uses_porespy_version_for_porespy_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PoreSpy-based backends should record porespy.__version__, not the voids version."""
+    import porespy as ps
+
+    from voids.version import __version__ as voids_version
+
+    net = make_linear_chain_network(num_pores=2)
+
+    monkeypatch.setattr(nex, "_extract_network_dict", lambda *a, **kw: _make_minimal_network_dict())
+    monkeypatch.setattr(nex, "from_porespy", lambda *a, **kw: net)
+    monkeypatch.setattr(
+        nex,
+        "spanning_subnetwork",
+        lambda n, axis: (n, np.arange(n.Np, dtype=np.int64), np.ones(n.Nt, dtype=bool)),
+    )
+    monkeypatch.setattr(nex, "scale_porespy_geometry", lambda d, voxel_size: d)
+    monkeypatch.setattr(nex, "ensure_cartesian_boundary_labels", lambda d, axes: d)
+
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="porespy",
+        flow_axis="x",
+    )
+
+    porespy_ver = getattr(ps, "__version__", None)
+    assert porespy_ver is not None, "porespy must expose __version__ for this test to be meaningful"
+    assert result.backend_version == porespy_ver
+    assert result.provenance.source_version == porespy_ver
+    assert porespy_ver != voids_version, (
+        "porespy and voids versions must differ for this test to distinguish the two"
+    )
+
+
+def test_extract_spanning_pore_network_rejects_unsupported_backend() -> None:
+    """Unsupported image-extraction backends should fail before backend work starts."""
+
+    with pytest.raises(ValueError, match="Unsupported extraction backend"):
+        extract_spanning_pore_network(
+            np.ones((4, 5, 6), dtype=int),
+            voxel_size=1.0,
+            backend="pnextract_like",
+        )
 
 
 def test_extract_spanning_pore_network_enables_imperial_export_repairs_by_default(
