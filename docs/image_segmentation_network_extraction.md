@@ -246,6 +246,7 @@ construct imported reference networks in the same canonical schema.
 |---|---|---|---|
 | `porespy`, `snow2`, `porespy_snow2` | `porespy_snow2` | PoreSpy | Standard PoreSpy `snow2` extraction |
 | `porespy_imperial`, `imperial_snow2`, `snow2_imperial` | `porespy_snow2_imperial` | PoreSpy | `snow2` with benchmark-tuned defaults for a more conservative reduction |
+| `prego` | `prego` | `voids` plus PoreSpy region geometry | PREGO-style seed-based pore-region growing |
 | `native_maximal_ball`, `maximal_ball`, `maxball` | `native_maximal_ball` | NumPy/SciPy, optional `edt` | Native dependency-light maximal-ball extraction |
 
 ### PoreSpy `snow2`
@@ -279,6 +280,32 @@ defaults selected during the external-reference benchmark investigation:
 
 User-supplied `extraction_kwargs` override these values. This backend is a
 practical approximation mode, not an exact replica of any external extractor.
+
+### PREGO
+
+`backend="prego"` implements a PREGO-style seeded region-growing segmentation
+based on Khan and Gostick's 2024 pore-region growing paper. It uses the
+SNOW peak-filtering stages to choose seed points, orders those seeds by
+descending distance-transform radius, grows non-overlapping seed spheres, and
+fills the remaining foreground voxels with a face-connected FIFO queue. The
+resulting region image is passed to PoreSpy's `regions_to_network`, then
+imported into the canonical `voids.Network` schema.
+
+The paper leaves some floating-point tie cases and exact queue-level behavior
+underspecified, so this backend is a transparent native implementation rather
+than a bitwise reproduction of the authors' code. Treat permeability,
+coordination-number, and throat-area differences relative to `snow2` as
+scientific outputs to validate, not just implementation noise.
+
+```python
+result = construct_spanning_network(
+    backend="prego",
+    phases=phases,
+    voxel_size=2.0e-6,
+    flow_axis="x",
+    extraction_kwargs={"settings": {"r_max": 4, "sigma": 0.4}},
+)
+```
 
 ### Native Maximal-Ball
 
@@ -522,6 +549,26 @@ the full network, while effective transport should use the spanning network.
 | `strict` | `True` | require required topology fields during import |
 | `extraction_kwargs` | `None` | backend-specific controls |
 
+### PREGO `extraction_kwargs`
+
+| Key | Default | Meaning |
+|---|---:|---|
+| `settings` | `None` | `PregoSettings` instance or mapping |
+| `prego_settings` | `None` | alias for `settings` |
+| `distance_map` | `None` | optional precomputed void-space distance transform |
+| `peaks` | `None` | optional precomputed seed markers |
+| `regions_to_network_kwargs` | `None` | options forwarded to PoreSpy `regions_to_network` |
+
+### `PregoSettings`
+
+| Field | Default | Meaning |
+|---|---:|---|
+| `r_max` | `4` | SNOW maximum-filter radius for seed detection |
+| `sigma` | `0.4` | Gaussian smoothing applied before seed detection |
+| `distance_map_backend` | `auto` | distance-transform implementation |
+| `edt_parallel_threads` | `None` | optional worker count for the `edt` backend |
+| `cleanup_unassigned` | `True` | leave unfilled foreground voxels as background labels |
+
 ### Native Maximal-Ball `extraction_kwargs`
 
 | Key | Default | Meaning |
@@ -627,8 +674,8 @@ For publishable or benchmark-quality image workflows, record at least:
 | threshold rule | `otsu`, explicit threshold, or external segmentation method |
 | phase polarity | `dark voids` or `bright voids` |
 | cleanup | opening/closing, connected-component filtering, manual edits |
-| extraction backend | `porespy`, `native_maximal_ball`, etc. |
-| backend options | `sigma`, `r_max`, maximal-ball settings |
+| extraction backend | `porespy`, `prego`, `native_maximal_ball`, etc. |
+| backend options | `sigma`, `r_max`, PREGO or maximal-ball settings |
 | boundary treatment | direct labels or external reservoir helpers |
 | spanning axis | `x`, `y`, or `z` |
 | geometry repairs | `imperial_export` or none |
