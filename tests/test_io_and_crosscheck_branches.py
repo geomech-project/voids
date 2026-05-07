@@ -7,9 +7,17 @@ import numpy as np
 import pytest
 
 from voids.benchmarks.crosscheck import (
+    ConduitConductanceAudit,
+    NetworkGeometryComparison,
+    NetworkGeometrySummary,
+    _distribution_ks_statistic,
+    _finite_statistic_mean,
+    _finite_statistic_median,
     _get_openpnm_pressure,
     _openpnm_phase_factory,
+    audit_singlephase_conduit_conductance,
     crosscheck_singlephase_with_openpnm,
+    summarize_network_geometry,
 )
 from voids.examples.mesh import make_cartesian_mesh_network
 from voids.io.openpnm import to_openpnm_dict, to_openpnm_network
@@ -230,6 +238,139 @@ def test_to_openpnm_network_copies_properties_and_labels(monkeypatch, line_netwo
     assert np.array_equal(pn["throat.length"], line_network.throat["length"])
     assert np.array_equal(pn["pore.inlet_xmin"], line_network.pore_labels["inlet_xmin"])
     assert np.array_equal(pn["throat.boundary_throat"], np.array([True, False]))
+
+
+def test_geometry_summary_record_comparison_record_and_empty_statistics() -> None:
+    """Test flat geometry records and optional-statistic empty-data branches."""
+
+    summary = NetworkGeometrySummary(
+        axis="x",
+        n_pores=4,
+        n_throats=3,
+        n_components=1,
+        giant_component_fraction=1.0,
+        isolated_pore_fraction=0.0,
+        dead_end_fraction=0.5,
+        mean_coordination=1.5,
+        inlet_pore_count=1,
+        outlet_pore_count=1,
+        overlapping_boundary_count=0,
+        boundary_pore_count=2,
+        pore_volume_total=4.0,
+        throat_volume_total=0.3,
+        pore_radius_mean=0.2,
+        pore_radius_median=0.2,
+        throat_radius_mean=0.1,
+        throat_radius_median=0.1,
+        throat_area_mean=0.03,
+        throat_area_median=0.03,
+        throat_length_mean=1.0,
+        throat_length_median=1.0,
+        throat_core_length_mean=0.6,
+        throat_core_length_median=0.6,
+        pore_shape_factor_mean=0.08,
+        pore_shape_factor_median=0.08,
+        throat_shape_factor_mean=0.07,
+        throat_shape_factor_median=0.07,
+        throat_face_count_mean=12.0,
+        throat_face_count_median=12.0,
+        throat_support_radius_mean=0.15,
+        throat_support_radius_median=0.15,
+    )
+
+    record = summary.to_record(prefix="reference")
+    comparison = NetworkGeometryComparison(
+        reference_name="reference",
+        candidate_name="candidate",
+        axis="x",
+        reference_summary=summary,
+        candidate_summary=summary,
+        pore_count_rel_diff=0.0,
+        throat_count_rel_diff=0.0,
+        inlet_count_rel_diff=0.0,
+        outlet_count_rel_diff=0.0,
+        mean_coordination_rel_diff=0.0,
+        pore_radius_ks=0.0,
+        throat_radius_ks=0.0,
+        throat_area_ks=0.0,
+        throat_length_ks=0.0,
+        throat_core_length_ks=0.0,
+        pore_shape_factor_ks=0.0,
+        throat_shape_factor_ks=0.0,
+        coordination_ks=0.0,
+        throat_face_count_ks=0.0,
+    )
+    comparison_record = comparison.to_record()
+
+    assert record["reference_n_pores"] == 4
+    assert record["reference_throat_support_radius_mean"] == pytest.approx(0.15)
+    assert comparison_record["candidate_n_throats"] == 3
+    assert comparison_record["candidate_vs_reference_coordination_ks"] == pytest.approx(0.0)
+    assert np.isnan(_finite_statistic_mean(None))
+    assert np.isnan(_finite_statistic_mean(np.array([np.nan])))
+    assert np.isnan(_finite_statistic_median(None))
+    assert np.isnan(_finite_statistic_median(np.array([np.inf])))
+    assert np.isnan(_distribution_ks_statistic(None, np.array([1.0])))
+    assert np.isnan(_distribution_ks_statistic(np.array([np.nan]), np.array([1.0])))
+
+
+def test_summarize_network_geometry_reports_support_radius_statistics() -> None:
+    """Test support-radius summary from the two conduit support-side fields."""
+
+    net = make_cartesian_mesh_network((2, 2))
+    net.throat["supporting_radius_side1"] = np.array([0.1, 0.3, 0.2, 0.4])
+    net.throat["supporting_radius_side2"] = np.array([0.5, 0.2, 0.6, 0.1])
+
+    summary = summarize_network_geometry(net, axis="x")
+
+    assert summary.throat_support_radius_mean == pytest.approx(np.mean([0.5, 0.3, 0.6, 0.4]))
+    assert summary.throat_support_radius_median == pytest.approx(np.median([0.5, 0.3, 0.6, 0.4]))
+
+
+def test_conduit_conductance_audit_columns_and_validation_branches() -> None:
+    """Test conduit-audit tabulation plus unsupported-model and missing-length errors."""
+
+    net = make_cartesian_mesh_network((2, 2))
+    audit = audit_singlephase_conduit_conductance(net, viscosity=1.0)
+    columns = audit.to_columns()
+
+    assert columns["model"] == "valvatne_blunt"
+    assert np.array_equal(columns["throat_index"], np.arange(net.Nt))
+    assert columns["equivalent_conductance"].shape == (net.Nt,)
+
+    manual_audit = ConduitConductanceAudit(
+        model="manual",
+        throat_index=np.array([0]),
+        pore1_index=np.array([0]),
+        pore2_index=np.array([1]),
+        pore1_is_boundary=np.array([True]),
+        pore2_is_boundary=np.array([False]),
+        pore1_shape_factor=np.array([0.08]),
+        throat_shape_factor=np.array([0.07]),
+        pore2_shape_factor=np.array([0.08]),
+        pore1_area=np.array([1.0]),
+        throat_area=np.array([0.5]),
+        pore2_area=np.array([1.0]),
+        pore1_radius=np.array([0.2]),
+        throat_radius=np.array([0.1]),
+        pore2_radius=np.array([0.2]),
+        pore1_length=np.array([0.2]),
+        throat_length=np.array([0.6]),
+        pore2_length=np.array([0.2]),
+        pore1_conductance=np.array([1.0]),
+        throat_conductance=np.array([0.5]),
+        pore2_conductance=np.array([1.0]),
+        equivalent_conductance=np.array([0.25]),
+    )
+    assert manual_audit.to_columns()["model"] == "manual"
+
+    with pytest.raises(ValueError, match="supports only"):
+        audit_singlephase_conduit_conductance(net, viscosity=1.0, model="unsupported")
+
+    missing_lengths = net.copy()
+    missing_lengths.throat.pop("core_length")
+    with pytest.raises(KeyError, match="Missing conduit lengths"):
+        audit_singlephase_conduit_conductance(missing_lengths, viscosity=1.0)
 
 
 def test_openpnm_phase_factory_uses_fallback_and_errors_cleanly() -> None:

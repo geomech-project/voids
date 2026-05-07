@@ -415,6 +415,24 @@ def test_imperial_repairs_raises_on_invalid_throat_area(bad_area: float) -> None
         )
 
 
+@pytest.mark.parametrize("bad_radius", [0.0, -1.0, float("nan"), float("inf")])
+def test_imperial_repairs_raises_on_invalid_shape_factor_radius(bad_radius: float) -> None:
+    """Test invalid shape-factor radius rejection when deriving throat shape factor."""
+
+    throat_data = {
+        "shape_factor_radius": np.array([1.0, bad_radius]),
+        "area": np.array([1.0, 1.0]),
+    }
+    with pytest.raises(ValueError, match="throat shape-factor radius values"):
+        _apply_imperial_export_geometry_repairs(
+            pore_data={},
+            throat_data=throat_data,
+            throat_conns=np.array([[0, 1], [1, 2]]),
+            num_pores=3,
+            random_seed=0,
+        )
+
+
 def test_override_area_raises_on_overflow_from_tiny_shape_factor() -> None:
     # shape_factor so small that r^2/(4g) overflows to inf; 1e-310 triggers overflow
     data = {
