@@ -184,27 +184,27 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
 - `17_mwe_solver_options_benchmark`
   - benchmark of the available linear and nonlinear solver options, including `pyamg`-preconditioned Krylov solves
 - `18_mwe_drp317_berea_raw_porosity_perm`
-  - DRP-317 Berea validation notebook against experimental porosity and permeability
+  - DRP-317 Berea validation notebook with `snow2`, PREGO, and native maximal-ball extraction comparisons
 - `19_mwe_drp317_bentheimer_raw_porosity_perm`
-  - DRP-317 Bentheimer validation notebook against experimental porosity and permeability
+  - DRP-317 Bentheimer validation notebook with `snow2`, PREGO, and native maximal-ball extraction comparisons
 - `20_mwe_drp317_banderagray_raw_porosity_perm`
-  - DRP-317 Bandera Gray validation notebook against experimental porosity and permeability
+  - DRP-317 Bandera Gray validation notebook with `snow2`, PREGO, and native maximal-ball extraction comparisons
 - `21_mwe_drp317_banderabrown_raw_porosity_perm`
-  - DRP-317 Bandera Brown notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Bandera Brown backend-sensitivity notebook against the Table 1 experimental values
 - `22_mwe_drp317_bereasistergray_raw_porosity_perm`
-  - DRP-317 Berea Sister Gray notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Berea Sister Gray backend-sensitivity notebook against the Table 1 experimental values
 - `23_mwe_drp317_bereauppergray_raw_porosity_perm`
-  - DRP-317 Berea Upper Gray notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Berea Upper Gray backend-sensitivity notebook against the Table 1 experimental values
 - `24_mwe_drp317_buffberea_raw_porosity_perm`
-  - DRP-317 Buff Berea notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Buff Berea backend-sensitivity notebook against the Table 1 experimental values
 - `25_mwe_drp317_castlegate_raw_porosity_perm`
-  - DRP-317 Castlegate notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Castlegate backend-sensitivity notebook against the Table 1 experimental values
 - `26_mwe_drp317_kirby_raw_porosity_perm`
-  - DRP-317 Kirby notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Kirby backend-sensitivity notebook against the Table 1 experimental values
 - `27_mwe_drp317_leopard_raw_porosity_perm`
-  - DRP-317 Leopard notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Leopard backend-sensitivity notebook against the Table 1 experimental values
 - `28_mwe_drp317_parker_raw_porosity_perm`
-  - DRP-317 Parker notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Parker backend-sensitivity notebook against the Table 1 experimental values
 - `29_mwe_drp443_ifn_raw_porosity_perm`
   - DRP-443 IFN fractured-media permeability benchmark against SPE 212849 Table 2
 - `30_mwe_drp443_dilatedifn_raw_porosity_perm`

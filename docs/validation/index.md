@@ -36,6 +36,12 @@ Current validation studies:
 - [DRP-317 Bentheimer notebook report](drp317_bentheimer.md)
 - [DRP-317 Bandera Gray notebook report](drp317_banderagray.md)
 
+The DRP-317 reports are also backend-sensitivity studies: each sandstone is
+extracted with `PoreSpy snow2`, PREGO, and the native maximal-ball backend before
+solving the same single-phase flow problem. This keeps the experimental mismatch
+and image-to-network extraction sensitivity visible in the same validation
+record.
+
 The DRP-317 pages use these cited sources:
 
 - Dataset: Neumann, R., ANDREETA, M., Lucas-Oliveira, E. (2020, October 7).

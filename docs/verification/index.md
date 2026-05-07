@@ -40,6 +40,10 @@ The experimental-validation studies live under [Validation](../validation/index.
 - [DRP-317 Bentheimer notebook report](../validation/drp317_bentheimer.md)
 - [DRP-317 Bandera Gray notebook report](../validation/drp317_banderagray.md)
 
+The DRP-317 pages now report `PoreSpy snow2`, PREGO, and native maximal-ball
+extraction on the same segmented images and transport setup, so they should be
+read as workflow validation plus extraction-backend sensitivity.
+
 ## What Each Side Answers
 
 | Category | Typical reference | Main question | Expected agreement |
