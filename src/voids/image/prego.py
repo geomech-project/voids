@@ -15,14 +15,14 @@ from voids.image.maximal_ball import compute_void_distance_map
 class PregoSettings:
     """Controls for seed-based Pore Region Growing segmentation.
 
-    The defaults mirror the PREGO paper's seed generation settings: SNOW peak
-    filtering with ``r_max=4`` and Gaussian smoothing ``sigma=0.4``. PREGO is
+    The defaults use ``r_max=4`` and Gaussian smoothing ``sigma=0.4``. PREGO is
     currently implemented for a single active pore phase, with nonzero input
     voxels treated as void.
     """
 
     r_max: int = 4
     sigma: float = 0.4
+    peak_footprint: str = "cube"
     distance_map_backend: str = "auto"
     edt_parallel_threads: int | None = None
     cleanup_unassigned: bool = True
@@ -56,32 +56,66 @@ def _connectivity_structure(ndim: int) -> np.ndarray:
     return np.ones((3,) * ndim, dtype=bool)
 
 
+def _smallest_signed_integer_dtype(max_value: int) -> type[np.signedinteger[Any]]:
+    """Return the smallest signed NumPy integer dtype that can store ``max_value``."""
+
+    if max_value <= np.iinfo(np.int16).max:
+        return np.int16
+    if max_value <= np.iinfo(np.int32).max:
+        return np.int32
+    return np.int64
+
+
+def _prego_label_dtype(
+    *,
+    max_label: int,
+    shape: tuple[int, ...],
+) -> type[np.signedinteger[Any]]:
+    """Return a safe compact dtype for labels and FIFO coordinate queues."""
+
+    max_coordinate = max((int(size) - 1 for size in shape), default=0)
+    return _smallest_signed_integer_dtype(max(max_label, max_coordinate, 0))
+
+
 def _reduce_peak_labels_to_seed_points(
     peak_labels: np.ndarray,
     distance_map: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Reduce possibly multi-voxel peak markers to one seed point per label."""
 
-    labels = np.asarray(peak_labels, dtype=np.int64)
+    labels = np.asarray(peak_labels)
+    if not np.issubdtype(labels.dtype, np.integer):
+        labels = labels.astype(np.int64, copy=False)
     dt = np.asarray(distance_map, dtype=float)
     if labels.shape != dt.shape:
         raise ValueError("peak labels and distance_map must have the same shape")
 
-    raw_labels = np.unique(labels[labels > 0])
+    marker_indices = np.argwhere(labels > 0)
+    if marker_indices.size == 0:
+        return np.zeros((0, dt.ndim), dtype=np.int64), np.zeros(
+            dt.shape,
+            dtype=_prego_label_dtype(max_label=0, shape=dt.shape),
+        )
+
+    marker_labels = labels[tuple(marker_indices.T)]
+    order_by_label = np.argsort(marker_labels, kind="stable")
+    marker_indices = marker_indices[order_by_label]
+    marker_labels = marker_labels[order_by_label]
+
     seed_indices: list[np.ndarray] = []
-    for raw_label in raw_labels:
-        marker_indices = np.argwhere(labels == raw_label)
-        if marker_indices.size == 0:  # pragma: no cover - guarded by raw_labels construction
-            continue
-        marker_radii = dt[tuple(marker_indices.T)]
+    start = 0
+    while start < marker_labels.size:
+        stop = start + 1
+        while stop < marker_labels.size and marker_labels[stop] == marker_labels[start]:
+            stop += 1
+        label_indices = marker_indices[start:stop]
+        marker_radii = dt[tuple(label_indices.T)]
         # Stable tie-break: largest distance first, then lexicographic index.
         best_radius = float(np.max(marker_radii))
-        best_candidates = marker_indices[np.isclose(marker_radii, best_radius)]
+        best_candidates = label_indices[np.isclose(marker_radii, best_radius)]
         best_index = sorted(tuple(int(value) for value in row) for row in best_candidates)[0]
         seed_indices.append(np.asarray(best_index, dtype=np.int64))
-
-    if not seed_indices:
-        return np.zeros((0, dt.ndim), dtype=np.int64), np.zeros(dt.shape, dtype=np.int64)
+        start = stop
 
     seed_array = np.vstack(seed_indices).astype(np.int64, copy=False)
     seed_radii = dt[tuple(seed_array.T)]
@@ -90,7 +124,8 @@ def _reduce_peak_labels_to_seed_points(
         key=lambda i: (-float(seed_radii[i]), *[int(v) for v in seed_array[i]]),
     )
     seed_array = seed_array[np.asarray(order, dtype=np.int64)]
-    reduced_labels = np.zeros(dt.shape, dtype=np.int64)
+    label_dtype = _prego_label_dtype(max_label=seed_array.shape[0], shape=dt.shape)
+    reduced_labels = np.zeros(dt.shape, dtype=label_dtype)
     for label, seed_index in enumerate(seed_array, start=1):
         reduced_labels[tuple(int(value) for value in seed_index)] = label
     return seed_array, reduced_labels
@@ -102,6 +137,7 @@ def snow_seed_points(
     distance_map: np.ndarray | None = None,
     r_max: int = 4,
     sigma: float = 0.4,
+    peak_footprint: str = "cube",
     peaks: np.ndarray | None = None,
     distance_map_backend: str = "auto",
     edt_parallel_threads: int | None = None,
@@ -136,7 +172,18 @@ def snow_seed_points(
             peak_distance_map = ndi.gaussian_filter(input=dt, sigma=float(sigma)) * mask
         else:
             peak_distance_map = dt.copy()
-        peak_mask = porespy_module.filters.find_peaks(dt=peak_distance_map, r_max=int(r_max))
+        normalized_footprint = str(peak_footprint).strip().lower()
+        if normalized_footprint == "sphere":
+            peak_mask = porespy_module.filters.find_peaks(dt=peak_distance_map, r_max=int(r_max))
+        elif normalized_footprint in {"cube", "box"}:
+            peak_distance_for_filter = peak_distance_map + 2.0 * (~mask)
+            peak_max = ndi.maximum_filter(
+                peak_distance_for_filter,
+                size=(2 * int(r_max) + 1,) * mask.ndim,
+            )
+            peak_mask = (peak_distance_map == peak_max) & mask & (peak_distance_map > 0)
+        else:
+            raise ValueError("peak_footprint must be 'cube' or 'sphere'")
         peak_mask = porespy_module.filters.trim_saddle_points(peaks=peak_mask, dt=dt)
         peak_mask = porespy_module.filters.trim_nearby_peaks(peaks=peak_mask, dt=dt)
         peak_labels, _ = ndi.label(peak_mask > 0, structure=_connectivity_structure(mask.ndim))
@@ -150,7 +197,10 @@ def snow_seed_points(
                 structure=_connectivity_structure(mask.ndim),
             )
         else:
-            peak_labels = np.asarray(supplied_peaks, dtype=np.int64) * mask
+            supplied_labels = np.asarray(supplied_peaks)
+            max_label = int(np.max(supplied_labels)) if supplied_labels.size else 0
+            peak_dtype = _prego_label_dtype(max_label=max_label, shape=mask.shape)
+            peak_labels = supplied_labels.astype(peak_dtype, copy=False) * mask
 
     seed_indices, seed_labels = _reduce_peak_labels_to_seed_points(peak_labels, dt)
     if seed_indices.size == 0 and np.any(mask):
@@ -243,8 +293,8 @@ def _fifo_fill_regions_2d(
 ) -> None:
     shape0, shape1 = mask.shape
     max_size = labels.size
-    queue0 = np.empty(max_size, dtype=np.int64)
-    queue1 = np.empty(max_size, dtype=np.int64)
+    queue0 = np.empty(max_size, dtype=labels.dtype)
+    queue1 = np.empty(max_size, dtype=labels.dtype)
     head = 0
     tail = 0
     for i in range(shape0):
@@ -291,9 +341,9 @@ def _fifo_fill_regions_3d(
 ) -> None:
     shape0, shape1, shape2 = mask.shape
     max_size = labels.size
-    queue0 = np.empty(max_size, dtype=np.int64)
-    queue1 = np.empty(max_size, dtype=np.int64)
-    queue2 = np.empty(max_size, dtype=np.int64)
+    queue0 = np.empty(max_size, dtype=labels.dtype)
+    queue1 = np.empty(max_size, dtype=labels.dtype)
+    queue2 = np.empty(max_size, dtype=labels.dtype)
     head = 0
     tail = 0
     for i in range(shape0):
@@ -381,6 +431,7 @@ def prego_partitioning(
         distance_map=distance_map,
         r_max=resolved_settings.r_max,
         sigma=resolved_settings.sigma,
+        peak_footprint=resolved_settings.peak_footprint,
         peaks=peaks,
         distance_map_backend=resolved_settings.distance_map_backend,
         edt_parallel_threads=resolved_settings.edt_parallel_threads,
@@ -391,7 +442,10 @@ def prego_partitioning(
         if seed_indices.size
         else np.zeros(0, dtype=float)
     )
-    labels = np.zeros(mask.shape, dtype=np.int64)
+    labels = np.zeros(
+        mask.shape,
+        dtype=_prego_label_dtype(max_label=seed_indices.shape[0], shape=mask.shape),
+    )
     if seed_indices.size:
         for label, seed_index in enumerate(seed_indices, start=1):
             labels[tuple(int(value) for value in seed_index)] = label
@@ -408,7 +462,7 @@ def prego_partitioning(
         im=mask,
         distance_map=dt,
         peaks=seed_label_map,
-        regions=labels.astype(np.int64, copy=False),
+        regions=labels,
         seed_indices=seed_indices,
         seed_radii_voxels=seed_radii,
         seed_activation_levels=_seed_activation_levels(seed_radii),
@@ -419,7 +473,7 @@ def prego_partitioning(
 def _regions_have_interfaces(regions: np.ndarray) -> bool:
     """Return whether positive neighboring labels touch across a face."""
 
-    labels = np.asarray(regions, dtype=np.int64)
+    labels = np.asarray(regions)
     for axis in range(labels.ndim):
         lower_slices = [slice(None)] * labels.ndim
         upper_slices = [slice(None)] * labels.ndim
@@ -438,7 +492,7 @@ def _network_dict_without_interfaces(
 ) -> dict[str, object]:
     """Build a minimal PoreSpy-style network dict for isolated pore regions."""
 
-    labels = np.asarray(regions, dtype=np.int64)
+    labels = np.asarray(regions)
     dt = np.asarray(distance_map, dtype=float)
     region_labels = np.unique(labels[labels > 0])
     pore_count = int(region_labels.size)

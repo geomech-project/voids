@@ -33,6 +33,13 @@ def test_snow_seed_points_validates_inputs() -> None:
             peaks=np.ones((3, 3), dtype=bool),
         )
 
+    with pytest.raises(ValueError, match="peak_footprint"):
+        snow_seed_points(
+            np.ones((2, 2), dtype=bool),
+            distance_map=np.ones((2, 2), dtype=float),
+            peak_footprint="triangle",
+        )
+
     with pytest.raises(ValueError, match="peak labels and distance_map"):
         prego_mod._reduce_peak_labels_to_seed_points(
             np.ones((2, 2), dtype=int),
@@ -63,6 +70,24 @@ def test_snow_seed_points_reduce_marker_regions_to_distance_maxima() -> None:
     assert seed_labels[2, 2] == 1
     assert seed_labels[4, 4] == 2
     assert np.count_nonzero(seed_labels) == 2
+
+
+def test_prego_uses_compact_safe_integer_dtypes() -> None:
+    """PREGO labels should use int16 when safe and widen before overflow is possible."""
+
+    assert prego_mod._prego_label_dtype(max_label=10, shape=(256, 256, 256)) == np.int16
+    assert prego_mod._prego_label_dtype(max_label=40_000, shape=(256, 256, 256)) == np.int32
+    assert prego_mod._prego_label_dtype(max_label=10, shape=(40_000, 2, 2)) == np.int32
+
+    mask = np.ones((5, 5), dtype=bool)
+    distance_map = np.ones(mask.shape, dtype=float)
+    peaks = np.zeros(mask.shape, dtype=int)
+    peaks[2, 2] = 1
+
+    result = prego_partitioning(mask, distance_map=distance_map, peaks=peaks)
+
+    assert result.peaks.dtype == np.int16
+    assert result.regions.dtype == np.int16
 
 
 def test_snow_seed_points_accepts_boolean_peaks_and_fallback_seed() -> None:
@@ -128,6 +153,7 @@ def test_snow_seed_points_uses_porespy_filter_stages_when_peaks_are_not_supplied
         peaks=None,
         sigma=0.0,
         r_max=2,
+        peak_footprint="sphere",
         porespy_module=fake_porespy,
     )
 
@@ -142,12 +168,53 @@ def test_snow_seed_points_uses_porespy_filter_stages_when_peaks_are_not_supplied
         peaks=None,
         sigma=0.5,
         r_max=2,
+        peak_footprint="sphere",
         porespy_module=fake_porespy,
     )
 
     assert seed_indices.tolist() == [[1, 1]]
     assert seed_labels[1, 1] == 1
     assert len(calls) == 3
+
+
+def test_snow_seed_points_cube_filter_avoids_porespy_peak_search() -> None:
+    """The default cubic peak filter should keep PREGO seed search lightweight."""
+
+    calls: list[str] = []
+
+    def find_peaks(dt, r_max):  # pragma: no cover - should not be reached
+        raise AssertionError("cube peak filtering should not call porespy.find_peaks")
+
+    def trim_saddle_points(peaks, dt):
+        calls.append("saddle")
+        return peaks
+
+    def trim_nearby_peaks(peaks, dt):
+        calls.append("nearby")
+        return peaks
+
+    fake_porespy = SimpleNamespace(
+        filters=SimpleNamespace(
+            find_peaks=find_peaks,
+            trim_saddle_points=trim_saddle_points,
+            trim_nearby_peaks=trim_nearby_peaks,
+        )
+    )
+    distance_map = np.ones((5, 5), dtype=float)
+    distance_map[2, 2] = 4.0
+
+    seed_indices, seed_labels, _ = snow_seed_points(
+        np.ones((5, 5), dtype=bool),
+        distance_map=distance_map,
+        peaks=None,
+        sigma=0.0,
+        r_max=2,
+        porespy_module=fake_porespy,
+    )
+
+    assert seed_indices.tolist() == [[2, 2]]
+    assert seed_labels[2, 2] == 1
+    assert calls == ["saddle", "nearby"]
 
 
 def test_prego_partitioning_fills_face_connected_foreground_from_supplied_seeds() -> None:
