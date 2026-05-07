@@ -15,7 +15,7 @@
 # Workflow highlights:
 #
 # 1. Load the RAW binary image with a memory map (full-volume porosity from all voxels).
-# 2. Extract a pore network from a configurable analysis subvolume.
+# 2. Extract pore networks from a configurable analysis subvolume with multiple backends.
 # 3. Solve single-phase flow and estimate absolute permeability.
 # 4. Compare estimated properties against experimental values.
 # 5. Produce an interactive pore-network view and pore-network statistics.
@@ -103,6 +103,39 @@ drp317_paper_url = "https://www.nature.com/articles/s41598-021-90090-0#Sec13"
 paper_reference_porespy_version = "1.2.0"
 conductance_models: tuple[str, ...] = ("generic_poiseuille",)
 geometry_repairs: str | None = None
+extraction_backend = "porespy"
+comparison_extraction_backends = ("prego", "native_maximal_ball")
+extraction_backends = tuple(
+    dict.fromkeys((extraction_backend, *comparison_extraction_backends))
+)
+extraction_backend_configs: dict[str, dict[str, object]] = {
+    "porespy": {
+        "label": "PoreSpy snow2",
+        "extraction_kwargs": {},
+        "geometry_repairs": geometry_repairs,
+    },
+    "prego": {
+        "label": "PREGO",
+        "extraction_kwargs": {
+            "settings": {
+                "r_max": 4,
+                "sigma": 0.4,
+                "peak_footprint": "cube",
+                "distance_map_backend": "scipy",
+            },
+            "regions_to_network_kwargs": {"accuracy": "standard"},
+        },
+        "geometry_repairs": geometry_repairs,
+    },
+    "native_maximal_ball": {
+        "label": "Native maximal-ball",
+        "extraction_kwargs": {
+            "distance_map_backend": "auto",
+            "flow_boundary_mode": "direct",
+        },
+        "geometry_repairs": geometry_repairs,
+    },
+}
 trim_nonpercolating_paths = True
 pressure_gradient_pa_per_m = 1.0e4
 pressure_reference_pa = 5.0e6
@@ -436,27 +469,38 @@ print(f"Axis areas [m^2]: {axis_areas}")
 
 
 # %%
-def extract_axis_network(axis: str):
-    """Extract one axis-spanning network under the selected paper-like settings."""
+def extract_axis_network(axis: str, *, backend: str | None = None):
+    """Extract one axis-spanning network for the selected backend."""
+    selected_backend = extraction_backend if backend is None else backend
+    backend_config = extraction_backend_configs[selected_backend]
+    backend_extraction_kwargs = dict(backend_config.get("extraction_kwargs", {}))
+    backend_geometry_repairs = backend_config.get("geometry_repairs")
     axis_image = prepare_axis_image(
         im_analysis,
         axis=axis,
         trim_nonpercolating=trim_nonpercolating_paths,
     )
+    extra_paper_notes: dict[str, object] = {}
+    if "paper_table_sample_label" in globals():
+        extra_paper_notes["paper_table_sample_label"] = globals()[
+            "paper_table_sample_label"
+        ]
+    if "paper_table_reference" in globals():
+        extra_paper_notes["paper_table_reference"] = globals()["paper_table_reference"]
     extract_axis = extract_spanning_pore_network(
         axis_image,
         voxel_size=voxel_size_m,
+        backend=selected_backend,
         flow_axis=axis,
         length_unit="m",
-        geometry_repairs=geometry_repairs,
+        geometry_repairs=backend_geometry_repairs,
+        extraction_kwargs=backend_extraction_kwargs,
         provenance_notes={
             "raw_source": str(raw_relpath).replace("\\", "/"),
             "roi_origin_voxels": roi_origin,
             "roi_shape_voxels": im_analysis.shape,
             "experimental_porosity_pct": experimental_porosity_pct,
             "experimental_kabs_mD": experimental_kabs_mD,
-            "paper_table_sample_label": paper_table_sample_label,
-            "paper_table_reference": paper_table_reference,
             "dataset_citation": drp317_dataset_citation,
             "dataset_url": drp317_dataset_url,
             "paper_citation": drp317_paper_citation,
@@ -466,41 +510,17 @@ def extract_axis_network(axis: str):
             "analysis_origin_strategy": analysis_origin_strategy,
             "analysis_origin_porosity_target": analysis_origin_porosity_target,
             "paper_reference_porespy_version": paper_reference_porespy_version,
+            "extraction_backend": selected_backend,
+            "extraction_backend_label": str(backend_config["label"]),
+            "extraction_kwargs": backend_extraction_kwargs,
+            "geometry_repairs": backend_geometry_repairs,
+            **extra_paper_notes,
         },
     )
     return axis_image, extract_axis
 
 
-im_flow_analysis, extract = extract_axis_network(flow_axis)
-
-net_full = extract.net_full
-net = extract.net
-phi_image_analysis_flow = float(np.mean(im_flow_analysis))
-
-print(f"Backend: {extract.backend} {extract.backend_version}")
-print(f"Imported full network: Np={net_full.Np}, Nt={net_full.Nt}")
-print(f"Axis-spanning network ({flow_axis}): Np={net.Np}, Nt={net.Nt}")
-print(
-    "Paper PNM reference uses PoreSpy "
-    f"{paper_reference_porespy_version}; current backend is {extract.backend_version}"
-)
-print(f"Conductance models requested: {conductance_models}")
-print(f"Geometry repairs: {geometry_repairs}")
-print(f"Trim nonpercolating paths: {trim_nonpercolating_paths}")
-print(
-    f"Viscosity model: {viscosity_model.backend_name} at "
-    f"{viscosity_model.temperature:.2f} K"
-)
-print(
-    f"ROI image porosity after {flow_axis}-path trim: "
-    f"{100.0 * phi_image_analysis_flow:.4f}%"
-)
-
 # %%
-phi_abs = absolute_porosity(net)
-phi_eff = effective_porosity(net, axis=flow_axis)
-
-
 def solve_axis_with_fallback(net_axis, axis: str):
     """Solve one axis using the configured conductance models."""
     delta_p = pressure_gradient_pa_per_m * axis_lengths[axis]
@@ -533,149 +553,269 @@ def solve_axis_with_fallback(net_axis, axis: str):
     ) from last_exc
 
 
-res, used_conductance_model = solve_axis_with_fallback(net, flow_axis)
-
 M2_PER_MD = 9.869233e-16
+axes_available = tuple(ax for ax in ("x", "y", "z") if ax in axis_lengths)
+axis_images_by_backend_axis: dict[tuple[str, str], np.ndarray] = {}
+extracts_by_backend_axis: dict[tuple[str, str], object] = {}
+solve_results_by_backend_axis: dict[tuple[str, str], object] = {}
+conductance_model_by_backend_axis: dict[tuple[str, str], str] = {}
+directional_records: list[dict[str, float | str]] = []
+
+for backend in extraction_backends:
+    backend_label = str(extraction_backend_configs[backend]["label"])
+    for ax in axes_available:
+        axis_image, extract_ax = extract_axis_network(ax, backend=backend)
+        net_ax = extract_ax.net
+        res_ax, model_ax = solve_axis_with_fallback(net_ax, ax)
+        k_ax_m2 = float(res_ax.permeability[ax])
+        k_ax_mD = k_ax_m2 / M2_PER_MD
+        key = (backend, ax)
+        axis_images_by_backend_axis[key] = axis_image
+        extracts_by_backend_axis[key] = extract_ax
+        solve_results_by_backend_axis[key] = res_ax
+        conductance_model_by_backend_axis[key] = str(model_ax)
+        directional_records.append(
+            {
+                "backend": backend,
+                "backend_label": backend_label,
+                "axis": ax,
+                "k_m2": k_ax_m2,
+                "k_mD": k_ax_mD,
+                "n_pores": float(net_ax.Np),
+                "n_throats": float(net_ax.Nt),
+                "conductance_model": str(model_ax),
+                "mass_balance_error": float(res_ax.mass_balance_error),
+                "reference_viscosity": float(res_ax.reference_viscosity),
+            }
+        )
+
+kabs_directional_by_backend = (
+    pd.DataFrame(directional_records)
+    .sort_values(["backend", "axis"])
+    .reset_index(drop=True)
+)
+kabs_summary_by_backend = pd.DataFrame(
+    [
+        {
+            "backend": str(backend),
+            "backend_label": str(extraction_backend_configs[str(backend)]["label"]),
+            "k_mean_mD": float(group["k_mD"].mean()),
+            "k_mean_m2": float(group["k_m2"].mean()),
+            "k_rms_mD": float(
+                np.sqrt(np.mean(np.square(group["k_mD"].to_numpy(dtype=float))))
+            ),
+            "k_rms_m2": float(
+                np.sqrt(np.mean(np.square(group["k_m2"].to_numpy(dtype=float))))
+            ),
+            "axis_count": float(group.shape[0]),
+        }
+        for backend, group in kabs_directional_by_backend.groupby("backend", sort=False)
+    ]
+)
+if permeability_mean_mode == "quadratic":
+    aggregate_label = "Quadratic mean"
+    kabs_summary_by_backend["aggregate_kabs_mD"] = kabs_summary_by_backend["k_rms_mD"]
+    kabs_summary_by_backend["aggregate_kabs_m2"] = kabs_summary_by_backend["k_rms_m2"]
+else:
+    aggregate_label = "Arithmetic mean"
+    kabs_summary_by_backend["aggregate_kabs_mD"] = kabs_summary_by_backend["k_mean_mD"]
+    kabs_summary_by_backend["aggregate_kabs_m2"] = kabs_summary_by_backend["k_mean_m2"]
+
+primary_key = (extraction_backend, flow_axis)
+im_flow_analysis = axis_images_by_backend_axis[primary_key]
+extract = extracts_by_backend_axis[primary_key]
+net_full = extract.net_full
+net = extract.net
+res = solve_results_by_backend_axis[primary_key]
+used_conductance_model = conductance_model_by_backend_axis[primary_key]
+phi_image_analysis_flow = float(np.mean(im_flow_analysis))
+phi_abs = absolute_porosity(net)
+phi_eff = effective_porosity(net, axis=flow_axis)
 k_m2 = float(res.permeability[flow_axis])
 k_mD = k_m2 / M2_PER_MD
+kabs_directional = (
+    kabs_directional_by_backend[
+        kabs_directional_by_backend["backend"] == extraction_backend
+    ]
+    .drop(columns=["backend", "backend_label"])
+    .reset_index(drop=True)
+)
+primary_summary = kabs_summary_by_backend[
+    kabs_summary_by_backend["backend"] == extraction_backend
+].iloc[0]
+kabs_mean_mD = float(primary_summary["k_mean_mD"])
+kabs_mean_m2 = float(primary_summary["k_mean_m2"])
+kabs_rms_mD = float(primary_summary["k_rms_mD"])
+kabs_rms_m2 = float(primary_summary["k_rms_m2"])
+aggregate_kabs_mD = float(primary_summary["aggregate_kabs_mD"])
+aggregate_kabs_m2 = float(primary_summary["aggregate_kabs_m2"])
 
+print("Extraction approaches:")
+for backend in extraction_backends:
+    config = extraction_backend_configs[backend]
+    print(
+        f"- {config['label']} ({backend}), geometry_repairs={config.get('geometry_repairs')}, "
+        f"extraction_kwargs={config.get('extraction_kwargs', {})}"
+    )
+print()
+print(f"Primary backend: {extract.backend} {extract.backend_version}")
+print(f"Primary imported full network: Np={net_full.Np}, Nt={net_full.Nt}")
+print(f"Primary axis-spanning network ({flow_axis}): Np={net.Np}, Nt={net.Nt}")
+print(
+    "Paper PNM reference uses PoreSpy "
+    f"{paper_reference_porespy_version}; current primary backend is {extract.backend_version}"
+)
+print(f"Conductance models requested: {conductance_models}")
+print(f"Trim nonpercolating paths: {trim_nonpercolating_paths}")
+print(
+    f"Viscosity model: {viscosity_model.backend_name} at {viscosity_model.temperature:.2f} K"
+)
+print(
+    f"ROI image porosity after {flow_axis}-path trim for primary backend: "
+    f"{100.0 * phi_image_analysis_flow:.4f}%"
+)
+print()
+print("Directional Kabs estimates by backend [mD]:")
+print(
+    kabs_directional_by_backend[
+        [
+            "backend_label",
+            "axis",
+            "k_mD",
+            "n_pores",
+            "n_throats",
+            "conductance_model",
+            "mass_balance_error",
+        ]
+    ]
+)
+print()
+print(f"Kabs summary by backend [{aggregate_label} used for aggregate column]:")
+print(
+    kabs_summary_by_backend[
+        ["backend_label", "k_mean_mD", "k_rms_mD", "aggregate_kabs_mD"]
+    ]
+)
+print(f"Primary arithmetic mean Kabs: {kabs_mean_m2:.6e} m^2 ({kabs_mean_mD:.3f} mD)")
+print(f"Primary quadratic mean Kabs: {kabs_rms_m2:.6e} m^2 ({kabs_rms_mD:.3f} mD)")
+
+# %%
 phi_est_pct = 100.0 * phi_abs
 phi_eff_pct = 100.0 * phi_eff
-
 porosity_abs_error_pct_points = phi_est_pct - experimental_porosity_pct
 porosity_rel_error_pct = (
     100.0 * porosity_abs_error_pct_points / experimental_porosity_pct
-)
-
-axes_available = tuple(ax for ax in ("x", "y", "z") if ax in axis_lengths)
-directional_records: list[dict[str, float | str]] = []
-
-for ax in axes_available:
-    if ax == flow_axis:
-        net_ax = net
-        res_ax = res
-        model_ax = used_conductance_model
-    else:
-        _, extract_ax = extract_axis_network(ax)
-        net_ax = extract_ax.net
-        res_ax, model_ax = solve_axis_with_fallback(net_ax, ax)
-
-    k_ax_m2 = float(res_ax.permeability[ax])
-    k_ax_mD = k_ax_m2 / M2_PER_MD
-    directional_records.append(
-        {
-            "axis": ax,
-            "k_m2": k_ax_m2,
-            "k_mD": k_ax_mD,
-            "n_pores": float(net_ax.Np),
-            "n_throats": float(net_ax.Nt),
-            "conductance_model": str(model_ax),
-        }
-    )
-
-kabs_directional = (
-    pd.DataFrame(directional_records).sort_values("axis").reset_index(drop=True)
-)
-kabs_mean_mD = float(kabs_directional["k_mD"].mean())
-kabs_mean_m2 = float(kabs_directional["k_m2"].mean())
-kabs_rms_mD = float(
-    np.sqrt(np.mean(np.square(kabs_directional["k_mD"].to_numpy(dtype=float))))
-)
-kabs_rms_m2 = float(
-    np.sqrt(np.mean(np.square(kabs_directional["k_m2"].to_numpy(dtype=float))))
 )
 kabs_mean_abs_error_mD = kabs_mean_mD - experimental_kabs_mD
 kabs_mean_rel_error_pct = 100.0 * kabs_mean_abs_error_mD / experimental_kabs_mD
 kabs_rms_abs_error_mD = kabs_rms_mD - experimental_kabs_mD
 kabs_rms_rel_error_pct = 100.0 * kabs_rms_abs_error_mD / experimental_kabs_mD
 
-if permeability_mean_mode == "quadratic":
-    aggregate_label = "Quadratic mean"
-    aggregate_kabs_mD = kabs_rms_mD
-    aggregate_kabs_m2 = kabs_rms_m2
-else:
-    aggregate_label = "Arithmetic mean"
-    aggregate_kabs_mD = kabs_mean_mD
-    aggregate_kabs_m2 = kabs_mean_m2
-
-estimated_properties = pd.DataFrame(
-    [
-        {
-            "property": "Porosity (image full volume)",
-            "estimated": 100.0 * phi_image_full,
-            "units": "%",
-            "experimental": experimental_porosity_pct,
-            "abs_error": (100.0 * phi_image_full) - experimental_porosity_pct,
-            "rel_error_pct": 100.0
-            * ((100.0 * phi_image_full) - experimental_porosity_pct)
-            / experimental_porosity_pct,
-        },
-        {
-            "property": "Porosity (network absolute)",
-            "estimated": phi_est_pct,
-            "units": "%",
-            "experimental": experimental_porosity_pct,
-            "abs_error": porosity_abs_error_pct_points,
-            "rel_error_pct": porosity_rel_error_pct,
-        },
-        {
-            "property": "Porosity (network effective)",
-            "estimated": phi_eff_pct,
-            "units": "%",
-            "experimental": np.nan,
-            "abs_error": np.nan,
-            "rel_error_pct": np.nan,
-        },
-    ]
-)
-for _, row in kabs_directional.iterrows():
-    k_dir_mD = float(row["k_mD"])
-    estimated_properties.loc[len(estimated_properties)] = {
-        "property": f"Absolute permeability K{row['axis']}",
-        "estimated": k_dir_mD,
-        "units": "mD",
-        "experimental": experimental_kabs_mD,
-        "abs_error": k_dir_mD - experimental_kabs_mD,
+estimated_records: list[dict[str, object]] = [
+    {
+        "backend": "image",
+        "backend_label": "Binary image",
+        "property": "Porosity (image full volume)",
+        "estimated": 100.0 * phi_image_full,
+        "units": "%",
+        "experimental": experimental_porosity_pct,
+        "abs_error": (100.0 * phi_image_full) - experimental_porosity_pct,
         "rel_error_pct": 100.0
-        * (k_dir_mD - experimental_kabs_mD)
-        / experimental_kabs_mD,
+        * ((100.0 * phi_image_full) - experimental_porosity_pct)
+        / experimental_porosity_pct,
     }
-estimated_properties.loc[len(estimated_properties)] = {
-    "property": "Absolute permeability arithmetic mean(Kx,Ky,Kz)",
-    "estimated": kabs_mean_mD,
-    "units": "mD",
-    "experimental": experimental_kabs_mD,
-    "abs_error": kabs_mean_abs_error_mD,
-    "rel_error_pct": kabs_mean_rel_error_pct,
-}
-estimated_properties.loc[len(estimated_properties)] = {
-    "property": "Absolute permeability quadratic mean(sqrt(mean(K^2)))",
-    "estimated": kabs_rms_mD,
-    "units": "mD",
-    "experimental": experimental_kabs_mD,
-    "abs_error": kabs_rms_abs_error_mD,
-    "rel_error_pct": kabs_rms_rel_error_pct,
-}
+]
+for backend in extraction_backends:
+    backend_label = str(extraction_backend_configs[backend]["label"])
+    backend_extract = extracts_by_backend_axis[(backend, flow_axis)]
+    backend_net = backend_extract.net
+    phi_backend_abs_pct = 100.0 * absolute_porosity(backend_net)
+    phi_backend_eff_pct = 100.0 * effective_porosity(backend_net, axis=flow_axis)
+    estimated_records.extend(
+        [
+            {
+                "backend": backend,
+                "backend_label": backend_label,
+                "property": "Porosity (network absolute)",
+                "estimated": phi_backend_abs_pct,
+                "units": "%",
+                "experimental": experimental_porosity_pct,
+                "abs_error": phi_backend_abs_pct - experimental_porosity_pct,
+                "rel_error_pct": 100.0
+                * (phi_backend_abs_pct - experimental_porosity_pct)
+                / experimental_porosity_pct,
+            },
+            {
+                "backend": backend,
+                "backend_label": backend_label,
+                "property": "Porosity (network effective)",
+                "estimated": phi_backend_eff_pct,
+                "units": "%",
+                "experimental": np.nan,
+                "abs_error": np.nan,
+                "rel_error_pct": np.nan,
+            },
+        ]
+    )
+    for row in kabs_directional_by_backend[
+        kabs_directional_by_backend["backend"] == backend
+    ].itertuples(index=False):
+        k_dir_mD = float(row.k_mD)
+        estimated_records.append(
+            {
+                "backend": backend,
+                "backend_label": backend_label,
+                "property": f"Absolute permeability K{row.axis}",
+                "estimated": k_dir_mD,
+                "units": "mD",
+                "experimental": experimental_kabs_mD,
+                "abs_error": k_dir_mD - experimental_kabs_mD,
+                "rel_error_pct": 100.0
+                * (k_dir_mD - experimental_kabs_mD)
+                / experimental_kabs_mD,
+            }
+        )
+    summary_row = kabs_summary_by_backend[
+        kabs_summary_by_backend["backend"] == backend
+    ].iloc[0]
+    for property_name, value in (
+        (
+            "Absolute permeability arithmetic mean(Kx,Ky,Kz)",
+            float(summary_row["k_mean_mD"]),
+        ),
+        (
+            "Absolute permeability quadratic mean(sqrt(mean(K^2)))",
+            float(summary_row["k_rms_mD"]),
+        ),
+    ):
+        estimated_records.append(
+            {
+                "backend": backend,
+                "backend_label": backend_label,
+                "property": property_name,
+                "estimated": value,
+                "units": "mD",
+                "experimental": experimental_kabs_mD,
+                "abs_error": value - experimental_kabs_mD,
+                "rel_error_pct": 100.0
+                * (value - experimental_kabs_mD)
+                / experimental_kabs_mD,
+            }
+        )
 
-print(f"Conductance model used: {used_conductance_model}")
+estimated_properties = pd.DataFrame(estimated_records)
+print(f"Conductance model used for primary flow-axis solve: {used_conductance_model}")
 print(
-    f"Reference viscosity used for permeability reporting: "
+    f"Reference viscosity used for primary permeability reporting: "
     f"{res.reference_viscosity:.6e} Pa s"
 )
 print(
-    f"Nonlinear iterations ({nonlinear_solver}): "
+    f"Primary nonlinear iterations ({nonlinear_solver}): "
     f"{res.solver_info.get('nonlinear_iterations', 'n/a')}"
 )
-print(f"Total flow rate Q: {res.total_flow_rate:.6e} m^3/s")
-print(f"K{flow_axis}: {k_m2:.6e} m^2 ({k_mD:.3f} mD)")
-print(f"Mass-balance error: {res.mass_balance_error:.3e}")
-print()
-print("Directional Kabs estimates [mD]:")
-print(kabs_directional[["axis", "k_mD", "n_pores", "n_throats", "conductance_model"]])
-print(
-    f"Arithmetic mean Kabs across axes: {kabs_mean_m2:.6e} m^2 ({kabs_mean_mD:.3f} mD)"
-)
-print(f"Quadratic mean Kabs across axes: {kabs_rms_m2:.6e} m^2 ({kabs_rms_mD:.3f} mD)")
+print(f"Primary total flow rate Q: {res.total_flow_rate:.6e} m^3/s")
+print(f"Primary K{flow_axis}: {k_m2:.6e} m^2 ({k_mD:.3f} mD)")
+print(f"Primary mass-balance error: {res.mass_balance_error:.3e}")
 estimated_properties
 
 # %% [markdown]
@@ -683,29 +823,49 @@ estimated_properties
 
 # %%
 experimental_kabs_error_mD = experimental_kabs_mD * experimental_kabs_rel_error
-
-bar_labels = [f"K{ax}" for ax in kabs_directional["axis"]] + [
-    aggregate_label,
-    "Experimental",
-]
-bar_values = list(kabs_directional["k_mD"].to_numpy(dtype=float)) + [
-    aggregate_kabs_mD,
-    experimental_kabs_mD,
-]
+bar_data = kabs_directional_by_backend.sort_values(["backend", "axis"])
+summary_bar_data = kabs_summary_by_backend.sort_values("backend")
+bar_labels = (
+    [f"{row.backend_label}\nK{row.axis}" for row in bar_data.itertuples(index=False)]
+    + [
+        f"{row.backend_label}\n{aggregate_label}"
+        for row in summary_bar_data.itertuples(index=False)
+    ]
+    + ["Experimental\nKabs"]
+)
+bar_values = (
+    list(bar_data["k_mD"].to_numpy(dtype=float))
+    + list(summary_bar_data["aggregate_kabs_mD"].to_numpy(dtype=float))
+    + [experimental_kabs_mD]
+)
 bar_errors = [0.0] * (len(bar_labels) - 1) + [experimental_kabs_error_mD]
+backend_colors = {
+    "native_maximal_ball": "tab:green",
+    "porespy": "tab:blue",
+    "prego": "tab:orange",
+}
+bar_colors = (
+    [backend_colors.get(str(backend), "tab:purple") for backend in bar_data["backend"]]
+    + [
+        backend_colors.get(str(backend), "tab:purple")
+        for backend in summary_bar_data["backend"]
+    ]
+    + ["tab:gray"]
+)
+bar_hatches = [""] * len(bar_data) + ["//"] * len(summary_bar_data) + [""]
 
-fig, ax = plt.subplots(figsize=(10, 5))
+fig, ax = plt.subplots(figsize=(14, 5.5))
 bars = ax.bar(
     bar_labels,
     bar_values,
     yerr=bar_errors,
-    capsize=6,
-    color=["tab:blue", "tab:orange", "tab:green", "tab:purple", "tab:gray"][
-        : len(bar_labels)
-    ],
+    capsize=5,
+    color=bar_colors,
     edgecolor="black",
     alpha=0.85,
 )
+for rect, hatch in zip(bars, bar_hatches):
+    rect.set_hatch(hatch)
 ax.axhline(
     experimental_kabs_mD,
     color="black",
@@ -722,11 +882,10 @@ ax.fill_between(
     label="Experimental +/-10%",
 )
 ax.set_ylabel("Absolute permeability [mD]")
-ax.set_title(
-    f"Estimated Kabs by direction and {aggregate_label.lower()} vs experimental"
-)
+ax.set_title(f"Estimated Kabs by backend, direction, and {aggregate_label.lower()}")
 ax.grid(alpha=0.3, linestyle=":", axis="y")
 ax.legend()
+ax.tick_params(axis="x", labelrotation=25)
 
 for rect, val in zip(bars, bar_values):
     ax.text(
@@ -735,170 +894,234 @@ for rect, val in zip(bars, bar_values):
         f"{val:.1f}",
         ha="center",
         va="bottom",
-        fontsize=9,
+        fontsize=8,
     )
 
 plt.tight_layout()
 plt.show()
 
+
 # %% [markdown]
 # ## Pore-network statistics
 
 # %%
-pore_size_m, pore_size_field = characteristic_size(net.pore, expected_shape=(net.Np,))
-throat_size_m, throat_size_field = characteristic_size(
-    net.throat, expected_shape=(net.Nt,)
-)
+def summarize_network(
+    backend: str, net_backend
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    """Return tabular and array diagnostics for one backend's flow-axis network."""
+    backend_label = str(extraction_backend_configs[backend]["label"])
+    pore_size_m, pore_size_field = characteristic_size(
+        net_backend.pore, expected_shape=(net_backend.Np,)
+    )
+    throat_size_m, throat_size_field = characteristic_size(
+        net_backend.throat, expected_shape=(net_backend.Nt,)
+    )
+    pore_size_um = 1.0e6 * pore_size_m
+    throat_size_um = 1.0e6 * throat_size_m
+    coord = coordination_numbers(net_backend)
+    coord_vals, coord_counts = np.unique(coord, return_counts=True)
+    pore_volume = np.asarray(
+        net_backend.pore.get("region_volume", net_backend.pore["volume"]),
+        dtype=float,
+    )
+    order = np.argsort(pore_size_um)
+    cum_pore_volume = np.cumsum(pore_volume[order]) / pore_volume.sum()
+    conn = connectivity_metrics(net_backend)
+    stats = pd.DataFrame(
+        [
+            {"metric": "Np", "value": float(net_backend.Np), "units": "count"},
+            {"metric": "Nt", "value": float(net_backend.Nt), "units": "count"},
+            {
+                "metric": "Mean coordination",
+                "value": float(np.mean(coord)),
+                "units": "-",
+            },
+            {"metric": "Max coordination", "value": float(np.max(coord)), "units": "-"},
+            {
+                "metric": f"Mean pore size ({pore_size_field})",
+                "value": float(np.mean(pore_size_um)),
+                "units": "um",
+            },
+            {
+                "metric": f"Median pore size ({pore_size_field})",
+                "value": float(np.median(pore_size_um)),
+                "units": "um",
+            },
+            {
+                "metric": f"Mean throat size ({throat_size_field})",
+                "value": float(np.mean(throat_size_um)),
+                "units": "um",
+            },
+            {
+                "metric": f"Median throat size ({throat_size_field})",
+                "value": float(np.median(throat_size_um)),
+                "units": "um",
+            },
+            {
+                "metric": "Connected components",
+                "value": float(conn.n_components),
+                "units": "count",
+            },
+            {
+                "metric": "Giant component fraction",
+                "value": float(conn.giant_component_fraction),
+                "units": "-",
+            },
+            {
+                "metric": "Dead-end pore fraction",
+                "value": float(conn.dead_end_fraction),
+                "units": "-",
+            },
+        ]
+    )
+    stats.insert(0, "backend", backend)
+    stats.insert(1, "backend_label", backend_label)
+    arrays = {
+        "pore_size_um": pore_size_um,
+        "pore_size_field": pore_size_field,
+        "throat_size_um": throat_size_um,
+        "throat_size_field": throat_size_field,
+        "coord_vals": coord_vals,
+        "coord_counts": coord_counts,
+        "coord": coord,
+        "pore_size_order": order,
+        "cum_pore_volume": cum_pore_volume,
+    }
+    return stats, arrays
 
-pore_size_um = 1.0e6 * pore_size_m
-throat_size_um = 1.0e6 * throat_size_m
 
-coord = coordination_numbers(net)
-coord_vals, coord_counts = np.unique(coord, return_counts=True)
-
-pore_volume = np.asarray(net.pore.get("region_volume", net.pore["volume"]), dtype=float)
-order = np.argsort(pore_size_um)
-cum_pore_volume = np.cumsum(pore_volume[order]) / pore_volume.sum()
-
-conn = connectivity_metrics(net)
-
-network_stats = pd.DataFrame(
-    [
-        {"metric": "Np", "value": float(net.Np), "units": "count"},
-        {"metric": "Nt", "value": float(net.Nt), "units": "count"},
-        {
-            "metric": "Mean coordination",
-            "value": float(np.mean(coord)),
-            "units": "-",
-        },
-        {
-            "metric": "Max coordination",
-            "value": float(np.max(coord)),
-            "units": "-",
-        },
-        {
-            "metric": f"Mean pore size ({pore_size_field})",
-            "value": float(np.mean(pore_size_um)),
-            "units": "um",
-        },
-        {
-            "metric": f"Median pore size ({pore_size_field})",
-            "value": float(np.median(pore_size_um)),
-            "units": "um",
-        },
-        {
-            "metric": f"Mean throat size ({throat_size_field})",
-            "value": float(np.mean(throat_size_um)),
-            "units": "um",
-        },
-        {
-            "metric": f"Median throat size ({throat_size_field})",
-            "value": float(np.median(throat_size_um)),
-            "units": "um",
-        },
-        {
-            "metric": "Connected components",
-            "value": float(conn.n_components),
-            "units": "count",
-        },
-        {
-            "metric": "Giant component fraction",
-            "value": float(conn.giant_component_fraction),
-            "units": "-",
-        },
-        {
-            "metric": "Dead-end pore fraction",
-            "value": float(conn.dead_end_fraction),
-            "units": "-",
-        },
-    ]
-)
-
-network_stats
+network_stats_frames: list[pd.DataFrame] = []
+network_diagnostics_by_backend: dict[str, dict[str, object]] = {}
+for backend in extraction_backends:
+    stats_backend, diagnostics_backend = summarize_network(
+        backend,
+        extracts_by_backend_axis[(backend, flow_axis)].net,
+    )
+    network_stats_frames.append(stats_backend)
+    network_diagnostics_by_backend[backend] = diagnostics_backend
+network_stats_by_backend = pd.concat(network_stats_frames, ignore_index=True)
+network_stats = network_stats_by_backend[
+    network_stats_by_backend["backend"] == extraction_backend
+].reset_index(drop=True)
+network_stats_by_backend
 
 # %%
-fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+for backend in extraction_backends:
+    backend_label = str(extraction_backend_configs[backend]["label"])
+    diagnostics = network_diagnostics_by_backend[backend]
+    pore_size_um = diagnostics["pore_size_um"]
+    throat_size_um = diagnostics["throat_size_um"]
+    coord_vals = diagnostics["coord_vals"]
+    coord_counts = diagnostics["coord_counts"]
+    order = diagnostics["pore_size_order"]
+    cum_pore_volume = diagnostics["cum_pore_volume"]
+    pore_size_field = diagnostics["pore_size_field"]
+    throat_size_field = diagnostics["throat_size_field"]
 
-axes[0, 0].hist(pore_size_um, bins=30, color="tab:blue", alpha=0.85, edgecolor="black")
-axes[0, 0].set_title("Pore size distribution")
-axes[0, 0].set_xlabel(f"Pore {pore_size_field} [um]")
-axes[0, 0].set_ylabel("Count")
-axes[0, 0].grid(alpha=0.3, linestyle=":")
+    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+    axes[0, 0].hist(
+        pore_size_um, bins=30, color="tab:blue", alpha=0.85, edgecolor="black"
+    )
+    axes[0, 0].set_title("Pore size distribution")
+    axes[0, 0].set_xlabel(f"Pore {pore_size_field} [um]")
+    axes[0, 0].set_ylabel("Count")
+    axes[0, 0].grid(alpha=0.3, linestyle=":")
 
-axes[0, 1].hist(
-    throat_size_um,
-    bins=30,
-    color="tab:orange",
-    alpha=0.85,
-    edgecolor="black",
-)
-axes[0, 1].set_title("Throat size distribution")
-axes[0, 1].set_xlabel(f"Throat {throat_size_field} [um]")
-axes[0, 1].set_ylabel("Count")
-axes[0, 1].grid(alpha=0.3, linestyle=":")
+    axes[0, 1].hist(
+        throat_size_um,
+        bins=30,
+        color="tab:orange",
+        alpha=0.85,
+        edgecolor="black",
+    )
+    axes[0, 1].set_title("Throat size distribution")
+    axes[0, 1].set_xlabel(f"Throat {throat_size_field} [um]")
+    axes[0, 1].set_ylabel("Count")
+    axes[0, 1].grid(alpha=0.3, linestyle=":")
 
-axes[1, 0].bar(
-    coord_vals,
-    coord_counts,
-    color="tab:green",
-    alpha=0.85,
-    edgecolor="black",
-)
-axes[1, 0].set_title("Coordination number distribution")
-axes[1, 0].set_xlabel("Coordination number")
-axes[1, 0].set_ylabel("Pore count")
-axes[1, 0].grid(alpha=0.3, linestyle=":", axis="y")
+    axes[1, 0].bar(
+        coord_vals, coord_counts, color="tab:green", alpha=0.85, edgecolor="black"
+    )
+    axes[1, 0].set_title("Coordination number distribution")
+    axes[1, 0].set_xlabel("Coordination number")
+    axes[1, 0].set_ylabel("Pore count")
+    axes[1, 0].grid(alpha=0.3, linestyle=":", axis="y")
 
-axes[1, 1].plot(pore_size_um[order], cum_pore_volume, color="tab:red", linewidth=2)
-axes[1, 1].set_title("Cumulative pore-volume fraction")
-axes[1, 1].set_xlabel(f"Pore {pore_size_field} [um]")
-axes[1, 1].set_ylabel("Cumulative fraction")
-axes[1, 1].grid(alpha=0.3, linestyle=":")
+    axes[1, 1].plot(pore_size_um[order], cum_pore_volume, color="tab:red", linewidth=2)
+    axes[1, 1].set_title("Cumulative pore-volume fraction")
+    axes[1, 1].set_xlabel(f"Pore {pore_size_field} [um]")
+    axes[1, 1].set_ylabel("Cumulative fraction")
+    axes[1, 1].grid(alpha=0.3, linestyle=":")
 
-plt.tight_layout()
-plt.show()
+    fig.suptitle(f"{backend_label} pore-network statistics", fontsize=14)
+    plt.tight_layout()
+    plt.show()
 
 # %% [markdown]
 # ## Interactive pore network
 
 # %%
-fig = plot_network_plotly(
-    net,
-    point_scalars=res.pore_pressure,
-    max_throats=max_plot_throats,
-    title=(
-        f"DRP-317 Parker network ({flow_axis}-spanning) - pressure field "
-        f"[{used_conductance_model}]"
-    ),
-    layout_kwargs={"width": 1000, "height": 750},
-)
-fig.show()
+network_figures_by_backend = {}
+for backend in extraction_backends:
+    backend_label = str(extraction_backend_configs[backend]["label"])
+    backend_net = extracts_by_backend_axis[(backend, flow_axis)].net
+    backend_result = solve_results_by_backend_axis[(backend, flow_axis)]
+    backend_model = conductance_model_by_backend_axis[(backend, flow_axis)]
+    fig = plot_network_plotly(
+        backend_net,
+        point_scalars=backend_result.pore_pressure,
+        max_throats=max_plot_throats,
+        title=(
+            f"DRP-317 {raw_relpath.stem.replace('_2d25um_binary', '')} "
+            f"{backend_label} network ({flow_axis}-spanning) - pressure field "
+            f"[{backend_model}]"
+        ),
+        layout_kwargs={"width": 1000, "height": 750},
+    )
+    network_figures_by_backend[backend] = fig
+    fig.show()
 
 # %% [markdown]
 # ## Save outputs
 
 # %%
 out_dir = examples_data / "drp-317"
-out_net_full_h5 = out_dir / "Parker_2d25um_network_full_voids.h5"
-out_net_span_h5 = out_dir / f"Parker_2d25um_network_{flow_axis}spanning_voids.h5"
-out_props_csv = out_dir / "Parker_2d25um_estimated_properties.csv"
-out_stats_csv = out_dir / "Parker_2d25um_network_stats.csv"
-out_kabs_dir_csv = out_dir / "Parker_2d25um_kabs_directional.csv"
-out_roi_scan_csv = out_dir / "Parker_2d25um_roi_scan.csv"
+sample_output_stem = raw_relpath.name
+for suffix in ("_binary.raw", ".raw"):
+    sample_output_stem = sample_output_stem.removesuffix(suffix)
+out_net_full_h5_by_backend = {
+    backend: out_dir / f"{sample_output_stem}_{backend}_network_full_voids.h5"
+    for backend in extraction_backends
+}
+out_net_span_h5_by_backend = {
+    backend: out_dir
+    / f"{sample_output_stem}_{backend}_network_{flow_axis}spanning_voids.h5"
+    for backend in extraction_backends
+}
+out_props_csv = out_dir / f"{sample_output_stem}_estimated_properties.csv"
+out_stats_csv = out_dir / f"{sample_output_stem}_network_stats.csv"
+out_kabs_dir_csv = out_dir / f"{sample_output_stem}_kabs_directional.csv"
+out_kabs_summary_csv = out_dir / f"{sample_output_stem}_kabs_summary_by_backend.csv"
+out_roi_scan_csv = out_dir / f"{sample_output_stem}_roi_scan.csv"
 
 if save_outputs:
-    save_hdf5(net_full, out_net_full_h5)
-    save_hdf5(net, out_net_span_h5)
+    for backend in extraction_backends:
+        backend_extract = extracts_by_backend_axis[(backend, flow_axis)]
+        save_hdf5(backend_extract.net_full, out_net_full_h5_by_backend[backend])
+        save_hdf5(backend_extract.net, out_net_span_h5_by_backend[backend])
     estimated_properties.to_csv(out_props_csv, index=False)
-    network_stats.to_csv(out_stats_csv, index=False)
-    kabs_directional.to_csv(out_kabs_dir_csv, index=False)
+    network_stats_by_backend.to_csv(out_stats_csv, index=False)
+    kabs_directional_by_backend.to_csv(out_kabs_dir_csv, index=False)
+    kabs_summary_by_backend.to_csv(out_kabs_summary_csv, index=False)
     if roi_scan_summary is not None:
         roi_scan_summary.to_csv(out_roi_scan_csv, index=False)
 
-print(f"Saved full network: {out_net_full_h5}")
-print(f"Saved spanning network: {out_net_span_h5}")
+for backend in extraction_backends:
+    print(f"Saved {backend} full network: {out_net_full_h5_by_backend[backend]}")
+    print(f"Saved {backend} spanning network: {out_net_span_h5_by_backend[backend]}")
 print(f"Saved estimated properties: {out_props_csv}")
 print(f"Saved network stats: {out_stats_csv}")
 print(f"Saved directional Kabs: {out_kabs_dir_csv}")
+print(f"Saved Kabs summary: {out_kabs_summary_csv}")
 if roi_scan_summary is not None:
     print(f"Saved ROI scan summary: {out_roi_scan_csv}")
