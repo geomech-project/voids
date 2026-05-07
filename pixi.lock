@@ -18955,7 +18955,7 @@ packages:
 - pypi: ./
   name: voids
   version: 0.1.7
-  sha256: 7f105fa675cb8298ee0cb45d810461a21f4a49e07eee22c6a990a0262ed2d10b
+  sha256: 5871b6544e939accb076c7d756da74c754be31cc471b266cafc5ecef3b6f2dac
   requires_dist:
   - numpy>=1.26,<2.2
   - scipy>=1.11

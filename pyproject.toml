@@ -91,3 +91,8 @@ include = ["voids*"]
 minversion = "8.0"
 addopts = "-ra"
 testpaths = ["tests"]
+
+[tool.coverage.report]
+exclude_also = [
+    '@(?:numba\.)?(?:njit|jit|vectorize|guvectorize)\b',
+]
