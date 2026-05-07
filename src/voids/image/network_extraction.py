@@ -8,6 +8,7 @@ import numpy as np
 import porespy as ps
 
 from voids.core.network import Network
+from voids.version import __version__ as _voids_version
 from voids.core.provenance import Provenance
 from voids.core.sample import SampleGeometry
 from voids.graph import spanning_subnetwork
@@ -452,9 +453,13 @@ def extract_spanning_pore_network(
         cross_sections=axis_areas,
         units={"length": length_unit, "pressure": pressure_unit},
     )
+    if backend_normalized == "native_maximal_ball":
+        source_version: str | None = _voids_version
+    else:
+        source_version = getattr(ps, "__version__", None)
     provenance = Provenance(
         source_kind="image_extraction",
-        source_version=getattr(ps, "__version__", None),
+        source_version=source_version,
         extraction_method=backend_normalized,
         random_seed=repair_seed if geometry_repairs is not None else None,
         user_notes=dict(provenance_notes or {}),
@@ -482,7 +487,7 @@ def extract_spanning_pore_network(
         pore_indices=pore_indices,
         throat_mask=throat_mask,
         backend=backend_normalized,
-        backend_version=getattr(ps, "__version__", None),
+        backend_version=source_version,
     )
 
 
