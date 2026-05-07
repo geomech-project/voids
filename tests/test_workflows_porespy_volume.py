@@ -636,6 +636,90 @@ def test_extract_spanning_pore_network_skips_second_geometry_repair_for_native_b
     assert result.backend == "native_maximal_ball"
 
 
+def _make_minimal_network_dict() -> dict[str, object]:
+    """Return a minimal network_dict accepted by from_porespy."""
+    return {
+        "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+        "throat.conns": np.array([[0, 1]], dtype=int),
+        "pore.inlet_xmin": np.array([True, False], dtype=bool),
+        "pore.outlet_xmax": np.array([False, True], dtype=bool),
+        "pore.radius_inscribed": np.array([1.0, 1.0], dtype=float),
+        "pore.area": np.array([1.0, 1.0], dtype=float),
+        "pore.shape_factor": np.array([0.03, 0.03], dtype=float),
+        "pore.volume": np.array([1.0, 1.0], dtype=float),
+        "throat.radius_inscribed": np.array([0.5], dtype=float),
+        "throat.cross_sectional_area": np.array([0.5], dtype=float),
+        "throat.shape_factor": np.array([0.02], dtype=float),
+        "throat.volume": np.array([0.1], dtype=float),
+        "throat.conduit_lengths.pore1": np.array([0.2], dtype=float),
+        "throat.conduit_lengths.throat": np.array([0.6], dtype=float),
+        "throat.conduit_lengths.pore2": np.array([0.2], dtype=float),
+    }
+
+
+def test_extract_spanning_pore_network_uses_voids_version_for_native_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """native_maximal_ball backend should record the voids version, not porespy."""
+    import porespy as ps
+
+    from voids.version import __version__ as voids_version
+
+    net = make_linear_chain_network(num_pores=2)
+
+    monkeypatch.setattr(nex, "_extract_network_dict", lambda *a, **kw: _make_minimal_network_dict())
+    monkeypatch.setattr(nex, "from_porespy", lambda *a, **kw: net)
+    monkeypatch.setattr(
+        nex,
+        "spanning_subnetwork",
+        lambda n, axis: (n, np.arange(n.Np, dtype=np.int64), np.ones(n.Nt, dtype=bool)),
+    )
+
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="native_maximal_ball",
+        flow_axis="x",
+    )
+
+    assert result.backend_version == voids_version
+    assert result.provenance.source_version == voids_version
+    assert result.backend_version != getattr(ps, "__version__", None)
+
+
+def test_extract_spanning_pore_network_uses_porespy_version_for_porespy_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PoreSpy-based backends should record porespy.__version__, not the voids version."""
+    import porespy as ps
+
+    from voids.version import __version__ as voids_version
+
+    net = make_linear_chain_network(num_pores=2)
+
+    monkeypatch.setattr(nex, "_extract_network_dict", lambda *a, **kw: _make_minimal_network_dict())
+    monkeypatch.setattr(nex, "from_porespy", lambda *a, **kw: net)
+    monkeypatch.setattr(
+        nex,
+        "spanning_subnetwork",
+        lambda n, axis: (n, np.arange(n.Np, dtype=np.int64), np.ones(n.Nt, dtype=bool)),
+    )
+    monkeypatch.setattr(nex, "scale_porespy_geometry", lambda d, voxel_size: d)
+    monkeypatch.setattr(nex, "ensure_cartesian_boundary_labels", lambda d, axes: d)
+
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="porespy",
+        flow_axis="x",
+    )
+
+    porespy_ver = getattr(ps, "__version__", None)
+    assert result.backend_version == porespy_ver
+    assert result.provenance.source_version == porespy_ver
+    assert result.backend_version != voids_version
+
+
 def test_extract_spanning_pore_network_rejects_unsupported_backend() -> None:
     """Unsupported image-extraction backends should fail before backend work starts."""
 
