@@ -1,3 +1,4 @@
 backend,backend_label,k_mean_mD,k_rms_mD,axis_count
+imperial_snow2,Imperial-style snow2,77.42708928880649,88.94253736880913,3.0
 native_maximal_ball,Native maximal-ball,206.71076454775744,242.5486671992621,3.0
-snow2,PoreSpy snow2,103.06373426109127,123.8492747775905,3.0
+snow2,PoreSpy snow2 defaults,102.36030854601404,122.95079466346372,3.0

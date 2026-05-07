@@ -96,7 +96,7 @@ paper_citation = (
 flow_axis = "x"  # Paper computes absolute permeability left-to-right.
 trim_nonpercolating_paths = True
 extraction_backend = "native_maximal_ball"
-comparison_extraction_backends = ("snow2",)
+comparison_extraction_backends = ("snow2", "imperial_snow2")
 extraction_backends = tuple(
     dict.fromkeys((extraction_backend, *comparison_extraction_backends))
 )
@@ -115,7 +115,12 @@ extraction_backend_configs: dict[str, dict[str, object]] = {
         "geometry_repairs": geometry_repairs,
     },
     "snow2": {
-        "label": "PoreSpy snow2",
+        "label": "PoreSpy snow2 defaults",
+        "extraction_kwargs": {},
+        "geometry_repairs": None,
+    },
+    "imperial_snow2": {
+        "label": "Imperial-style snow2",
         "extraction_kwargs": {},
         "geometry_repairs": "imperial_export",
     },
@@ -639,6 +644,9 @@ kabs_rms_mD = float(
 snow2_kabs_directional = kabs_directional_by_backend[
     kabs_directional_by_backend["backend"] == "snow2"
 ].reset_index(drop=True)
+imperial_snow2_kabs_directional = kabs_directional_by_backend[
+    kabs_directional_by_backend["backend"] == "imperial_snow2"
+].reset_index(drop=True)
 
 phi_image_pct = 100.0 * phi_image_full
 phi_abs_pct = 100.0 * phi_abs
@@ -767,6 +775,7 @@ bar_values = (
 )
 bar_errors = [0.0] * (len(bar_labels) - 1) + [paper_kabs_error_mD]
 backend_colors = {
+    "imperial_snow2": "tab:green",
     "native_maximal_ball": "tab:blue",
     "snow2": "tab:orange",
 }
