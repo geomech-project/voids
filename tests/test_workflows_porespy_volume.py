@@ -684,7 +684,9 @@ def test_extract_spanning_pore_network_uses_voids_version_for_native_backend(
 
     assert result.backend_version == voids_version
     assert result.provenance.source_version == voids_version
-    assert result.backend_version != getattr(ps, "__version__", None)
+    porespy_ver = getattr(ps, "__version__", None)
+    assert porespy_ver is not None, "porespy must expose __version__ for this test to be meaningful"
+    assert result.backend_version != porespy_ver
 
 
 def test_extract_spanning_pore_network_uses_porespy_version_for_porespy_backend(
@@ -715,9 +717,12 @@ def test_extract_spanning_pore_network_uses_porespy_version_for_porespy_backend(
     )
 
     porespy_ver = getattr(ps, "__version__", None)
+    assert porespy_ver is not None, "porespy must expose __version__ for this test to be meaningful"
     assert result.backend_version == porespy_ver
     assert result.provenance.source_version == porespy_ver
-    assert result.backend_version != voids_version
+    assert porespy_ver != voids_version, (
+        "porespy and voids versions must differ for this test to distinguish the two"
+    )
 
 
 def test_extract_spanning_pore_network_rejects_unsupported_backend() -> None:
