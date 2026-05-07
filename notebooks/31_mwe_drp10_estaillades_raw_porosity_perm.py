@@ -96,6 +96,10 @@ paper_citation = (
 flow_axis = "x"  # Paper computes absolute permeability left-to-right.
 trim_nonpercolating_paths = True
 extraction_backend = "native_maximal_ball"
+comparison_extraction_backends = ("snow2",)
+extraction_backends = tuple(
+    dict.fromkeys((extraction_backend, *comparison_extraction_backends))
+)
 compute_directional_all_axes = True
 edt_parallel_threads = min(4, os.cpu_count() or 1)
 extraction_kwargs: dict[str, object] = {
@@ -104,6 +108,18 @@ extraction_kwargs: dict[str, object] = {
     "flow_boundary_mode": "direct",
 }
 geometry_repairs: str | None = None
+extraction_backend_configs: dict[str, dict[str, object]] = {
+    "native_maximal_ball": {
+        "label": "Native maximal-ball",
+        "extraction_kwargs": extraction_kwargs,
+        "geometry_repairs": geometry_repairs,
+    },
+    "snow2": {
+        "label": "PoreSpy snow2",
+        "extraction_kwargs": {},
+        "geometry_repairs": "imperial_export",
+    },
+}
 conductance_models: tuple[str, ...] = ("valvatne_blunt",)
 
 pressure_gradient_pa_per_m = 1.0e4
@@ -449,8 +465,12 @@ fig_rock_plotly
 
 
 # %%
-def extract_axis_network(axis: str):
+def extract_axis_network(axis: str, *, backend: str | None = None):
     """Extract one axis-spanning network from the full sample."""
+    selected_backend = extraction_backend if backend is None else backend
+    backend_config = extraction_backend_configs[selected_backend]
+    backend_extraction_kwargs = dict(backend_config.get("extraction_kwargs", {}))
+    backend_geometry_repairs = backend_config.get("geometry_repairs")
     axis_image = prepare_axis_image(
         im_full,
         axis=axis,
@@ -459,11 +479,11 @@ def extract_axis_network(axis: str):
     extract_axis = extract_spanning_pore_network(
         axis_image,
         voxel_size=voxel_size_m,
-        backend=extraction_backend,
+        backend=selected_backend,
         flow_axis=axis,
         length_unit="m",
-        geometry_repairs=geometry_repairs,
-        extraction_kwargs=extraction_kwargs,
+        geometry_repairs=backend_geometry_repairs,
+        extraction_kwargs=backend_extraction_kwargs,
         provenance_notes={
             "raw_source": str(raw_relpath).replace("\\", "/"),
             "raw_shape_voxels": raw_shape,
@@ -476,9 +496,9 @@ def extract_axis_network(axis: str):
             "paper_citation": paper_citation,
             "trim_nonpercolating_paths": trim_nonpercolating_paths,
             "conductance_models": list(conductance_models),
-            "extraction_backend": extraction_backend,
-            "extraction_kwargs": dict(extraction_kwargs),
-            "geometry_repairs": geometry_repairs,
+            "extraction_backend": selected_backend,
+            "extraction_kwargs": backend_extraction_kwargs,
+            "geometry_repairs": backend_geometry_repairs,
             "full_sample_analysis": True,
         },
     )
@@ -552,37 +572,73 @@ if not compute_directional_all_axes:
     axes_available = (flow_axis,)
 
 directional_records: list[dict[str, float | str]] = []
-for ax in axes_available:
-    if ax == flow_axis:
-        net_ax = net
-        res_ax = res
-        model_ax = used_conductance_model
-    else:
-        _, extract_ax = extract_axis_network(ax)
-        net_ax = extract_ax.net
-        res_ax, model_ax = solve_axis_with_fallback(net_ax, ax)
+for backend in extraction_backends:
+    backend_label = str(extraction_backend_configs[backend]["label"])
+    for ax in axes_available:
+        if backend == extraction_backend and ax == flow_axis:
+            net_ax = net
+            res_ax = res
+            model_ax = used_conductance_model
+        else:
+            _, extract_ax = extract_axis_network(ax, backend=backend)
+            net_ax = extract_ax.net
+            res_ax, model_ax = solve_axis_with_fallback(net_ax, ax)
 
-    k_ax_m2 = float(res_ax.permeability[ax])
-    k_ax_mD = k_ax_m2 / M2_PER_MD
-    directional_records.append(
-        {
-            "axis": ax,
-            "k_m2": k_ax_m2,
-            "k_mD": k_ax_mD,
-            "n_pores": float(net_ax.Np),
-            "n_throats": float(net_ax.Nt),
-            "conductance_model": str(model_ax),
-        }
-    )
+        k_ax_m2 = float(res_ax.permeability[ax])
+        k_ax_mD = k_ax_m2 / M2_PER_MD
+        directional_records.append(
+            {
+                "backend": backend,
+                "backend_label": backend_label,
+                "axis": ax,
+                "k_m2": k_ax_m2,
+                "k_mD": k_ax_mD,
+                "n_pores": float(net_ax.Np),
+                "n_throats": float(net_ax.Nt),
+                "conductance_model": str(model_ax),
+            }
+        )
 
-kabs_directional = (
-    pd.DataFrame(directional_records).sort_values("axis").reset_index(drop=True)
+kabs_directional_by_backend = (
+    pd.DataFrame(directional_records)
+    .sort_values(["backend", "axis"])
+    .reset_index(drop=True)
 )
+kabs_directional = (
+    kabs_directional_by_backend[
+        kabs_directional_by_backend["backend"] == extraction_backend
+    ]
+    .drop(columns=["backend", "backend_label"])
+    .reset_index(drop=True)
+)
+kabs_summary_by_backend = pd.DataFrame(
+    [
+        {
+            "backend": backend,
+            "backend_label": str(extraction_backend_configs[backend]["label"]),
+            "k_mean_mD": float(group["k_mD"].mean()),
+            "k_rms_mD": float(
+                np.sqrt(np.mean(np.square(group["k_mD"].to_numpy(dtype=float))))
+            ),
+            "axis_count": float(group.shape[0]),
+        }
+        for backend, group in kabs_directional_by_backend.groupby("backend", sort=True)
+    ]
+)
+
+if flow_axis in tuple(kabs_directional["axis"]):
+    k_flow_mD = float(
+        kabs_directional.loc[kabs_directional["axis"] == flow_axis, "k_mD"].iloc[0]
+    )
+    k_flow_m2 = k_flow_mD * M2_PER_MD
 
 kabs_mean_mD = float(kabs_directional["k_mD"].mean())
 kabs_rms_mD = float(
     np.sqrt(np.mean(np.square(kabs_directional["k_mD"].to_numpy(dtype=float))))
 )
+snow2_kabs_directional = kabs_directional_by_backend[
+    kabs_directional_by_backend["backend"] == "snow2"
+].reset_index(drop=True)
 
 phi_image_pct = 100.0 * phi_image_full
 phi_abs_pct = 100.0 * phi_abs
@@ -652,10 +708,30 @@ print(f"Total flow rate Q: {res.total_flow_rate:.6e} m^3/s")
 print(f"K{flow_axis}: {k_flow_m2:.6e} m^2 ({k_flow_mD:.3f} mD)")
 print(f"Mass-balance error: {res.mass_balance_error:.3e}")
 print()
-print("Directional Kabs estimates [mD]:")
-print(kabs_directional[["axis", "k_mD", "n_pores", "n_throats", "conductance_model"]])
-print(f"Arithmetic mean Kabs across computed axes: {kabs_mean_mD:.3f} mD")
-print(f"Quadratic mean Kabs across computed axes: {kabs_rms_mD:.3f} mD")
+print("Directional Kabs estimates by backend [mD]:")
+print(
+    kabs_directional_by_backend[
+        [
+            "backend_label",
+            "axis",
+            "k_mD",
+            "n_pores",
+            "n_throats",
+            "conductance_model",
+        ]
+    ]
+)
+print()
+print("Kabs summary by backend [mD]:")
+print(kabs_summary_by_backend[["backend_label", "k_mean_mD", "k_rms_mD"]])
+print(
+    f"Primary ({extraction_backend_configs[extraction_backend]['label']}) "
+    f"arithmetic mean Kabs: {kabs_mean_mD:.3f} mD"
+)
+print(
+    f"Primary ({extraction_backend_configs[extraction_backend]['label']}) "
+    f"quadratic mean Kabs: {kabs_rms_mD:.3f} mD"
+)
 print(
     f"Table 1 porosity reference: {paper_porosity_pct:.2f}%, "
     f"full-image relative error: {phi_image_rel_error_pct:.2f}%"
@@ -674,20 +750,48 @@ paper_kabs_error_mD = (
     0.10 * paper_kabs_mD
 )  # +/-10% assumed uncertainty band for display only
 
-bar_labels = [f"K{ax}" for ax in kabs_directional["axis"]] + ["Paper Kabs"]
-bar_values = list(kabs_directional["k_mD"].to_numpy(dtype=float)) + [paper_kabs_mD]
+bar_data = kabs_directional_by_backend.sort_values(["backend", "axis"])
+mean_bar_data = kabs_summary_by_backend.sort_values("backend")
+bar_labels = (
+    [f"{row.backend_label}\nK{row.axis}" for row in bar_data.itertuples(index=False)]
+    + [
+        f"{row.backend_label}\nmean Kabs"
+        for row in mean_bar_data.itertuples(index=False)
+    ]
+    + ["Paper\nKabs"]
+)
+bar_values = (
+    list(bar_data["k_mD"].to_numpy(dtype=float))
+    + list(mean_bar_data["k_mean_mD"].to_numpy(dtype=float))
+    + [paper_kabs_mD]
+)
 bar_errors = [0.0] * (len(bar_labels) - 1) + [paper_kabs_error_mD]
+backend_colors = {
+    "native_maximal_ball": "tab:blue",
+    "snow2": "tab:orange",
+}
+bar_colors = (
+    [backend_colors.get(str(backend), "tab:purple") for backend in bar_data["backend"]]
+    + [
+        backend_colors.get(str(backend), "tab:purple")
+        for backend in mean_bar_data["backend"]
+    ]
+    + ["tab:gray"]
+)
+bar_hatches = [""] * len(bar_data) + ["//"] * len(mean_bar_data) + [""]
 
-fig_k, ax_k = plt.subplots(figsize=(9, 4.5))
+fig_k, ax_k = plt.subplots(figsize=(13.5, 4.8))
 bars = ax_k.bar(
     bar_labels,
     bar_values,
     yerr=bar_errors,
     capsize=5,
-    color=["tab:blue", "tab:orange", "tab:green", "tab:gray"][: len(bar_labels)],
+    color=bar_colors,
     edgecolor="black",
     alpha=0.85,
 )
+for rect, hatch in zip(bars, bar_hatches):
+    rect.set_hatch(hatch)
 ax_k.axhline(
     paper_kabs_mD, color="black", linestyle="--", linewidth=1.2, label="Paper Kabs"
 )
@@ -700,9 +804,10 @@ ax_k.fill_between(
     label="Paper Kabs +/-10% (display band)",
 )
 ax_k.set_ylabel("Absolute permeability [mD]")
-ax_k.set_title("DRP-10 Estaillades v2 permeability comparison")
+ax_k.set_title("DRP-10 Estaillades v2 permeability comparison by backend")
 ax_k.grid(alpha=0.3, linestyle=":", axis="y")
 ax_k.legend()
+ax_k.tick_params(axis="x", labelrotation=20)
 
 for rect, val in zip(bars, bar_values):
     ax_k.text(
@@ -857,7 +962,8 @@ out_net_full_h5 = out_dir / "Estaillades_v2_network_full_voids.h5"
 out_net_span_h5 = out_dir / f"Estaillades_v2_network_{flow_axis}spanning_voids.h5"
 out_props_csv = out_dir / "Estaillades_v2_estimated_properties.csv"
 out_stats_csv = out_dir / "Estaillades_v2_network_stats.csv"
-out_kabs_dir_csv = out_dir / "Estaillades_v2_kabs_directional.csv"
+out_kabs_dir_csv = out_dir / "Estaillades_v2_kabs_directional_by_backend.csv"
+out_kabs_summary_csv = out_dir / "Estaillades_v2_kabs_summary_by_backend.csv"
 out_kabs_png = out_dir / "Estaillades_v2_kabs_comparison.png"
 out_stats_png = out_dir / "Estaillades_v2_network_stats.png"
 out_slices_png = out_dir / "Estaillades_v2_slices.png"
@@ -872,7 +978,8 @@ if save_outputs:
     save_hdf5(net, out_net_span_h5)
     estimated_properties.to_csv(out_props_csv, index=False)
     network_stats.to_csv(out_stats_csv, index=False)
-    kabs_directional.to_csv(out_kabs_dir_csv, index=False)
+    kabs_directional_by_backend.to_csv(out_kabs_dir_csv, index=False)
+    kabs_summary_by_backend.to_csv(out_kabs_summary_csv, index=False)
     fig_k.savefig(out_kabs_png, dpi=180)
     fig_s.savefig(out_stats_png, dpi=180)
     fig.savefig(out_slices_png, dpi=180)
@@ -888,6 +995,7 @@ print(f"Saved spanning network: {out_net_span_h5}")
 print(f"Saved estimated properties: {out_props_csv}")
 print(f"Saved network stats: {out_stats_csv}")
 print(f"Saved directional Kabs: {out_kabs_dir_csv}")
+print(f"Saved backend Kabs summary: {out_kabs_summary_csv}")
 print(f"Saved Kabs plot: {out_kabs_png}")
 print(f"Saved stats plot: {out_stats_png}")
 print(f"Saved slice plot: {out_slices_png}")
