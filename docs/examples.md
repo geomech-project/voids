@@ -62,7 +62,7 @@ In practice:
 | `28_mwe_drp317_parker_raw_porosity_perm` | Run the DRP-317 Parker raw-volume workflow against the Table 1 experimental references |
 | `29_mwe_drp443_ifn_raw_porosity_perm` | Benchmark DRP-443 IFN fractured-media permeability against SPE 212849 Table 2 (LBM reference) |
 | `30_mwe_drp443_dilatedifn_raw_porosity_perm` | Benchmark DRP-443 Dilated IFN fractured-media permeability against SPE 212849 Table 2 (LBM reference) |
-| `31_mwe_drp10_estaillades_raw_porosity_perm` | Benchmark DRP-10 Estaillades v2 carbonate permeability against Muljadi et al. (2016) Table 2 (OpenFOAM reference) |
+| `31_mwe_drp10_estaillades_raw_porosity_perm` | Benchmark DRP-10 Estaillades v2 carbonate permeability and extraction-backend sensitivity against Muljadi et al. (2016) Table 2 (OpenFOAM reference) |
 
 ---
 
@@ -346,7 +346,11 @@ The corresponding report is documented in
 **`31_mwe_drp10_estaillades_raw_porosity_perm`**
 
 This notebook benchmarks `voids` on the DRP-10 Estaillades v2 carbonate volume
-using porosity and permeability references from Muljadi et al. (2016).
+using porosity and permeability references from Muljadi et al. (2016). It uses
+the native maximal-ball extractor as the primary workflow, then compares it
+against PoreSpy `snow2` default settings and a compatibility-repaired `snow2`
+configuration. The notebook solves `Kx`, `Ky`, and `Kz` for each backend and
+exports directional and mean-`Kabs` CSV summaries.
 
 The corresponding report is documented in
 [Verification & Validation / Verification / DRP-10 Estaillades Verification Overview](verification/drp10.md).

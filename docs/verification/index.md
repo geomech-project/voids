@@ -66,4 +66,5 @@ The reproducible software-verification notebook artifacts are:
 - `notebooks/13_mwe_synthetic_volume_xlb_benchmark.ipynb`
 - `notebooks/29_mwe_drp443_ifn_raw_porosity_perm.ipynb`
 - `notebooks/30_mwe_drp443_dilatedifn_raw_porosity_perm.ipynb`
-- `notebooks/31_mwe_drp10_estaillades_raw_porosity_perm.ipynb`
+- `notebooks/31_mwe_drp10_estaillades_raw_porosity_perm.ipynb`, including
+  native maximal-ball and `snow2` extraction-backend comparisons
