@@ -22,10 +22,11 @@ class PregoSettings:
 
     r_max: int = 4
     sigma: float = 0.4
-    peak_footprint: str = "cube"
+    peak_footprint: str = "sphere"
     distance_map_backend: str = "auto"
     edt_parallel_threads: int | None = None
     cleanup_unassigned: bool = True
+    growth_mode: str = "level_queue"
 
 
 @dataclass(slots=True)
@@ -137,7 +138,7 @@ def snow_seed_points(
     distance_map: np.ndarray | None = None,
     r_max: int = 4,
     sigma: float = 0.4,
-    peak_footprint: str = "cube",
+    peak_footprint: str = "sphere",
     peaks: np.ndarray | None = None,
     distance_map_backend: str = "auto",
     edt_parallel_threads: int | None = None,
@@ -391,6 +392,251 @@ def _fifo_fill_regions_3d(
             tail += 1
 
 
+def _normalize_growth_mode(growth_mode: str) -> str:
+    """Normalize PREGO region-growth mode aliases."""
+
+    normalized = str(growth_mode).strip().lower()
+    aliases = {
+        "fast": "fast",
+        "stamp": "fast",
+        "stamp_then_fill": "fast",
+        "level_queue": "level_queue",
+        "paper": "level_queue",
+        "paper_like": "level_queue",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            "growth_mode must be one of {'fast', 'stamp_then_fill', "
+            "'level_queue', 'paper', 'paper_like'}"
+        )
+    return aliases[normalized]
+
+
+@njit(cache=True)
+def _level_queue_grow_regions_2d(
+    mask: np.ndarray,
+    labels: np.ndarray,
+    seed_label_map: np.ndarray,
+    seed_indices: np.ndarray,
+    seed_radii: np.ndarray,
+    activation_levels: np.ndarray,
+    tolerance: float,
+) -> None:
+    shape0, shape1 = mask.shape
+    max_size = labels.size
+    current0 = np.empty(max_size, dtype=labels.dtype)
+    current1 = np.empty(max_size, dtype=labels.dtype)
+    next0 = np.empty(max_size, dtype=labels.dtype)
+    next1 = np.empty(max_size, dtype=labels.dtype)
+    current_tail = 0
+    next_seed = 0
+    level = 0
+
+    while next_seed < seed_indices.shape[0] and activation_levels[next_seed] <= level:
+        c0 = seed_indices[next_seed, 0]
+        c1 = seed_indices[next_seed, 1]
+        current0[current_tail] = c0
+        current1[current_tail] = c1
+        current_tail += 1
+        next_seed += 1
+
+    while current_tail > 0 or next_seed < seed_indices.shape[0]:
+        if current_tail == 0:
+            level = max(level, activation_levels[next_seed])
+            while next_seed < seed_indices.shape[0] and activation_levels[next_seed] <= level:
+                c0 = seed_indices[next_seed, 0]
+                c1 = seed_indices[next_seed, 1]
+                current0[current_tail] = c0
+                current1[current_tail] = c1
+                current_tail += 1
+                next_seed += 1
+
+        level += 1
+        current_head = 0
+        next_tail = 0
+        while current_head < current_tail:
+            i = current0[current_head]
+            j = current1[current_head]
+            current_head += 1
+            label = labels[i, j]
+            if label <= 0:
+                continue
+            seed_index = int(label - 1)
+            c0 = seed_indices[seed_index, 0]
+            c1 = seed_indices[seed_index, 1]
+            radius = seed_radii[seed_index]
+            for axis_step in range(4):
+                ni = i
+                nj = j
+                if axis_step == 0:
+                    ni = i - 1
+                elif axis_step == 1:
+                    ni = i + 1
+                elif axis_step == 2:
+                    nj = j - 1
+                else:
+                    nj = j + 1
+                if ni < 0 or ni >= shape0 or nj < 0 or nj >= shape1:
+                    continue
+                if not mask[ni, nj] or labels[ni, nj] != 0:
+                    continue
+                protected_seed_label = seed_label_map[ni, nj]
+                if protected_seed_label != 0 and protected_seed_label != label:
+                    continue
+                d0 = float(ni - c0)
+                d1 = float(nj - c1)
+                distance = np.sqrt(d0 * d0 + d1 * d1)
+                if distance <= radius + tolerance:
+                    labels[ni, nj] = label
+                    if distance < radius - tolerance:
+                        current0[current_tail] = ni
+                        current1[current_tail] = nj
+                        current_tail += 1
+                    else:
+                        next0[next_tail] = ni
+                        next1[next_tail] = nj
+                        next_tail += 1
+
+        while next_seed < seed_indices.shape[0] and activation_levels[next_seed] <= level:
+            c0 = seed_indices[next_seed, 0]
+            c1 = seed_indices[next_seed, 1]
+            next0[next_tail] = c0
+            next1[next_tail] = c1
+            next_tail += 1
+            next_seed += 1
+
+        tmp0 = current0
+        tmp1 = current1
+        current0 = next0
+        current1 = next1
+        next0 = tmp0
+        next1 = tmp1
+        current_tail = next_tail
+
+
+@njit(cache=True)
+def _level_queue_grow_regions_3d(
+    mask: np.ndarray,
+    labels: np.ndarray,
+    seed_label_map: np.ndarray,
+    seed_indices: np.ndarray,
+    seed_radii: np.ndarray,
+    activation_levels: np.ndarray,
+    tolerance: float,
+) -> None:
+    shape0, shape1, shape2 = mask.shape
+    max_size = labels.size
+    current0 = np.empty(max_size, dtype=labels.dtype)
+    current1 = np.empty(max_size, dtype=labels.dtype)
+    current2 = np.empty(max_size, dtype=labels.dtype)
+    next0 = np.empty(max_size, dtype=labels.dtype)
+    next1 = np.empty(max_size, dtype=labels.dtype)
+    next2 = np.empty(max_size, dtype=labels.dtype)
+    current_tail = 0
+    next_seed = 0
+    level = 0
+
+    while next_seed < seed_indices.shape[0] and activation_levels[next_seed] <= level:
+        c0 = seed_indices[next_seed, 0]
+        c1 = seed_indices[next_seed, 1]
+        c2 = seed_indices[next_seed, 2]
+        current0[current_tail] = c0
+        current1[current_tail] = c1
+        current2[current_tail] = c2
+        current_tail += 1
+        next_seed += 1
+
+    while current_tail > 0 or next_seed < seed_indices.shape[0]:
+        if current_tail == 0:
+            level = max(level, activation_levels[next_seed])
+            while next_seed < seed_indices.shape[0] and activation_levels[next_seed] <= level:
+                c0 = seed_indices[next_seed, 0]
+                c1 = seed_indices[next_seed, 1]
+                c2 = seed_indices[next_seed, 2]
+                current0[current_tail] = c0
+                current1[current_tail] = c1
+                current2[current_tail] = c2
+                current_tail += 1
+                next_seed += 1
+
+        level += 1
+        current_head = 0
+        next_tail = 0
+        while current_head < current_tail:
+            i = current0[current_head]
+            j = current1[current_head]
+            k = current2[current_head]
+            current_head += 1
+            label = labels[i, j, k]
+            if label <= 0:
+                continue
+            seed_index = int(label - 1)
+            c0 = seed_indices[seed_index, 0]
+            c1 = seed_indices[seed_index, 1]
+            c2 = seed_indices[seed_index, 2]
+            radius = seed_radii[seed_index]
+            for axis_step in range(6):
+                ni = i
+                nj = j
+                nk = k
+                if axis_step == 0:
+                    ni = i - 1
+                elif axis_step == 1:
+                    ni = i + 1
+                elif axis_step == 2:
+                    nj = j - 1
+                elif axis_step == 3:
+                    nj = j + 1
+                elif axis_step == 4:
+                    nk = k - 1
+                else:
+                    nk = k + 1
+                if ni < 0 or ni >= shape0 or nj < 0 or nj >= shape1 or nk < 0 or nk >= shape2:
+                    continue
+                if not mask[ni, nj, nk] or labels[ni, nj, nk] != 0:
+                    continue
+                protected_seed_label = seed_label_map[ni, nj, nk]
+                if protected_seed_label != 0 and protected_seed_label != label:
+                    continue
+                d0 = float(ni - c0)
+                d1 = float(nj - c1)
+                d2 = float(nk - c2)
+                distance = np.sqrt(d0 * d0 + d1 * d1 + d2 * d2)
+                if distance <= radius + tolerance:
+                    labels[ni, nj, nk] = label
+                    if distance < radius - tolerance:
+                        current0[current_tail] = ni
+                        current1[current_tail] = nj
+                        current2[current_tail] = nk
+                        current_tail += 1
+                    else:
+                        next0[next_tail] = ni
+                        next1[next_tail] = nj
+                        next2[next_tail] = nk
+                        next_tail += 1
+
+        while next_seed < seed_indices.shape[0] and activation_levels[next_seed] <= level:
+            c0 = seed_indices[next_seed, 0]
+            c1 = seed_indices[next_seed, 1]
+            c2 = seed_indices[next_seed, 2]
+            next0[next_tail] = c0
+            next1[next_tail] = c1
+            next2[next_tail] = c2
+            next_tail += 1
+            next_seed += 1
+
+        tmp0 = current0
+        tmp1 = current1
+        tmp2 = current2
+        current0 = next0
+        current1 = next1
+        current2 = next2
+        next0 = tmp0
+        next1 = tmp1
+        next2 = tmp2
+        current_tail = next_tail
+
+
 def _seed_activation_levels(seed_radii: np.ndarray) -> np.ndarray:
     """Return documented PREGO seed activation levels for diagnostics."""
 
@@ -412,19 +658,18 @@ def prego_partitioning(
 
     Notes
     -----
-    The PREGO paper specifies descending-radius seed activation and FIFO
-    region growth, but leaves several floating-point tie cases underspecified.
-    This implementation resolves those cases deterministically by first
-    stamping non-overlapping seed spheres in descending radius order, protecting
-    all seed voxels from being claimed by other regions, then filling remaining
-    foreground voxels by a face-connected FIFO queue. The resulting labels are
-    suitable for PoreSpy's ``regions_to_network``.
+    The default ``growth_mode="level_queue"`` follows the paper's delayed seed
+    activation and level-by-level FIFO queue before the final expansion of
+    unassigned foreground voxels. ``growth_mode="fast"`` remains available as
+    a faster approximation that stamps non-overlapping seed spheres in
+    descending radius order before the same final FIFO fill.
     """
 
     resolved_settings = settings or PregoSettings()
     mask = np.asarray(im, dtype=bool)
     if mask.ndim not in {2, 3}:
         raise ValueError("im must be a 2D or 3D binary image")
+    growth_mode = _normalize_growth_mode(resolved_settings.growth_mode)
 
     seed_indices, seed_label_map, dt = snow_seed_points(
         mask,
@@ -442,6 +687,7 @@ def prego_partitioning(
         if seed_indices.size
         else np.zeros(0, dtype=float)
     )
+    activation_levels = _seed_activation_levels(seed_radii)
     labels = np.zeros(
         mask.shape,
         dtype=_prego_label_dtype(max_label=seed_indices.shape[0], shape=mask.shape),
@@ -449,11 +695,38 @@ def prego_partitioning(
     if seed_indices.size:
         for label, seed_index in enumerate(seed_indices, start=1):
             labels[tuple(int(value) for value in seed_index)] = label
+        if growth_mode == "fast":
+            if mask.ndim == 2:
+                _stamp_seed_spheres_2d(
+                    mask, labels, seed_label_map, seed_indices, seed_radii, 1e-12
+                )
+            else:
+                _stamp_seed_spheres_3d(
+                    mask, labels, seed_label_map, seed_indices, seed_radii, 1e-12
+                )
+        elif mask.ndim == 2:
+            _level_queue_grow_regions_2d(
+                mask,
+                labels,
+                seed_label_map,
+                seed_indices,
+                seed_radii,
+                activation_levels,
+                1e-12,
+            )
+        else:
+            _level_queue_grow_regions_3d(
+                mask,
+                labels,
+                seed_label_map,
+                seed_indices,
+                seed_radii,
+                activation_levels,
+                1e-12,
+            )
         if mask.ndim == 2:
-            _stamp_seed_spheres_2d(mask, labels, seed_label_map, seed_indices, seed_radii, 1e-12)
             _fifo_fill_regions_2d(mask, labels, seed_label_map)
         else:
-            _stamp_seed_spheres_3d(mask, labels, seed_label_map, seed_indices, seed_radii, 1e-12)
             _fifo_fill_regions_3d(mask, labels, seed_label_map)
 
     if resolved_settings.cleanup_unassigned:
@@ -465,7 +738,7 @@ def prego_partitioning(
         regions=labels,
         seed_indices=seed_indices,
         seed_radii_voxels=seed_radii,
-        seed_activation_levels=_seed_activation_levels(seed_radii),
+        seed_activation_levels=activation_levels,
         settings=resolved_settings,
     )
 

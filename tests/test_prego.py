@@ -78,6 +78,7 @@ def test_prego_uses_compact_safe_integer_dtypes() -> None:
     assert prego_mod._prego_label_dtype(max_label=10, shape=(256, 256, 256)) == np.int16
     assert prego_mod._prego_label_dtype(max_label=40_000, shape=(256, 256, 256)) == np.int32
     assert prego_mod._prego_label_dtype(max_label=10, shape=(40_000, 2, 2)) == np.int32
+    assert prego_mod._prego_label_dtype(max_label=3_000_000_000, shape=(2, 2)) == np.int64
 
     mask = np.ones((5, 5), dtype=bool)
     distance_map = np.ones(mask.shape, dtype=float)
@@ -88,6 +89,23 @@ def test_prego_uses_compact_safe_integer_dtypes() -> None:
 
     assert result.peaks.dtype == np.int16
     assert result.regions.dtype == np.int16
+
+
+def test_reduce_peak_labels_accepts_boolean_marker_arrays() -> None:
+    """The internal reducer should normalize non-integer marker masks."""
+
+    distance_map = np.ones((3, 3), dtype=float)
+    distance_map[1, 1] = 2.0
+    peaks = np.zeros(distance_map.shape, dtype=bool)
+    peaks[1, 1] = True
+
+    seed_indices, seed_labels = prego_mod._reduce_peak_labels_to_seed_points(
+        peaks,
+        distance_map,
+    )
+
+    assert seed_indices.tolist() == [[1, 1]]
+    assert seed_labels[1, 1] == 1
 
 
 def test_snow_seed_points_accepts_boolean_peaks_and_fallback_seed() -> None:
@@ -209,6 +227,7 @@ def test_snow_seed_points_cube_filter_avoids_porespy_peak_search() -> None:
         peaks=None,
         sigma=0.0,
         r_max=2,
+        peak_footprint="cube",
         porespy_module=fake_porespy,
     )
 
@@ -302,6 +321,118 @@ def test_prego_partitioning_accepts_settings_for_seed_generation() -> None:
 
     assert result.settings is settings
     assert result.regions[1, 1] == 1
+
+
+def test_prego_partitioning_accepts_paper_like_level_queue_growth(monkeypatch) -> None:
+    """The default paper-like mode should use delayed seed activation."""
+
+    def fail_fast_stamp(*args, **kwargs):  # pragma: no cover - should not be reached
+        raise AssertionError("level_queue mode should not use the fast sphere stamping path")
+
+    monkeypatch.setattr(prego_mod, "_stamp_seed_spheres_2d", fail_fast_stamp)
+
+    mask = np.zeros((5, 9), dtype=bool)
+    mask[1:4, 1:8] = True
+    distance_map = np.ones(mask.shape, dtype=float)
+    distance_map[2, 2] = 3.0
+    distance_map[2, 6] = 1.0
+    peaks = np.zeros(mask.shape, dtype=int)
+    peaks[2, 2] = 1
+    peaks[2, 6] = 2
+    result = prego_partitioning(
+        mask,
+        distance_map=distance_map,
+        peaks=peaks,
+    )
+
+    assert np.all(result.regions[mask] > 0)
+    assert result.seed_activation_levels.tolist() == [0, 2]
+    assert result.regions[2, 2] == 1
+    assert result.regions[2, 6] == 2
+
+
+def test_prego_partitioning_level_queue_growth_compiles_in_three_dimensions(
+    monkeypatch,
+) -> None:
+    """The paper-like queue should be covered for the 3D Numba specialization."""
+
+    def fail_fast_stamp(*args, **kwargs):  # pragma: no cover - should not be reached
+        raise AssertionError("level_queue mode should not use the fast sphere stamping path")
+
+    monkeypatch.setattr(prego_mod, "_stamp_seed_spheres_3d", fail_fast_stamp)
+
+    mask = np.zeros((5, 7, 7), dtype=bool)
+    mask[1:4, 1:6, 1:6] = True
+    distance_map = np.ones(mask.shape, dtype=float)
+    distance_map[2, 2, 2] = 3.0
+    distance_map[2, 4, 4] = 1.0
+    peaks = np.zeros(mask.shape, dtype=int)
+    peaks[2, 2, 2] = 1
+    peaks[2, 4, 4] = 2
+
+    result = prego_partitioning(mask, distance_map=distance_map, peaks=peaks)
+
+    assert np.all(result.regions[mask] > 0)
+    assert result.seed_activation_levels.tolist() == [0, 2]
+    assert result.regions[2, 2, 2] == 1
+    assert result.regions[2, 4, 4] == 2
+
+
+def test_prego_partitioning_fast_growth_mode_remains_available() -> None:
+    """The explicit fast approximation should still work in 2D and 3D."""
+
+    settings = PregoSettings(growth_mode="fast")
+
+    mask_2d = np.zeros((5, 7), dtype=bool)
+    mask_2d[1:4, 1:6] = True
+    distance_map_2d = np.ones(mask_2d.shape, dtype=float)
+    distance_map_2d[2, 2] = 2.0
+    distance_map_2d[2, 4] = 1.0
+    peaks_2d = np.zeros(mask_2d.shape, dtype=int)
+    peaks_2d[2, 2] = 1
+    peaks_2d[2, 4] = 2
+
+    result_2d = prego_partitioning(
+        mask_2d,
+        settings=settings,
+        distance_map=distance_map_2d,
+        peaks=peaks_2d,
+    )
+
+    assert np.all(result_2d.regions[mask_2d] > 0)
+    assert result_2d.settings.growth_mode == "fast"
+
+    mask_3d = np.zeros((5, 5, 5), dtype=bool)
+    mask_3d[1:4, 1:4, 1:4] = True
+    distance_map_3d = np.ones(mask_3d.shape, dtype=float)
+    distance_map_3d[2, 2, 2] = 2.0
+    distance_map_3d[2, 3, 3] = 1.0
+    peaks_3d = np.zeros(mask_3d.shape, dtype=int)
+    peaks_3d[2, 2, 2] = 1
+    peaks_3d[2, 3, 3] = 2
+
+    result_3d = prego_partitioning(
+        mask_3d,
+        settings=settings,
+        distance_map=distance_map_3d,
+        peaks=peaks_3d,
+    )
+
+    assert np.all(result_3d.regions[mask_3d] > 0)
+    assert result_3d.settings.growth_mode == "fast"
+
+
+def test_prego_partitioning_rejects_unknown_growth_mode() -> None:
+    """Unknown growth modes should fail before segmentation work starts."""
+
+    mask = np.ones((3, 3), dtype=bool)
+    with pytest.raises(ValueError, match="growth_mode"):
+        prego_partitioning(
+            mask,
+            settings=PregoSettings(growth_mode="surprise"),
+            distance_map=np.ones(mask.shape, dtype=float),
+            peaks=np.zeros(mask.shape, dtype=int),
+        )
 
 
 def test_extract_prego_network_dict_handles_single_region_without_throats() -> None:
