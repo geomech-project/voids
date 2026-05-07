@@ -16,6 +16,7 @@ from voids.image.maximal_ball import (
     MaximalBallSettings,
     extract_maximal_ball_network_dict,
 )
+from voids.image.prego import PregoSettings, extract_prego_network_dict
 from voids.io.pnflow_cnm import load_pnflow_cnm
 from voids.io.porespy import ensure_cartesian_boundary_labels, from_porespy, scale_porespy_geometry
 
@@ -196,6 +197,7 @@ def _normalize_extraction_backend(backend: str) -> str:
         "porespy_imperial": "porespy_snow2_imperial",
         "imperial_snow2": "porespy_snow2_imperial",
         "snow2_imperial": "porespy_snow2_imperial",
+        "prego": "prego",
         "maximal_ball": "native_maximal_ball",
         "native_maximal_ball": "native_maximal_ball",
         "maxball": "native_maximal_ball",
@@ -219,6 +221,7 @@ def _normalize_construction_backend(backend: str) -> str:
         "porespy_imperial": "porespy_snow2_imperial",
         "imperial_snow2": "porespy_snow2_imperial",
         "snow2_imperial": "porespy_snow2_imperial",
+        "prego": "prego",
         "maximal_ball": "native_maximal_ball",
         "native_maximal_ball": "native_maximal_ball",
         "maxball": "native_maximal_ball",
@@ -285,6 +288,32 @@ def _extract_network_dict(
             **dict(extraction_kwargs or {}),
         }
         return _snow2_network_dict(phases, snow2_kwargs=kwargs)
+    if backend_normalized == "prego":
+        kwargs = dict(extraction_kwargs or {})
+        settings_value = kwargs.pop("settings", kwargs.pop("prego_settings", None))
+        if isinstance(settings_value, dict):
+            settings_value = PregoSettings(**settings_value)
+        if settings_value is not None and not isinstance(settings_value, PregoSettings):
+            raise TypeError(
+                "PREGO extraction settings must be a PregoSettings instance, a mapping, or None"
+            )
+        distance_map = kwargs.pop("distance_map", None)
+        peaks = kwargs.pop("peaks", None)
+        regions_to_network_kwargs = kwargs.pop("regions_to_network_kwargs", None)
+        if regions_to_network_kwargs is not None and not isinstance(
+            regions_to_network_kwargs, dict
+        ):
+            raise TypeError("regions_to_network_kwargs must be a mapping or None")
+        if kwargs:
+            unexpected_keys = ", ".join(sorted(kwargs))
+            raise ValueError(f"Unexpected extraction_kwargs for backend='prego': {unexpected_keys}")
+        return extract_prego_network_dict(
+            np.asarray(phases, dtype=bool),
+            settings=settings_value,
+            distance_map=None if distance_map is None else np.asarray(distance_map, dtype=float),
+            peaks=None if peaks is None else np.asarray(peaks),
+            regions_to_network_kwargs=regions_to_network_kwargs,
+        ).network_dict
     if backend_normalized == "native_maximal_ball":
         kwargs = dict(extraction_kwargs or {})
         settings_value = kwargs.pop("settings", kwargs.pop("maximal_ball_settings", None))
@@ -371,7 +400,8 @@ def extract_spanning_pore_network(
         Image-to-network extraction backend. Currently supported values are
         ``"porespy"``, ``"snow2"``, ``"porespy_snow2"``, the calibrated
         approximation aliases ``"porespy_imperial"``, ``"imperial_snow2"``,
-        and ``"snow2_imperial"``, plus the native maximal-ball aliases
+        and ``"snow2_imperial"``, the native PREGO backend ``"prego"``,
+        plus the native maximal-ball aliases
         ``"maximal_ball"``, ``"native_maximal_ball"``, and ``"maxball"``.
     flow_axis :
         Requested spanning axis. When omitted, the longest image axis is used.
@@ -381,7 +411,10 @@ def extract_spanning_pore_network(
         Keyword arguments forwarded to the extraction backend call. For the
         Imperial-calibrated `snow2` aliases, user-supplied values override the
         built-in defaults ``sigma=1.0``, ``r_max=4``, and ``boundary_width=1``.
-        For the native maximal-ball backend, supported keys are
+        For the PREGO backend, supported keys are ``settings`` or
+        ``prego_settings``, ``distance_map``, ``peaks``, and
+        ``regions_to_network_kwargs``. For the native maximal-ball backend,
+        supported keys are
         ``distance_map_backend``, ``edt_parallel_threads``,
         ``apply_boundary_clipping``,
         ``flow_boundary_mode``, ``boundary_axis``,
@@ -453,7 +486,7 @@ def extract_spanning_pore_network(
         cross_sections=axis_areas,
         units={"length": length_unit, "pressure": pressure_unit},
     )
-    if backend_normalized == "native_maximal_ball":
+    if backend_normalized in {"native_maximal_ball", "prego"}:
         source_version: str | None = _voids_version
     else:
         source_version = getattr(ps, "__version__", None)
@@ -514,7 +547,7 @@ def construct_spanning_network(
     backend :
         Construction backend identifier. Supported values include the existing
         image-extraction aliases ``"porespy"``, ``"snow2"``,
-        ``"porespy_snow2"``, the native maximal-ball aliases
+        ``"porespy_snow2"``, ``"prego"``, the native maximal-ball aliases
         ``"maximal_ball"``, ``"native_maximal_ball"``, ``"maxball"``, and the imported-network aliases
         ``"pnflow_cnm"``, ``"imperial_cnm"``, and ``"pnextract_cnm"``.
     phases, voxel_size :
@@ -542,6 +575,7 @@ def construct_spanning_network(
     if backend_normalized in {
         "porespy_snow2",
         "porespy_snow2_imperial",
+        "prego",
         "native_maximal_ball",
     }:
         if phases is None:

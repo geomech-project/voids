@@ -81,6 +81,14 @@ def test_construct_spanning_network_dispatches_to_image_backend(
     assert result.backend == "porespy_snow2_imperial"
 
     result = nex.construct_spanning_network(
+        backend="prego",
+        phases=np.ones((3, 3, 3), dtype=int),
+        voxel_size=2.5,
+    )
+    assert captured["backend"] == "prego"
+    assert result.backend == "prego"
+
+    result = nex.construct_spanning_network(
         backend="maximal_ball",
         phases=np.ones((3, 3, 3), dtype=int),
         voxel_size=2.5,

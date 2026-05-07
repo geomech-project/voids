@@ -442,6 +442,63 @@ def test_extract_network_dict_forwards_native_maximal_ball_threading_and_setting
     assert captured["throat_anchor_mode"] == "second_side"
 
 
+def test_extract_network_dict_forwards_prego_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PREGO dispatch should forward deterministic segmentation controls."""
+
+    captured: dict[str, object] = {}
+
+    class FakeExtractionResult:
+        def __init__(self) -> None:
+            self.network_dict = {
+                "pore.coords": np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+                "throat.conns": np.array([[0, 1]], dtype=int),
+            }
+
+    def fake_extract_prego_network_dict(
+        im,
+        *,
+        settings,
+        distance_map,
+        peaks,
+        regions_to_network_kwargs,
+    ):
+        captured["im"] = im
+        captured["settings"] = settings
+        captured["distance_map"] = distance_map
+        captured["peaks"] = peaks
+        captured["regions_to_network_kwargs"] = regions_to_network_kwargs
+        return FakeExtractionResult()
+
+    monkeypatch.setattr(nex, "extract_prego_network_dict", fake_extract_prego_network_dict)
+    distance_map = np.ones((2, 2, 2), dtype=float)
+    peaks = np.zeros((2, 2, 2), dtype=int)
+    peaks[0, 0, 0] = 1
+
+    network_dict = nex._extract_network_dict(
+        np.ones((2, 2, 2), dtype=int),
+        backend="prego",
+        voxel_size=1.5,
+        extraction_kwargs={
+            "settings": {"r_max": 2, "sigma": 0.0, "distance_map_backend": "scipy"},
+            "distance_map": distance_map,
+            "peaks": peaks,
+            "regions_to_network_kwargs": {"accuracy": "standard"},
+        },
+        flow_axis="x",
+    )
+
+    assert set(network_dict) == {"pore.coords", "throat.conns"}
+    assert np.array_equal(captured["im"], np.ones((2, 2, 2), dtype=bool))
+    assert isinstance(captured["settings"], nex.PregoSettings)
+    assert captured["settings"].r_max == 2
+    assert captured["settings"].sigma == pytest.approx(0.0)
+    assert np.array_equal(captured["distance_map"], distance_map)
+    assert np.array_equal(captured["peaks"], peaks)
+    assert captured["regions_to_network_kwargs"] == {"accuracy": "standard"}
+
+
 def test_extract_network_dict_rejects_invalid_native_maximal_ball_kwargs() -> None:
     """Native backend dispatch should fail clearly on invalid settings or stray kwargs."""
 
@@ -458,6 +515,37 @@ def test_extract_network_dict_rejects_invalid_native_maximal_ball_kwargs() -> No
         nex._extract_network_dict(
             np.ones((2, 2, 2), dtype=int),
             backend="native_maximal_ball",
+            voxel_size=1.0,
+            extraction_kwargs={"unexpected_key": True},
+            flow_axis="x",
+        )
+
+
+def test_extract_network_dict_rejects_invalid_prego_kwargs() -> None:
+    """PREGO dispatch should fail clearly on invalid settings or stray kwargs."""
+
+    with pytest.raises(TypeError, match="PREGO extraction settings must be"):
+        nex._extract_network_dict(
+            np.ones((2, 2, 2), dtype=int),
+            backend="prego",
+            voxel_size=1.0,
+            extraction_kwargs={"settings": 3.14},
+            flow_axis="x",
+        )
+
+    with pytest.raises(TypeError, match="regions_to_network_kwargs must be"):
+        nex._extract_network_dict(
+            np.ones((2, 2, 2), dtype=int),
+            backend="prego",
+            voxel_size=1.0,
+            extraction_kwargs={"regions_to_network_kwargs": 3.14},
+            flow_axis="x",
+        )
+
+    with pytest.raises(ValueError, match="Unexpected extraction_kwargs for backend='prego'"):
+        nex._extract_network_dict(
+            np.ones((2, 2, 2), dtype=int),
+            backend="prego",
             voxel_size=1.0,
             extraction_kwargs={"unexpected_key": True},
             flow_axis="x",
@@ -554,6 +642,21 @@ def test_extract_spanning_pore_network_normalizes_backend_aliases(
     assert captured["flow_axis"] == "x"
     assert result.backend == "porespy_snow2"
     assert result.provenance.extraction_method == "porespy_snow2"
+
+    captured.clear()
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="prego",
+        flow_axis="x",
+    )
+
+    assert np.array_equal(captured["phases"], np.ones((2, 2, 2), dtype=int))
+    assert captured["backend"] == "prego"
+    assert captured["kwargs"] is None
+    assert captured["flow_axis"] == "x"
+    assert result.backend == "prego"
+    assert result.provenance.extraction_method == "prego"
 
     captured.clear()
     result = extract_spanning_pore_network(
@@ -687,6 +790,36 @@ def test_extract_spanning_pore_network_uses_voids_version_for_native_backend(
     porespy_ver = getattr(ps, "__version__", None)
     assert porespy_ver is not None, "porespy must expose __version__ for this test to be meaningful"
     assert result.backend_version != porespy_ver
+
+
+def test_extract_spanning_pore_network_uses_voids_version_for_prego_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PREGO is implemented in voids, even though network geometry uses PoreSpy format."""
+
+    from voids.version import __version__ as voids_version
+
+    net = make_linear_chain_network(num_pores=2)
+
+    monkeypatch.setattr(nex, "_extract_network_dict", lambda *a, **kw: _make_minimal_network_dict())
+    monkeypatch.setattr(nex, "from_porespy", lambda *a, **kw: net)
+    monkeypatch.setattr(
+        nex,
+        "spanning_subnetwork",
+        lambda n, axis: (n, np.arange(n.Np, dtype=np.int64), np.ones(n.Nt, dtype=bool)),
+    )
+    monkeypatch.setattr(nex, "scale_porespy_geometry", lambda d, voxel_size: d)
+    monkeypatch.setattr(nex, "ensure_cartesian_boundary_labels", lambda d, axes: d)
+
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="prego",
+        flow_axis="x",
+    )
+
+    assert result.backend_version == voids_version
+    assert result.provenance.source_version == voids_version
 
 
 def test_extract_spanning_pore_network_uses_porespy_version_for_porespy_backend(
