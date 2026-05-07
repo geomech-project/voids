@@ -569,7 +569,7 @@ def suppress_overlapping_maximal_balls(
 
 
 @njit(cache=True)
-def _suppress_overlapping_maximal_balls_compiled(  # pragma: no cover
+def _suppress_overlapping_maximal_balls_compiled(
     centers: np.ndarray,
     radii: np.ndarray,
     retention_radius_factor: float,
@@ -625,7 +625,7 @@ def _suppress_overlapping_maximal_balls_compiled(  # pragma: no cover
 
 
 @njit(cache=True)
-def _suppress_overlapping_maximal_balls_spatial_compiled(  # pragma: no cover
+def _suppress_overlapping_maximal_balls_spatial_compiled(
     centers: np.ndarray,
     radii: np.ndarray,
     retention_radius_factor: float,
@@ -851,12 +851,12 @@ def _refine_ball_center_relocation(
 
 
 @njit(cache=True)
-def _linear_index_from_center_index(  # pragma: no cover
+def _linear_index_from_center_index(
     center_index: np.ndarray,
     shape0: int,
     shape1: int,
     shape2: int,
-) -> int:  # pragma: no cover
+) -> int:
     """Return the flattened image index for a 2D or 3D center index."""
 
     if center_index.shape[0] == 2:
@@ -869,13 +869,13 @@ def _linear_index_from_center_index(  # pragma: no cover
 
 
 @njit(cache=True)
-def _subvoxel_refined_center_and_radius_compiled(  # pragma: no cover
+def _subvoxel_refined_center_and_radius_compiled(
     distance_map: np.ndarray,
     center_index: np.ndarray,
     refined_center_coordinate: np.ndarray,
     displacement_limit: float,
     radius_gain_factor: float,
-) -> float:  # pragma: no cover
+) -> float:
     """Compiled subvoxel refinement for one ball center."""
 
     ndim = center_index.shape[0]
@@ -951,7 +951,7 @@ def _subvoxel_refined_center_and_radius_compiled(  # pragma: no cover
 
 
 @njit(cache=True)
-def _relocate_ball_center_compiled(  # pragma: no cover
+def _relocate_ball_center_compiled(
     distance_map: np.ndarray,
     center_index: np.ndarray,
     occupied_centers_flat: np.ndarray,
@@ -959,7 +959,7 @@ def _relocate_ball_center_compiled(  # pragma: no cover
     shape0: int,
     shape1: int,
     shape2: int,
-) -> float:  # pragma: no cover
+) -> float:
     """Compiled uphill relocation for one ball center."""
 
     ndim = center_index.shape[0]
@@ -1087,11 +1087,11 @@ def _relocate_ball_center_compiled(  # pragma: no cover
 
 
 @njit(cache=True)
-def _refine_retained_ball_coordinates_compiled(  # pragma: no cover
+def _refine_retained_ball_coordinates_compiled(
     distance_map: np.ndarray,
     retained_center_indices: np.ndarray,
     retained_radii_voxels: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:  # pragma: no cover
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compiled retained-ball coordinate refinement with flat occupancy checks."""
 
     retained_count = retained_radii_voxels.shape[0]
@@ -1168,13 +1168,13 @@ def _refine_retained_ball_coordinates_compiled(  # pragma: no cover
 
 
 @njit(cache=True)
-def _subvoxel_refined_center_and_radius_compiled_3d(  # pragma: no cover
+def _subvoxel_refined_center_and_radius_compiled_3d(
     distance_map: np.ndarray,
     center_index: np.ndarray,
     refined_center_coordinate: np.ndarray,
     displacement_limit: float,
     radius_gain_factor: float,
-) -> float:  # pragma: no cover
+) -> float:
     """Compiled 3D subvoxel refinement for one ball center."""
 
     shape0 = distance_map.shape[0]
@@ -1232,11 +1232,11 @@ def _subvoxel_refined_center_and_radius_compiled_3d(  # pragma: no cover
 
 
 @njit(cache=True)
-def _refine_retained_ball_coordinates_compiled_3d(  # pragma: no cover
+def _refine_retained_ball_coordinates_compiled_3d(
     distance_map: np.ndarray,
     retained_center_indices: np.ndarray,
     retained_radii_voxels: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:  # pragma: no cover
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compiled 3D retained-ball coordinate refinement with flat occupancy checks."""
 
     retained_count = retained_radii_voxels.shape[0]
@@ -1910,7 +1910,7 @@ def _normalize_radius_support_mode(
     return normalized_mode
 
 
-def _neighbor_satisfies_radius_support(  # pragma: no cover
+def _neighbor_satisfies_radius_support(
     neighbor_radius: float,
     current_radius: float,
     *,
@@ -1940,11 +1940,11 @@ def _encode_radius_support_mode(radius_support_mode: str) -> int:
 
 
 @njit(cache=True)
-def _compiled_neighbor_satisfies_radius_support(  # pragma: no cover
+def _compiled_neighbor_satisfies_radius_support(
     neighbor_radius: float,
     current_radius: float,
     radius_support_mode_code: int,
-) -> bool:  # pragma: no cover
+) -> bool:
     """Return whether a neighboring voxel may support assignment."""
 
     if radius_support_mode_code == _RADIUS_SUPPORT_MODE_ANY:
@@ -1955,12 +1955,12 @@ def _compiled_neighbor_satisfies_radius_support(  # pragma: no cover
 
 
 @njit(cache=True)
-def _compiled_accumulate_label_count(  # pragma: no cover
+def _compiled_accumulate_label_count(
     supporting_labels: np.ndarray,
     supporting_counts: np.ndarray,
     supporting_label_count: int,
     neighbor_label: int,
-) -> int:  # pragma: no cover
+) -> int:
     """Accumulate one label count into fixed-size support arrays."""
 
     for label_index in range(supporting_label_count):
@@ -1973,11 +1973,11 @@ def _compiled_accumulate_label_count(  # pragma: no cover
 
 
 @njit(cache=True)
-def _compiled_select_best_label(  # pragma: no cover
+def _compiled_select_best_label(
     supporting_labels: np.ndarray,
     supporting_counts: np.ndarray,
     supporting_label_count: int,
-) -> tuple[int, int]:  # pragma: no cover
+) -> tuple[int, int]:
     """Select the strongest label with the same tie-break as the Python path."""
 
     best_label = -1
@@ -1994,7 +1994,7 @@ def _compiled_select_best_label(  # pragma: no cover
 
 
 @njit(cache=True)
-def _grow_root_regions_by_radius_compiled_2d(  # pragma: no cover
+def _grow_root_regions_by_radius_compiled_2d(
     previous_labels_flat: np.ndarray,
     label_image_flat: np.ndarray,
     working_distance_map_flat: np.ndarray,
@@ -2005,7 +2005,7 @@ def _grow_root_regions_by_radius_compiled_2d(  # pragma: no cover
     unassigned_label: int,
     minimum_supporting_neighbors: int,
     radius_support_mode_code: int,
-) -> bool:  # pragma: no cover
+) -> bool:
     """Compiled 2D radius-aware voxel growth."""
 
     changed_any_voxel = False
@@ -2068,7 +2068,7 @@ def _grow_root_regions_by_radius_compiled_2d(  # pragma: no cover
 
 
 @njit(cache=True)
-def _grow_root_regions_by_radius_compiled_3d(  # pragma: no cover
+def _grow_root_regions_by_radius_compiled_3d(
     previous_labels_flat: np.ndarray,
     label_image_flat: np.ndarray,
     working_distance_map_flat: np.ndarray,
@@ -2079,7 +2079,7 @@ def _grow_root_regions_by_radius_compiled_3d(  # pragma: no cover
     unassigned_label: int,
     minimum_supporting_neighbors: int,
     radius_support_mode_code: int,
-) -> bool:  # pragma: no cover
+) -> bool:
     """Compiled 3D radius-aware voxel growth."""
 
     changed_any_voxel = False
@@ -2149,7 +2149,7 @@ def _grow_root_regions_by_radius_compiled_3d(  # pragma: no cover
 
 
 @njit(cache=True)
-def _reassign_region_boundary_voxels_by_majority_compiled_2d(  # pragma: no cover
+def _reassign_region_boundary_voxels_by_majority_compiled_2d(
     previous_labels_flat: np.ndarray,
     label_image_flat: np.ndarray,
     working_distance_map_flat: np.ndarray,
@@ -2158,7 +2158,7 @@ def _reassign_region_boundary_voxels_by_majority_compiled_2d(  # pragma: no cove
     shape0: int,
     shape1: int,
     radius_support_mode_code: int,
-) -> bool:  # pragma: no cover
+) -> bool:
     """Compiled 2D weak-boundary majority reassignment."""
 
     changed_any_voxel = False
@@ -2231,7 +2231,7 @@ def _reassign_region_boundary_voxels_by_majority_compiled_2d(  # pragma: no cove
 
 
 @njit(cache=True)
-def _reassign_region_boundary_voxels_by_majority_compiled_3d(  # pragma: no cover
+def _reassign_region_boundary_voxels_by_majority_compiled_3d(
     previous_labels_flat: np.ndarray,
     label_image_flat: np.ndarray,
     working_distance_map_flat: np.ndarray,
@@ -2240,7 +2240,7 @@ def _reassign_region_boundary_voxels_by_majority_compiled_3d(  # pragma: no cove
     shape1: int,
     shape2: int,
     radius_support_mode_code: int,
-) -> bool:  # pragma: no cover
+) -> bool:
     """Compiled 3D weak-boundary majority reassignment."""
 
     changed_any_voxel = False
@@ -2320,7 +2320,7 @@ def _reassign_region_boundary_voxels_by_majority_compiled_3d(  # pragma: no cove
 
 
 @njit(cache=True)
-def _retreat_mixed_region_boundary_voxels_compiled_2d(  # pragma: no cover
+def _retreat_mixed_region_boundary_voxels_compiled_2d(
     previous_labels_flat: np.ndarray,
     label_image_flat: np.ndarray,
     void_indices: np.ndarray,
@@ -2328,7 +2328,7 @@ def _retreat_mixed_region_boundary_voxels_compiled_2d(  # pragma: no cover
     shape0: int,
     shape1: int,
     unassigned_label: int,
-) -> None:  # pragma: no cover
+) -> None:
     """Compiled 2D retreat of mixed-label boundary voxels."""
 
     for voxel_row in range(void_indices.shape[0]):
@@ -2368,7 +2368,7 @@ def _retreat_mixed_region_boundary_voxels_compiled_2d(  # pragma: no cover
 
 
 @njit(cache=True)
-def _retreat_mixed_region_boundary_voxels_compiled_3d(  # pragma: no cover
+def _retreat_mixed_region_boundary_voxels_compiled_3d(
     previous_labels_flat: np.ndarray,
     label_image_flat: np.ndarray,
     void_indices: np.ndarray,
@@ -2376,7 +2376,7 @@ def _retreat_mixed_region_boundary_voxels_compiled_3d(  # pragma: no cover
     shape1: int,
     shape2: int,
     unassigned_label: int,
-) -> None:  # pragma: no cover
+) -> None:
     """Compiled 3D retreat of mixed-label boundary voxels."""
 
     plane_size = shape1 * shape2
@@ -2423,7 +2423,7 @@ def _retreat_mixed_region_boundary_voxels_compiled_3d(  # pragma: no cover
 
 
 @njit(cache=True)
-def _grow_root_regions_by_neighbor_priority_compiled_2d(  # pragma: no cover
+def _grow_root_regions_by_neighbor_priority_compiled_2d(
     label_image_flat: np.ndarray,
     forward_indices: np.ndarray,
     backward_indices: np.ndarray,
@@ -2432,7 +2432,7 @@ def _grow_root_regions_by_neighbor_priority_compiled_2d(  # pragma: no cover
     shape1: int,
     unassigned_label: int,
     iterations: int,
-) -> bool:  # pragma: no cover
+) -> bool:
     """Compiled 2D neighbor-priority growth."""
 
     changed_in_any_iteration = False
@@ -2480,7 +2480,7 @@ def _grow_root_regions_by_neighbor_priority_compiled_2d(  # pragma: no cover
 
 
 @njit(cache=True)
-def _grow_root_regions_by_neighbor_priority_compiled_3d(  # pragma: no cover
+def _grow_root_regions_by_neighbor_priority_compiled_3d(
     label_image_flat: np.ndarray,
     forward_indices: np.ndarray,
     backward_indices: np.ndarray,
@@ -2489,7 +2489,7 @@ def _grow_root_regions_by_neighbor_priority_compiled_3d(  # pragma: no cover
     shape2: int,
     unassigned_label: int,
     iterations: int,
-) -> bool:  # pragma: no cover
+) -> bool:
     """Compiled 3D neighbor-priority growth."""
 
     changed_in_any_iteration = False
@@ -2545,7 +2545,7 @@ def _grow_root_regions_by_neighbor_priority_compiled_3d(  # pragma: no cover
     return changed_in_any_iteration
 
 
-def _count_supporting_neighbor_labels(  # pragma: no cover
+def _count_supporting_neighbor_labels(
     previous_labels: np.ndarray,
     working_distance_map: np.ndarray,
     voxel_index: np.ndarray,

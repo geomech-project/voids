@@ -1416,3 +1416,877 @@ def test_extract_maximal_ball_candidates_returns_retained_candidates_in_radius_o
     assert np.all(
         maximal_ball_data.retained_radii_voxels[:-1] >= maximal_ball_data.retained_radii_voxels[1:]
     )
+
+
+def test_label_dtype_selection_scales_to_large_region_counts() -> None:
+    """Region-label storage should avoid int64 unless the label count truly requires it."""
+
+    assert maximal_ball_module._label_dtype_for_region_count(10) == np.dtype(np.int16)
+    assert maximal_ball_module._label_dtype_for_region_count(np.iinfo(np.int16).max + 1) == (
+        np.dtype(np.int32)
+    )
+    assert maximal_ball_module._label_dtype_for_region_count(np.iinfo(np.int32).max + 1) == (
+        np.dtype(np.int64)
+    )
+
+
+def test_distance_map_and_radius_field_validation_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Distance-map helpers should reject unsupported dimensions, backends, and modes."""
+
+    with pytest.raises(ValueError, match="2D or 3D"):
+        compute_void_distance_map(np.ones((1, 1, 1, 1), dtype=bool), backend="scipy")
+    with pytest.raises(ValueError, match="backend"):
+        compute_void_distance_map(np.ones((2, 2), dtype=bool), backend="unknown")
+    with pytest.raises(ValueError, match="positive integer"):
+        maximal_ball_module._resolve_edt_parallel_threads(0)
+
+    monkeypatch.setattr(maximal_ball_module, "fast_edt", None)
+    with pytest.raises(ImportError, match="optional 'edt' package"):
+        compute_void_distance_map(np.ones((2, 2), dtype=bool), backend="edt")
+
+    void_phase_mask = np.array([[False, True, False]], dtype=bool)
+    assert np.array_equal(
+        compute_maximal_ball_radius_field(void_phase_mask, backend="scipy", mode="edt"),
+        compute_void_distance_map(void_phase_mask, backend="scipy"),
+    )
+    with pytest.raises(ValueError, match="radius field mode"):
+        compute_maximal_ball_radius_field(void_phase_mask, backend="scipy", mode="bad")
+
+
+def test_smooth_radius_field_local_relaxation_validation_and_update() -> None:
+    """Local relaxation should validate inputs and keep the mask shape unchanged."""
+
+    radius_field = np.ones((3, 3), dtype=float)
+    void_phase_mask = np.ones((3, 3), dtype=bool)
+
+    unchanged = maximal_ball_module.smooth_radius_field_local_relaxation(
+        radius_field,
+        void_phase_mask,
+        iterations=0,
+    )
+    smoothed = maximal_ball_module.smooth_radius_field_local_relaxation(
+        np.pad(radius_field, 1, constant_values=0.0),
+        np.pad(void_phase_mask, 1, constant_values=False),
+        iterations=1,
+    )
+
+    assert np.array_equal(unchanged, radius_field)
+    assert smoothed.shape == (5, 5)
+    assert np.all(smoothed[~np.pad(void_phase_mask, 1, constant_values=False)] == 0.0)
+    with pytest.raises(ValueError, match="nonnegative"):
+        maximal_ball_module.smooth_radius_field_local_relaxation(
+            radius_field,
+            void_phase_mask,
+            iterations=-1,
+        )
+    with pytest.raises(ValueError, match="same shape"):
+        maximal_ball_module.smooth_radius_field_local_relaxation(
+            radius_field,
+            np.ones((2, 2), dtype=bool),
+            iterations=1,
+        )
+    with pytest.raises(ValueError, match="2D or 3D"):
+        maximal_ball_module.smooth_radius_field_local_relaxation(
+            np.ones((1, 1, 1, 1), dtype=float),
+            np.ones((1, 1, 1, 1), dtype=bool),
+            iterations=1,
+        )
+
+
+@pytest.mark.parametrize(
+    "settings, match",
+    [
+        (MaximalBallSettings(minimal_pore_radius_voxels=0.0), "minimal_pore_radius"),
+        (
+            MaximalBallSettings(
+                minimal_pore_radius_voxels=1.0,
+                medial_surface_noise_voxels=0.0,
+            ),
+            "medial_surface_noise",
+        ),
+        (
+            MaximalBallSettings(
+                minimal_pore_radius_voxels=1.0,
+                retention_radius_offset_voxels=0.0,
+            ),
+            "retention_radius_offset",
+        ),
+        (MaximalBallSettings(radius_smoothing_iterations=-1), "smoothing"),
+        (MaximalBallSettings(candidate_selection_mode="bad"), "candidate_selection_mode"),
+    ],
+)
+def test_resolve_maximal_ball_settings_rejects_invalid_values(
+    settings: MaximalBallSettings,
+    match: str,
+) -> None:
+    """User-facing settings should fail early for nonphysical controls."""
+
+    with pytest.raises(ValueError, match=match):
+        resolve_maximal_ball_settings(np.ones((2, 2), dtype=float), settings)
+
+
+def test_candidate_helpers_validate_empty_and_bad_inputs() -> None:
+    """Candidate detection and suppression should cover empty and invalid branches."""
+
+    settings = resolve_maximal_ball_settings(
+        np.ones((3, 3), dtype=float),
+        MaximalBallSettings(minimal_pore_radius_voxels=1.0),
+    )
+
+    centers, radii, candidate_mask = find_maximal_ball_candidates(
+        np.zeros((3, 3), dtype=float),
+        minimal_radius_voxels=1.0,
+        selection_mode="threshold_all",
+    )
+
+    assert centers.shape == (0, 2)
+    assert radii.shape == (0,)
+    assert not np.any(candidate_mask)
+    with pytest.raises(ValueError, match="minimal_radius"):
+        find_maximal_ball_candidates(np.ones((3, 3), dtype=float), minimal_radius_voxels=0.0)
+    with pytest.raises(ValueError, match="2D or 3D"):
+        find_maximal_ball_candidates(np.ones((1, 1, 1, 1), dtype=float), minimal_radius_voxels=1.0)
+    with pytest.raises(ValueError, match="selection_mode"):
+        find_maximal_ball_candidates(
+            np.ones((3, 3), dtype=float),
+            minimal_radius_voxels=1.0,
+            selection_mode="bad",
+        )
+    with pytest.raises(ValueError, match="center_indices"):
+        suppress_overlapping_maximal_balls(
+            np.array([1, 2]), np.array([1.0, 2.0]), settings=settings
+        )
+    with pytest.raises(ValueError, match="radii_voxels"):
+        suppress_overlapping_maximal_balls(
+            np.array([[0, 0], [1, 1]], dtype=np.int64),
+            np.array([1.0]),
+            settings=settings,
+        )
+    with pytest.raises(ValueError, match="2D or 3D"):
+        clip_distance_map_to_domain_boundaries(np.ones((1, 1, 1, 1)), settings=settings)
+
+
+def test_2d_refinement_and_hierarchy_empty_paths() -> None:
+    """The non-3D refinement path and empty hierarchy path should stay deterministic."""
+
+    distance_map = np.array(
+        [
+            [0.0, 1.0, 2.0, 1.0],
+            [0.0, 2.0, 4.0, 1.0],
+            [0.0, 1.0, 3.0, 1.0],
+            [0.0, 0.5, 1.0, 0.0],
+        ],
+        dtype=float,
+    )
+    settings = resolve_maximal_ball_settings(
+        distance_map,
+        MaximalBallSettings(minimal_pore_radius_voxels=1.0),
+    )
+    candidates = MaximalBallCandidates(
+        center_indices=np.array([[1, 2], [2, 2]], dtype=np.int64),
+        radii_voxels=np.array([4.0, 3.0], dtype=float),
+        candidate_mask=distance_map > 0.0,
+        retained_mask=np.array([True, True]),
+        distance_map=distance_map,
+        settings=settings,
+    )
+
+    refined_indices, refined_coordinates, refined_radii = (
+        maximal_ball_module.refine_retained_ball_coordinates(candidates)
+    )
+    single_index, single_coordinate, single_radius = (
+        maximal_ball_module.refine_ball_from_seed_index(
+            distance_map,
+            np.array([1, 2], dtype=np.int64),
+        )
+    )
+    empty_candidates = MaximalBallCandidates(
+        center_indices=np.zeros((0, 2), dtype=np.int64),
+        radii_voxels=np.zeros(0, dtype=float),
+        candidate_mask=np.zeros((2, 2), dtype=bool),
+        retained_mask=np.zeros(0, dtype=bool),
+        distance_map=np.zeros((2, 2), dtype=float),
+        settings=settings,
+    )
+    empty_hierarchy = build_maximal_ball_hierarchy(empty_candidates)
+
+    assert refined_indices.shape == (2, 2)
+    assert refined_coordinates.shape == (2, 2)
+    assert np.all(refined_radii >= candidates.retained_radii_voxels)
+    assert single_index.shape == (2,)
+    assert single_coordinate.shape == (2,)
+    assert single_radius >= distance_map[1, 2]
+    assert empty_hierarchy.center_indices.shape == (0, 2)
+    assert empty_hierarchy.root_mask.size == 0
+
+
+def test_hierarchy_helpers_cover_ancestor_and_midpoint_edge_cases() -> None:
+    """Small helper branches should preserve acyclic parent relationships."""
+
+    parent_indices = np.array([0, 0, 1], dtype=np.int64)
+
+    assert maximal_ball_module._is_ancestor_index(parent_indices, 0, 2)
+    assert not maximal_ball_module._is_ancestor_index(parent_indices, 2, 0)
+    assert maximal_ball_module._weighted_midpoint_index(
+        np.array([-10.0, 10.0]),
+        1.0,
+        np.array([10.0, -10.0]),
+        1.0,
+        image_shape=(3, 4),
+    ) == (0, 0)
+
+    maximal_ball_module._assign_parent_if_allowed(
+        parent_indices,
+        child_index=1,
+        parent_index=1,
+        radii_voxels=np.array([3.0, 2.0, 1.0]),
+    )
+    maximal_ball_module._assign_parent_if_allowed(
+        parent_indices,
+        child_index=0,
+        parent_index=2,
+        radii_voxels=np.array([3.0, 2.0, 1.0]),
+    )
+
+    assert np.array_equal(parent_indices, np.array([0, 0, 1], dtype=np.int64))
+
+
+def test_hierarchy_merge_branch_runs_for_preparented_smaller_ball(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A smaller ball already parented to a larger root can trigger master-root merging."""
+
+    distance_map = np.ones((5, 5), dtype=float)
+    distance_map[1, 1] = 5.0
+    distance_map[1, 3] = 4.0
+    distance_map[2, 2] = 3.0
+    settings = resolve_maximal_ball_settings(
+        distance_map,
+        MaximalBallSettings(
+            minimal_pore_radius_voxels=1.0,
+            hierarchy_length_factor=2.0,
+            hierarchy_radius_factor=10.0,
+            medial_surface_mid_radius_fraction=0.1,
+            medial_surface_noise_voxels=5.0,
+        ),
+    )
+    candidates = MaximalBallCandidates(
+        center_indices=np.array([[1, 1], [1, 3], [2, 2]], dtype=np.int64),
+        radii_voxels=np.array([5.0, 4.0, 3.0], dtype=float),
+        candidate_mask=distance_map > 1.0,
+        retained_mask=np.array([True, True, True], dtype=bool),
+        distance_map=distance_map,
+        settings=settings,
+    )
+    original_assign_parent = maximal_ball_module._assign_parent_if_allowed
+    assignment_call_count = 0
+
+    def skip_first_assignment(
+        parent_indices: np.ndarray,
+        child_index: int,
+        parent_index: int,
+        *,
+        radii_voxels: np.ndarray,
+    ) -> None:
+        nonlocal assignment_call_count
+        assignment_call_count += 1
+        if assignment_call_count == 1:
+            return
+        original_assign_parent(
+            parent_indices,
+            child_index,
+            parent_index,
+            radii_voxels=radii_voxels,
+        )
+
+    monkeypatch.setattr(
+        maximal_ball_module,
+        "_assign_parent_if_allowed",
+        skip_first_assignment,
+    )
+
+    hierarchy = build_maximal_ball_hierarchy(candidates)
+
+    assert assignment_call_count > 1
+    assert hierarchy.parent_indices.shape == (3,)
+    assert np.all(hierarchy.hierarchy_levels >= 0)
+
+
+def test_initialize_root_region_labels_validates_and_handles_no_roots() -> None:
+    """Root-label initialization should fail on shape mismatch and support no-root cases."""
+
+    settings = resolve_maximal_ball_settings(
+        np.ones((2, 2), dtype=float),
+        MaximalBallSettings(minimal_pore_radius_voxels=1.0),
+    )
+    hierarchy = MaximalBallHierarchy(
+        center_indices=np.zeros((0, 2), dtype=np.int64),
+        center_coordinates=np.zeros((0, 2), dtype=float),
+        radii_voxels=np.zeros(0, dtype=float),
+        parent_indices=np.zeros(0, dtype=np.int64),
+        master_indices=np.zeros(0, dtype=np.int64),
+        hierarchy_levels=np.zeros(0, dtype=np.int64),
+        distance_map=np.zeros((2, 2), dtype=float),
+        settings=settings,
+    )
+
+    voxel_regions = initialize_root_region_labels(np.ones((2, 2), dtype=bool), hierarchy)
+
+    assert voxel_regions.root_center_indices.shape == (0, 2)
+    assert not np.any(voxel_regions.assigned_void_mask)
+    with pytest.raises(ValueError, match="distance-map shape"):
+        initialize_root_region_labels(np.ones((3, 3), dtype=bool), hierarchy)
+
+
+def test_2d_region_growth_wrappers_and_validation_branches() -> None:
+    """Pure 2-D growth wrappers should exercise the compiled 2-D dispatch paths."""
+
+    void_phase_mask = np.ones((3, 4), dtype=bool)
+    distance_map = np.ones((3, 4), dtype=float)
+    label_image = np.full((3, 4), -1, dtype=np.int64)
+    label_image[1, 1] = 0
+    label_image[1, 2] = 1
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0, 1], dtype=np.int64),
+        root_labels=np.array([0, 1], dtype=np.int64),
+        root_center_indices=np.array([[1, 1], [1, 2]], dtype=np.int64),
+        root_radii_voxels=np.array([1.0, 1.0], dtype=float),
+        root_of_ball_index=np.array([0, 1], dtype=np.int64),
+        unassigned_label=-1,
+    )
+
+    grown = grow_root_regions_by_radius(
+        void_phase_mask,
+        distance_map,
+        voxel_regions,
+        minimum_supporting_neighbors=1,
+        radius_support_mode="any",
+        iterations=1,
+    )
+    reassigned = reassign_region_boundary_voxels_by_majority(
+        void_phase_mask,
+        distance_map,
+        grown,
+        radius_support_mode="any",
+        iterations=1,
+    )
+    retreated = retreat_mixed_region_boundary_voxels(void_phase_mask, reassigned)
+    priority_grown = grow_root_regions_by_neighbor_priority(
+        void_phase_mask,
+        retreated,
+        iterations=1,
+    )
+
+    assert np.count_nonzero(grown.assigned_void_mask) > np.count_nonzero(
+        voxel_regions.assigned_void_mask
+    )
+    assert priority_grown.label_image.shape == void_phase_mask.shape
+    with pytest.raises(ValueError, match="at least 1"):
+        grow_root_regions_by_radius(
+            void_phase_mask,
+            distance_map,
+            voxel_regions,
+            minimum_supporting_neighbors=0,
+        )
+    with pytest.raises(ValueError, match="at least 1"):
+        grow_root_regions_by_radius(
+            void_phase_mask,
+            distance_map,
+            voxel_regions,
+            minimum_supporting_neighbors=1,
+            iterations=0,
+        )
+    with pytest.raises(ValueError, match="must match"):
+        grow_root_regions_by_radius(
+            void_phase_mask,
+            np.ones((2, 2), dtype=float),
+            voxel_regions,
+            minimum_supporting_neighbors=1,
+        )
+    with pytest.raises(ValueError, match="one of"):
+        grow_root_regions_by_radius(
+            void_phase_mask,
+            distance_map,
+            voxel_regions,
+            minimum_supporting_neighbors=1,
+            radius_support_mode="bad",
+        )
+    with pytest.raises(ValueError, match="at least 1"):
+        reassign_region_boundary_voxels_by_majority(
+            void_phase_mask,
+            distance_map,
+            voxel_regions,
+            iterations=0,
+        )
+    with pytest.raises(ValueError, match="must match"):
+        reassign_region_boundary_voxels_by_majority(
+            void_phase_mask,
+            np.ones((2, 2), dtype=float),
+            voxel_regions,
+        )
+    with pytest.raises(ValueError, match="must match"):
+        retreat_mixed_region_boundary_voxels(np.ones((2, 2), dtype=bool), voxel_regions)
+    with pytest.raises(ValueError, match="at least 1"):
+        grow_root_regions_by_neighbor_priority(void_phase_mask, voxel_regions, iterations=0)
+    with pytest.raises(ValueError, match="must match"):
+        grow_root_regions_by_neighbor_priority(np.ones((2, 2), dtype=bool), voxel_regions)
+
+
+def test_radius_support_and_neighbor_offset_helpers_cover_all_modes() -> None:
+    """Pure-Python helper branches should match the documented growth semantics."""
+
+    previous_labels = np.array(
+        [
+            [-1, 0, 1],
+            [2, 0, 1],
+            [-1, 3, 3],
+        ],
+        dtype=np.int64,
+    )
+    working_distance_map = np.array(
+        [
+            [0.0, 2.0, 3.0],
+            [1.0, 2.0, 1.0],
+            [0.0, 3.0, 2.0],
+        ],
+        dtype=float,
+    )
+
+    assert maximal_ball_module._neighbor_offsets(2) == [(-1, 0), (1, 0), (0, -1), (0, 1)]
+    assert maximal_ball_module._neighbor_offsets_with_growth_priority(2) == [
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+    ]
+    assert (
+        maximal_ball_module._normalize_radius_support_mode(
+            radius_support_mode=None,
+            require_strictly_larger_radius=True,
+        )
+        == "strictly_larger"
+    )
+    assert (
+        maximal_ball_module._normalize_radius_support_mode(
+            radius_support_mode=None,
+            require_strictly_larger_radius=False,
+        )
+        == "greater_or_equal"
+    )
+    assert maximal_ball_module._neighbor_satisfies_radius_support(
+        1.0,
+        2.0,
+        radius_support_mode="any",
+    )
+    assert maximal_ball_module._neighbor_satisfies_radius_support(
+        3.0,
+        2.0,
+        radius_support_mode="strictly_larger",
+    )
+    assert not maximal_ball_module._neighbor_satisfies_radius_support(
+        2.0,
+        2.0,
+        radius_support_mode="strictly_larger",
+    )
+    assert maximal_ball_module._neighbor_satisfies_radius_support(
+        2.0,
+        2.0,
+        radius_support_mode="greater_or_equal",
+    )
+    with pytest.raises(ValueError, match="Unsupported"):
+        maximal_ball_module._neighbor_satisfies_radius_support(
+            2.0,
+            2.0,
+            radius_support_mode="bad",
+        )
+    with pytest.raises(ValueError, match="Unsupported"):
+        maximal_ball_module._encode_radius_support_mode("bad")
+    assert maximal_ball_module._count_supporting_neighbor_labels(
+        previous_labels,
+        working_distance_map,
+        np.array([1, 1], dtype=np.int64),
+        image_shape=np.array(previous_labels.shape, dtype=np.int64),
+        neighbor_offsets=maximal_ball_module._neighbor_offsets(2),
+        current_label=0,
+        current_radius=2.0,
+        radius_support_mode="greater_or_equal",
+    ) == {3: 1}
+
+
+def test_measure_region_adjacency_compacts_empty_regions_and_validates_inputs() -> None:
+    """Empty root labels should be compacted while preserving surviving interfaces."""
+
+    void_phase_mask = np.ones((3, 2), dtype=bool)
+    label_image = np.array([[2, 2], [0, 0], [-1, -1]], dtype=np.int64)
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0, 1, 2], dtype=np.int64),
+        root_labels=np.array([0, 1, 2], dtype=np.int64),
+        root_center_indices=np.array([[1, 0], [2, 0], [0, 0]], dtype=np.int64),
+        root_radii_voxels=np.array([1.0, 1.0, 1.0], dtype=float),
+        root_of_ball_index=np.array([0, 1, 2], dtype=np.int64),
+        unassigned_label=-1,
+    )
+    distance_map = np.arange(6, dtype=float).reshape(3, 2) + 1.0
+
+    adjacency = measure_region_adjacency(void_phase_mask, voxel_regions, distance_map=distance_map)
+
+    assert np.array_equal(adjacency.region_labels, np.array([0, 2], dtype=np.int64))
+    assert np.array_equal(adjacency.throat_region_pairs, np.array([[0, 1]], dtype=np.int64))
+    assert np.array_equal(adjacency.throat_face_counts, np.array([2], dtype=np.int64))
+    assert np.isfinite(adjacency.throat_max_touch_radius_side1_voxels[0])
+    assert np.isfinite(adjacency.throat_max_touch_radius_side2_voxels[0])
+    with pytest.raises(ValueError, match="must match"):
+        measure_region_adjacency(np.ones((2, 2), dtype=bool), voxel_regions)
+    with pytest.raises(ValueError, match="distance_map must match"):
+        measure_region_adjacency(
+            void_phase_mask,
+            voxel_regions,
+            distance_map=np.ones((2, 2), dtype=float),
+        )
+    bad_regions = MaximalBallVoxelRegions(
+        label_image=np.array([[3]], dtype=np.int64),
+        root_ball_indices=np.array([0], dtype=np.int64),
+        root_labels=np.array([0], dtype=np.int64),
+        root_center_indices=np.array([[0, 0]], dtype=np.int64),
+        root_radii_voxels=np.array([1.0], dtype=float),
+        root_of_ball_index=np.array([0], dtype=np.int64),
+        unassigned_label=-1,
+    )
+    with pytest.raises(ValueError, match="contiguous root labels"):
+        measure_region_adjacency(np.ones((1, 1), dtype=bool), bad_regions)
+
+
+def test_boundary_and_network_mode_validation_helpers() -> None:
+    """Network assembly helper modes should normalize aliases and reject bad inputs."""
+
+    lower, upper = maximal_ball_module._resolve_axis_boundary_label_overlap(
+        np.array([True, True, True]),
+        np.array([True, True, True]),
+        lower_face_count=np.array([3, 1, 1]),
+        upper_face_count=np.array([1, 3, 1]),
+        pore_axis_coordinates=np.array([0.2, 0.8, 0.8]),
+        sample_axis_length=1.0,
+    )
+    assert np.array_equal(lower, np.array([True, False, False]))
+    assert np.array_equal(upper, np.array([False, True, True]))
+    assert maximal_ball_module._resolve_flow_boundary_mode(" direct ") == "direct"
+    assert maximal_ball_module._resolve_throat_area_mode("interface_face_count") == "face_count"
+    assert (
+        maximal_ball_module._resolve_throat_shape_factor_radius_mode("interface_support")
+        == "surface_ball"
+    )
+    assert maximal_ball_module._resolve_throat_anchor_mode("largest_radius") == "largest_support"
+    assert np.isnan(
+        maximal_ball_module._max_boundary_touch_radii_by_side(
+            np.full((2, 2), -1, dtype=np.int64),
+            np.array([0], dtype=np.int64),
+            np.ones((2, 2), dtype=float),
+        )[0, 0]
+    )
+    assert np.isnan(
+        maximal_ball_module._max_boundary_touch_radii_by_side(
+            np.ones((2, 2), dtype=np.int64),
+            np.array([0], dtype=np.int64),
+            np.ones((2, 2), dtype=float),
+        )[0, 0]
+    )
+    assert maximal_ball_module._max_boundary_touch_radii_by_side(
+        np.full((2, 2), -1, dtype=np.int64),
+        np.zeros(0, dtype=np.int64),
+        np.ones((2, 2), dtype=float),
+    ).shape == (0, 4)
+
+    with pytest.raises(ValueError, match="flow_boundary_mode"):
+        maximal_ball_module._resolve_flow_boundary_mode("bad")
+    with pytest.raises(ValueError, match="throat_area_mode"):
+        maximal_ball_module._resolve_throat_area_mode("bad")
+    with pytest.raises(ValueError, match="throat_shape_factor_radius_mode"):
+        maximal_ball_module._resolve_throat_shape_factor_radius_mode("bad")
+    with pytest.raises(ValueError, match="throat_anchor_mode"):
+        maximal_ball_module._resolve_throat_anchor_mode("bad")
+    with pytest.raises(ValueError, match="same shape"):
+        maximal_ball_module._max_boundary_touch_radii_by_side(
+            np.zeros((2, 2), dtype=np.int64),
+            np.array([0], dtype=np.int64),
+            np.ones((3, 3), dtype=float),
+        )
+
+
+def test_build_network_dict_from_2d_regions_and_validation_branches() -> None:
+    """Network assembly should support true 2-D regions and reject inconsistent inputs."""
+
+    void_phase_mask = np.ones((2, 2), dtype=bool)
+    label_image = np.array([[0, 0], [1, 1]], dtype=np.int64)
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0, 1], dtype=np.int64),
+        root_labels=np.array([0, 1], dtype=np.int64),
+        root_center_indices=np.array([[0, 0], [1, 1]], dtype=np.int64),
+        root_radii_voxels=np.array([1.0, 1.5], dtype=float),
+        root_of_ball_index=np.array([0, 1], dtype=np.int64),
+        unassigned_label=-1,
+    )
+    settings = resolve_maximal_ball_settings(
+        np.ones((2, 2), dtype=float),
+        MaximalBallSettings(minimal_pore_radius_voxels=1.0),
+    )
+    extraction_result = MaximalBallExtractionResult(
+        candidates=MaximalBallCandidates(
+            center_indices=voxel_regions.root_center_indices.copy(),
+            radii_voxels=voxel_regions.root_radii_voxels.copy(),
+            candidate_mask=np.zeros((2, 2), dtype=bool),
+            retained_mask=np.array([True, True], dtype=bool),
+            distance_map=np.ones((2, 2), dtype=float),
+            settings=settings,
+        ),
+        hierarchy=MaximalBallHierarchy(
+            center_indices=voxel_regions.root_center_indices.copy(),
+            center_coordinates=voxel_regions.root_center_indices.astype(float),
+            radii_voxels=voxel_regions.root_radii_voxels.copy(),
+            parent_indices=np.array([0, 1], dtype=np.int64),
+            master_indices=np.array([0, 1], dtype=np.int64),
+            hierarchy_levels=np.array([0, 0], dtype=np.int64),
+            distance_map=np.ones((2, 2), dtype=float),
+            settings=settings,
+        ),
+        voxel_regions=voxel_regions,
+        region_adjacency=measure_region_adjacency(void_phase_mask, voxel_regions),
+    )
+
+    network_dict = build_network_dict_from_maximal_ball_regions(
+        extraction_result,
+        voxel_size=1.0,
+        axis_names=("x", "y"),
+    )
+    reservoir_network_dict = build_network_dict_from_maximal_ball_regions(
+        extraction_result,
+        voxel_size=1.0,
+        axis_names=("x", "y"),
+        flow_boundary_mode="external_reservoir",
+    )
+
+    assert network_dict["pore.coords"].shape == (2, 3)
+    assert network_dict["throat.centroid"].shape[1] == 3
+    assert reservoir_network_dict["pore.coords"].shape[0] > network_dict["pore.coords"].shape[0]
+    with pytest.raises(ValueError, match="voxel_size"):
+        build_network_dict_from_maximal_ball_regions(extraction_result, voxel_size=0.0)
+    with pytest.raises(ValueError, match="boundary_length_epsilon"):
+        build_network_dict_from_maximal_ball_regions(
+            extraction_result,
+            voxel_size=1.0,
+            boundary_length_epsilon=0.0,
+        )
+    with pytest.raises(ValueError, match="boundary_radius_scale"):
+        build_network_dict_from_maximal_ball_regions(
+            extraction_result,
+            voxel_size=1.0,
+            boundary_radius_scale=0.0,
+        )
+    with pytest.raises(ValueError, match="axis_names"):
+        build_network_dict_from_maximal_ball_regions(
+            extraction_result,
+            voxel_size=1.0,
+            axis_names=("x",),
+        )
+    with pytest.raises(ValueError, match="boundary_axis"):
+        build_network_dict_from_maximal_ball_regions(
+            extraction_result,
+            voxel_size=1.0,
+            axis_names=("x", "y"),
+            boundary_axis="z",
+        )
+
+
+def test_build_network_dict_validation_for_inconsistent_geometry() -> None:
+    """Network assembly should reject inconsistent region and hierarchy arrays."""
+
+    void_phase_mask = np.ones((2, 2), dtype=bool)
+    label_image = np.array([[0, 0], [1, 1]], dtype=np.int64)
+    voxel_regions = MaximalBallVoxelRegions(
+        label_image=label_image,
+        root_ball_indices=np.array([0, 1], dtype=np.int64),
+        root_labels=np.array([0, 1], dtype=np.int64),
+        root_center_indices=np.array([[0, 0], [1, 1]], dtype=np.int64),
+        root_radii_voxels=np.array([1.0, 1.5], dtype=float),
+        root_of_ball_index=np.array([0, 1], dtype=np.int64),
+        unassigned_label=-1,
+    )
+    settings = resolve_maximal_ball_settings(
+        np.ones((2, 2), dtype=float),
+        MaximalBallSettings(minimal_pore_radius_voxels=1.0),
+    )
+    extraction_result = MaximalBallExtractionResult(
+        candidates=MaximalBallCandidates(
+            center_indices=voxel_regions.root_center_indices.copy(),
+            radii_voxels=voxel_regions.root_radii_voxels.copy(),
+            candidate_mask=np.zeros((2, 2), dtype=bool),
+            retained_mask=np.array([True, True], dtype=bool),
+            distance_map=np.ones((2, 2), dtype=float),
+            settings=settings,
+        ),
+        hierarchy=MaximalBallHierarchy(
+            center_indices=voxel_regions.root_center_indices.copy(),
+            center_coordinates=voxel_regions.root_center_indices.astype(float),
+            radii_voxels=voxel_regions.root_radii_voxels.copy(),
+            parent_indices=np.array([0, 1], dtype=np.int64),
+            master_indices=np.array([0, 1], dtype=np.int64),
+            hierarchy_levels=np.array([0, 0], dtype=np.int64),
+            distance_map=np.ones((2, 2), dtype=float),
+            settings=settings,
+        ),
+        voxel_regions=voxel_regions,
+        region_adjacency=measure_region_adjacency(void_phase_mask, voxel_regions),
+    )
+
+    bad_ndim = MaximalBallExtractionResult(
+        candidates=extraction_result.candidates,
+        hierarchy=MaximalBallHierarchy(
+            center_indices=np.zeros((0, 4), dtype=np.int64),
+            center_coordinates=np.zeros((0, 4), dtype=float),
+            radii_voxels=np.zeros(0, dtype=float),
+            parent_indices=np.zeros(0, dtype=np.int64),
+            master_indices=np.zeros(0, dtype=np.int64),
+            hierarchy_levels=np.zeros(0, dtype=np.int64),
+            distance_map=np.ones((1, 1, 1, 1), dtype=float),
+            settings=settings,
+        ),
+        voxel_regions=MaximalBallVoxelRegions(
+            label_image=np.ones((1, 1, 1, 1), dtype=np.int64),
+            root_ball_indices=np.zeros(0, dtype=np.int64),
+            root_labels=np.zeros(0, dtype=np.int64),
+            root_center_indices=np.zeros((0, 4), dtype=np.int64),
+            root_radii_voxels=np.zeros(0, dtype=float),
+            root_of_ball_index=np.zeros(0, dtype=np.int64),
+            unassigned_label=-1,
+        ),
+        region_adjacency=maximal_ball_module.MaximalBallRegionAdjacency(
+            region_labels=np.zeros(0, dtype=np.int64),
+            region_volume_voxels=np.zeros(0, dtype=np.int64),
+            region_surface_face_counts=np.zeros(0, dtype=np.int64),
+            throat_region_pairs=np.zeros((0, 2), dtype=np.int64),
+            throat_face_counts=np.zeros(0, dtype=np.int64),
+            throat_axis_face_balance=np.zeros((0, 4), dtype=float),
+            throat_centroid_indices=np.zeros((0, 4), dtype=float),
+            throat_max_touch_radius_side1_voxels=np.zeros(0, dtype=float),
+            throat_max_touch_radius_side2_voxels=np.zeros(0, dtype=float),
+            throat_max_touch_index_side1=np.zeros((0, 4), dtype=np.int64),
+            throat_max_touch_index_side2=np.zeros((0, 4), dtype=np.int64),
+            boundary_face_counts=np.zeros((0, 8), dtype=np.int64),
+        ),
+    )
+    bad_root_shape = MaximalBallExtractionResult(
+        candidates=extraction_result.candidates,
+        hierarchy=extraction_result.hierarchy,
+        voxel_regions=MaximalBallVoxelRegions(
+            label_image=voxel_regions.label_image,
+            root_ball_indices=voxel_regions.root_ball_indices,
+            root_labels=voxel_regions.root_labels,
+            root_center_indices=np.array([0, 1], dtype=np.int64),
+            root_radii_voxels=voxel_regions.root_radii_voxels,
+            root_of_ball_index=voxel_regions.root_of_ball_index,
+            unassigned_label=-1,
+        ),
+        region_adjacency=extraction_result.region_adjacency,
+    )
+    bad_radius_shape = MaximalBallExtractionResult(
+        candidates=extraction_result.candidates,
+        hierarchy=extraction_result.hierarchy,
+        voxel_regions=MaximalBallVoxelRegions(
+            label_image=voxel_regions.label_image,
+            root_ball_indices=voxel_regions.root_ball_indices,
+            root_labels=voxel_regions.root_labels,
+            root_center_indices=voxel_regions.root_center_indices,
+            root_radii_voxels=np.array([1.0], dtype=float),
+            root_of_ball_index=voxel_regions.root_of_ball_index,
+            unassigned_label=-1,
+        ),
+        region_adjacency=extraction_result.region_adjacency,
+    )
+    bad_region_labels = MaximalBallExtractionResult(
+        candidates=extraction_result.candidates,
+        hierarchy=extraction_result.hierarchy,
+        voxel_regions=voxel_regions,
+        region_adjacency=maximal_ball_module.MaximalBallRegionAdjacency(
+            region_labels=np.array([2], dtype=np.int64),
+            region_volume_voxels=np.array([1], dtype=np.int64),
+            region_surface_face_counts=np.array([1], dtype=np.int64),
+            throat_region_pairs=np.zeros((0, 2), dtype=np.int64),
+            throat_face_counts=np.zeros(0, dtype=np.int64),
+            throat_axis_face_balance=np.zeros((0, 2), dtype=float),
+            throat_centroid_indices=np.zeros((0, 2), dtype=float),
+            throat_max_touch_radius_side1_voxels=np.zeros(0, dtype=float),
+            throat_max_touch_radius_side2_voxels=np.zeros(0, dtype=float),
+            throat_max_touch_index_side1=np.zeros((0, 2), dtype=np.int64),
+            throat_max_touch_index_side2=np.zeros((0, 2), dtype=np.int64),
+            boundary_face_counts=np.zeros((1, 4), dtype=np.int64),
+        ),
+    )
+    bad_center_coordinates = MaximalBallExtractionResult(
+        candidates=extraction_result.candidates,
+        hierarchy=MaximalBallHierarchy(
+            center_indices=extraction_result.hierarchy.center_indices,
+            center_coordinates=np.array([0.0, 1.0]),
+            radii_voxels=extraction_result.hierarchy.radii_voxels,
+            parent_indices=extraction_result.hierarchy.parent_indices,
+            master_indices=extraction_result.hierarchy.master_indices,
+            hierarchy_levels=extraction_result.hierarchy.hierarchy_levels,
+            distance_map=extraction_result.hierarchy.distance_map,
+            settings=settings,
+        ),
+        voxel_regions=voxel_regions,
+        region_adjacency=extraction_result.region_adjacency,
+    )
+    bad_centroids = MaximalBallExtractionResult(
+        candidates=extraction_result.candidates,
+        hierarchy=extraction_result.hierarchy,
+        voxel_regions=voxel_regions,
+        region_adjacency=maximal_ball_module.MaximalBallRegionAdjacency(
+            region_labels=extraction_result.region_adjacency.region_labels,
+            region_volume_voxels=extraction_result.region_adjacency.region_volume_voxels,
+            region_surface_face_counts=extraction_result.region_adjacency.region_surface_face_counts,
+            throat_region_pairs=extraction_result.region_adjacency.throat_region_pairs,
+            throat_face_counts=extraction_result.region_adjacency.throat_face_counts,
+            throat_axis_face_balance=extraction_result.region_adjacency.throat_axis_face_balance,
+            throat_centroid_indices=np.zeros((0, 2), dtype=float),
+            throat_max_touch_radius_side1_voxels=(
+                extraction_result.region_adjacency.throat_max_touch_radius_side1_voxels
+            ),
+            throat_max_touch_radius_side2_voxels=(
+                extraction_result.region_adjacency.throat_max_touch_radius_side2_voxels
+            ),
+            throat_max_touch_index_side1=extraction_result.region_adjacency.throat_max_touch_index_side1,
+            throat_max_touch_index_side2=extraction_result.region_adjacency.throat_max_touch_index_side2,
+            boundary_face_counts=extraction_result.region_adjacency.boundary_face_counts,
+        ),
+    )
+    for bad_extraction, match in [
+        (bad_ndim, "2D or 3D"),
+        (bad_root_shape, "root_center_indices"),
+        (bad_radius_shape, "root_radii_voxels"),
+        (bad_region_labels, "region_adjacency.region_labels"),
+        (bad_center_coordinates, "root center coordinates"),
+        (bad_centroids, "throat_centroid_indices"),
+    ]:
+        with pytest.raises(ValueError, match=match):
+            build_network_dict_from_maximal_ball_regions(bad_extraction, voxel_size=1.0)
+
+
+def test_extraction_diagnostics_validates_mask_shape() -> None:
+    """Diagnostics should reject masks that do not match the stored voxel regions."""
+
+    extraction_result = extract_maximal_ball_regions(
+        np.pad(np.ones((2, 2, 2), dtype=bool), 1, constant_values=False),
+        distance_map_backend="scipy",
+        settings=MaximalBallSettings(minimal_pore_radius_voxels=1.0),
+        apply_boundary_clipping=False,
+    )
+
+    with pytest.raises(ValueError, match="voxel-region labels"):
+        summarize_maximal_ball_extraction_diagnostics(
+            np.ones((2, 2, 2), dtype=bool),
+            extraction_result,
+        )

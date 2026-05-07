@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+import voids.io.pnflow_cnm as pnflow_cnm_module
 from voids.io import load_pnflow_cnm
 from voids.paths import data_path
 from voids.physics.singlephase import FluidSinglePhase, PressureBC, SinglePhaseOptions, solve
@@ -13,6 +15,34 @@ def _write_text(path: Path, text: str) -> None:
     """Write a small CNM fixture file."""
 
     path.write_text(text, encoding="utf-8")
+
+
+def _write_minimal_cnm_fixture(
+    prefix: Path,
+    *,
+    node1_text: str | None = None,
+    node2_text: str | None = None,
+    link1_text: str | None = None,
+    link2_text: str | None = None,
+) -> None:
+    """Write a minimal one-pore CNM fixture, optionally overriding any file."""
+
+    _write_text(
+        prefix.with_name(f"{prefix.name}_node1.dat"),
+        node1_text if node1_text is not None else "1 1.0 1.0 1.0\n1 0.5 0.5 0.5 1 2 0 0 1\n",
+    )
+    _write_text(
+        prefix.with_name(f"{prefix.name}_node2.dat"),
+        node2_text if node2_text is not None else "1 0.05 0.10 0.04 0.0\n",
+    )
+    _write_text(
+        prefix.with_name(f"{prefix.name}_link1.dat"),
+        link1_text if link1_text is not None else "1\n1 1 1 0.08 0.04 0.55\n",
+    )
+    _write_text(
+        prefix.with_name(f"{prefix.name}_link2.dat"),
+        link2_text if link2_text is not None else "1 1 1 0.20 0.10 0.25 0.01 0.0\n",
+    )
 
 
 def test_load_pnflow_cnm_parses_boundary_connections_with_mirror_pores(tmp_path: Path) -> None:
@@ -82,6 +112,79 @@ def test_load_pnflow_cnm_parses_boundary_connections_with_mirror_pores(tmp_path:
     assert net.pore["volume"][3] == pytest.approx(0.0)
     assert net.pore_coords[2, 0] == pytest.approx(0.0)
     assert net.pore_coords[3, 0] == pytest.approx(1.0)
+
+
+def test_pnflow_shape_factor_and_line_parsing_helpers_cover_all_element_classes() -> None:
+    """CNM helper functions should cover malformed rows and shape-factor classes."""
+
+    shape_factors = pnflow_cnm_module._pnflow_effective_shape_factor(
+        np.array([0.01, 0.05, 0.08], dtype=float)
+    )
+
+    assert shape_factors[0] == pytest.approx(min(0.01, pnflow_cnm_module._TRIANGLE_MAX_G - 5.0e-5))
+    assert shape_factors[1] == pytest.approx(pnflow_cnm_module._SQUARE_G)
+    assert shape_factors[2] == pytest.approx(pnflow_cnm_module._CIRCLE_G)
+    with pytest.raises(ValueError, match="Malformed toy"):
+        pnflow_cnm_module._split_numeric_line("1 2", expected_min_tokens=3, label="toy")
+
+
+def test_load_pnflow_cnm_rejects_invalid_import_options(tmp_path: Path) -> None:
+    """Importer options should reject unsupported or nonphysical boundary controls."""
+
+    prefix = tmp_path / "bad_options"
+
+    with pytest.raises(ValueError, match="boundary_axis"):
+        load_pnflow_cnm(prefix, boundary_axis="y")
+    with pytest.raises(ValueError, match="boundary_length_epsilon"):
+        load_pnflow_cnm(prefix, boundary_length_epsilon=0.0)
+    with pytest.raises(ValueError, match="boundary_radius_scale"):
+        load_pnflow_cnm(prefix, boundary_radius_scale=0.0)
+
+
+@pytest.mark.parametrize(
+    "overrides, match",
+    [
+        ({"node1_text": ""}, "CNM file is empty"),
+        (
+            {
+                "node1_text": "2 1.0 1.0 1.0\n1 0.5 0.5 0.5 1 2 0 0 1\n",
+                "node2_text": ("1 0.05 0.10 0.04 0.0\n2 0.05 0.10 0.04 0.0\n"),
+            },
+            "header declares 2 pores",
+        ),
+        ({"node2_text": ""}, "should contain 1 pore rows"),
+        ({"link1_text": ""}, "CNM file is empty"),
+        ({"link1_text": "2\n1 1 1 0.08 0.04 0.55\n"}, "Throat-row mismatch"),
+        (
+            {"node1_text": "1 1.0 1.0 1.0\n1 0.5 0.5 0.5 2 1\n"},
+            "Malformed pore-connectivity row",
+        ),
+        (
+            {"link1_text": "1\n1 -1 0 0.08 0.04 0.55\n"},
+            "Boundary throat without an internal neighbor",
+        ),
+        (
+            {"link1_text": "1\n1 -2 -1 0.08 0.04 0.55\n"},
+            "Boundary throat without an internal neighbor",
+        ),
+        (
+            {"link1_text": "1\n1 -2 -3 0.08 0.04 0.55\n"},
+            "Unresolved throat endpoints",
+        ),
+    ],
+)
+def test_load_pnflow_cnm_reports_malformed_fixture_errors(
+    tmp_path: Path,
+    overrides: dict[str, str],
+    match: str,
+) -> None:
+    """Malformed CNM text fixtures should fail at the intended parser guard."""
+
+    prefix = tmp_path / "malformed"
+    _write_minimal_cnm_fixture(prefix, **overrides)
+
+    with pytest.raises(ValueError, match=match):
+        load_pnflow_cnm(prefix)
 
 
 def test_load_pnflow_cnm_defaults_to_generic_import_without_solver_box_compat() -> None:
