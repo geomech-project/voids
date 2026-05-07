@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import warnings
 from typing import Final
 
@@ -369,6 +370,32 @@ def _segment_conductance_from_agl(
     return out
 
 
+def _segment_conductance_hagen_poiseuille(
+    area: np.ndarray,
+    length: np.ndarray,
+    viscosity: float | np.ndarray,
+) -> np.ndarray:
+    """Compute circular Hagen-Poiseuille conductance from area and length.
+
+    ``g = A**2 / (8 * pi * mu * L)``.
+
+    For a circular duct with ``A = pi * r**2`` this is equivalent to
+    ``g = pi * r**4 / (8 * mu * L)``.
+    """
+
+    a = np.asarray(area, dtype=float)
+    L = np.asarray(length, dtype=float)
+    mu = _broadcast_viscosity(viscosity, a.shape)
+    if np.any(a < 0):
+        raise ValueError("area contains negative values")
+    if np.any(L < 0):
+        raise ValueError("length contains negative values")
+    out = np.full_like(a, np.inf, dtype=float)
+    nz = L > 0
+    out[nz] = (a[nz] ** 2) / (8.0 * np.pi * mu[nz] * L[nz])
+    return out
+
+
 def _conductance_coefficient_from_shape_factor(shape_factor: np.ndarray) -> np.ndarray:
     """Return the Valvatne-Blunt single-phase coefficient for each shape factor.
 
@@ -527,6 +554,63 @@ def _conduit_lengths_available(net: Network) -> bool:
     return all(k in net.throat for k in keys)
 
 
+def _shape_factor_source_available(net: Network, kind: str) -> bool:
+    """Return whether explicit shape-factor information is present."""
+
+    store = net.throat if kind == "throat" else net.pore
+    return "shape_factor" in store or "perimeter" in store
+
+
+def _get_hydraulic_size_factors(net: Network) -> np.ndarray:
+    """Return OpenPNM-style hydraulic size factors when available.
+
+    The accepted layouts are ``(Nt,)`` for throat-only size factors and
+    ``(Nt, 3)`` for pore1-throat-pore2 conduit factors.  The latter follows the
+    OpenPNM convention used by its generic hydraulic conductance model.
+    """
+
+    if "hydraulic_size_factors" in net.throat:
+        raw = net.throat["hydraulic_size_factors"]
+    elif "throat.hydraulic_size_factors" in net.extra:
+        raw = net.extra["throat.hydraulic_size_factors"]
+    else:
+        raise KeyError("Missing throat.hydraulic_size_factors")
+
+    if isinstance(raw, Mapping):
+        key_sets = (
+            ("pore1", "throat", "pore2"),
+            ("pore1_size_factor", "throat_size_factor", "pore2_size_factor"),
+            ("pore1_size_factors", "throat_size_factors", "pore2_size_factors"),
+        )
+        for keys in key_sets:
+            if all(key in raw for key in keys):
+                arr = np.column_stack([np.asarray(raw[key], dtype=float) for key in keys])
+                break
+        else:
+            values = list(raw.values())
+            if len(values) != 3:
+                raise ValueError(
+                    "throat.hydraulic_size_factors mapping must contain pore1, throat, "
+                    "and pore2 entries"
+                )
+            arr = np.column_stack([np.asarray(value, dtype=float) for value in values])
+    else:
+        arr = np.asarray(raw, dtype=float)
+
+    if arr.shape == (net.Nt,):
+        sf = arr
+    elif arr.shape == (net.Nt, 3):
+        sf = arr
+    else:
+        raise ValueError("throat.hydraulic_size_factors must have shape (Nt,) or (Nt, 3)")
+    valid = (sf > 0.0) & (np.isfinite(sf) | np.isinf(sf))
+    if not np.all(valid):
+        raise ValueError(
+            "throat.hydraulic_size_factors must contain positive finite values or +inf"
+        )
+    return np.asarray(sf, dtype=float)
+
+
 def _harmonic_combine_segments(*segments: np.ndarray) -> np.ndarray:
     """Combine segment conductances in series.
 
@@ -571,6 +655,115 @@ def _harmonic_sensitivity(
     positive_eq = np.isfinite(g_eq) & (g_eq > 0.0)
     out[positive_eq] = (g_eq[positive_eq] ** 2) * term[positive_eq]
     return out
+
+
+def _hydraulic_size_factor_conductance(
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    *,
+    pore_viscosity: float | np.ndarray | None = None,
+    throat_viscosity: float | np.ndarray | None = None,
+) -> np.ndarray:
+    """Compute conductance from OpenPNM hydraulic size factors."""
+
+    sf = _get_hydraulic_size_factors(net)
+    selected_throat_viscosity = throat_viscosity if throat_viscosity is not None else viscosity
+    if selected_throat_viscosity is None:
+        raise ValueError("Need either viscosity or throat_viscosity")
+    mu_t = _broadcast_viscosity(selected_throat_viscosity, (net.Nt,))
+    if sf.ndim == 1:
+        return np.asarray(sf / mu_t, dtype=float)
+
+    mu_p, mu_t = _resolve_pore_throat_viscosities(
+        net,
+        viscosity,
+        pore_viscosity=pore_viscosity,
+        throat_viscosity=throat_viscosity,
+    )
+    conns = net.throat_conns
+    p1_idx = conns[:, 0]
+    p2_idx = conns[:, 1]
+    f1, ft, f2 = sf.T
+    g1 = f1 / mu_p[p1_idx]
+    gt = ft / mu_t
+    g2 = f2 / mu_p[p2_idx]
+    return _harmonic_combine_segments(g1, gt, g2)
+
+
+def _hydraulic_size_factor_sensitivities(
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    *,
+    pore_viscosity: float | np.ndarray | None = None,
+    throat_viscosity: float | np.ndarray | None = None,
+    pore_dviscosity_dpressure: float | np.ndarray | None = None,
+    throat_dviscosity_dpressure: float | np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return conductance sensitivities for hydraulic size-factor data."""
+
+    sf = _get_hydraulic_size_factors(net)
+    selected_throat_viscosity = throat_viscosity if throat_viscosity is not None else viscosity
+    if selected_throat_viscosity is None:
+        raise ValueError("Need either viscosity or throat_viscosity")
+    mu_t = _broadcast_viscosity(selected_throat_viscosity, (net.Nt,))
+    dmu_t = (
+        _broadcast_finite(
+            throat_dviscosity_dpressure,
+            (net.Nt,),
+            name="throat_dviscosity_dpressure",
+        )
+        if throat_dviscosity_dpressure is not None
+        else np.zeros(net.Nt, dtype=float)
+    )
+
+    if sf.ndim == 1:
+        g = sf / mu_t
+        dg_dmu = -g / mu_t
+        factor = 0.5 * dmu_t
+        return g, dg_dmu * factor, dg_dmu * factor
+
+    mu_p, mu_t = _resolve_pore_throat_viscosities(
+        net,
+        viscosity,
+        pore_viscosity=pore_viscosity,
+        throat_viscosity=throat_viscosity,
+    )
+    dmu_p = (
+        _broadcast_finite(
+            pore_dviscosity_dpressure,
+            (net.Np,),
+            name="pore_dviscosity_dpressure",
+        )
+        if pore_dviscosity_dpressure is not None
+        else np.zeros(net.Np, dtype=float)
+    )
+    conns = net.throat_conns
+    p1_idx = conns[:, 0]
+    p2_idx = conns[:, 1]
+    f1, ft, f2 = sf.T
+    g1 = f1 / mu_p[p1_idx]
+    gt = ft / mu_t
+    g2 = f2 / mu_p[p2_idx]
+
+    dg1_dmu = np.zeros_like(g1, dtype=float)
+    dgt_dmu = np.zeros_like(gt, dtype=float)
+    dg2_dmu = np.zeros_like(g2, dtype=float)
+    positive_1 = np.isfinite(g1) & (g1 > 0.0)
+    positive_t = np.isfinite(gt) & (gt > 0.0)
+    positive_2 = np.isfinite(g2) & (g2 > 0.0)
+    dg1_dmu[positive_1] = -g1[positive_1] / mu_p[p1_idx][positive_1]
+    dgt_dmu[positive_t] = -gt[positive_t] / mu_t[positive_t]
+    dg2_dmu[positive_2] = -g2[positive_2] / mu_p[p2_idx][positive_2]
+
+    dg1_dpi = dg1_dmu * dmu_p[p1_idx]
+    dgt_dpi = dgt_dmu * (0.5 * dmu_t)
+    dgt_dpj = dgt_dmu * (0.5 * dmu_t)
+    dg2_dpj = dg2_dmu * dmu_p[p2_idx]
+
+    g = _harmonic_combine_segments(g1, gt, g2)
+    dg_dpi = _harmonic_sensitivity(g, (g1, gt, g2), (dg1_dpi, dgt_dpi, np.zeros_like(g2)))
+    dg_dpj = _harmonic_sensitivity(g, (g1, gt, g2), (np.zeros_like(g1), dgt_dpj, dg2_dpj))
+    return g, dg_dpi, dg_dpj
 
 
 def _throat_only_shape_factor_conductance(
@@ -664,6 +857,75 @@ def _valvatne_conduit_baseline(
         mu_p[p2_idx],
     )
     return _harmonic_combine_segments(g1, gt, g2)
+
+
+def _hagen_poiseuille_conduit(
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    *,
+    pore_viscosity: float | np.ndarray | None = None,
+    throat_viscosity: float | np.ndarray | None = None,
+) -> np.ndarray:
+    """Compute pore-throat-pore Hagen-Poiseuille conductance."""
+
+    if not _conduit_lengths_available(net):
+        raise KeyError("Missing conduit lengths (pore1_length, core_length, pore2_length)")
+    At = _get_entity_area(net, "throat")
+    Ap = _get_entity_area(net, "pore")
+    mu_p, mu_t = _resolve_pore_throat_viscosities(
+        net,
+        viscosity,
+        pore_viscosity=pore_viscosity,
+        throat_viscosity=throat_viscosity,
+    )
+
+    Lt = np.asarray(net.throat["core_length"], dtype=float)
+    gt = _segment_conductance_hagen_poiseuille(At, Lt, mu_t)
+
+    conns = net.throat_conns
+    p1_idx = conns[:, 0]
+    p2_idx = conns[:, 1]
+    g1 = _segment_conductance_hagen_poiseuille(
+        Ap[p1_idx],
+        np.asarray(net.throat["pore1_length"], dtype=float),
+        mu_p[p1_idx],
+    )
+    g2 = _segment_conductance_hagen_poiseuille(
+        Ap[p2_idx],
+        np.asarray(net.throat["pore2_length"], dtype=float),
+        mu_p[p2_idx],
+    )
+    return _harmonic_combine_segments(g1, gt, g2)
+
+
+def hagen_poiseuille_conductance(
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    *,
+    pore_viscosity: float | np.ndarray | None = None,
+    throat_viscosity: float | np.ndarray | None = None,
+) -> np.ndarray:
+    """Compute the Hagen-Poiseuille conduit conductance.
+
+    When pore-throat-pore conduit lengths and pore/throat areas are available,
+    the model computes the harmonic series conductance of the pore-1, throat,
+    and pore-2 segments, with each segment using
+    ``g = A**2 / (8 * pi * mu * L)``. If that conduit decomposition is
+    unavailable, it falls back to the single throat circular Poiseuille model,
+    which is the same segment law applied to one throat segment.
+    """
+
+    if "hydraulic_conductance" in net.throat:
+        return generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
+    try:
+        return _hagen_poiseuille_conduit(
+            net,
+            viscosity,
+            pore_viscosity=pore_viscosity,
+            throat_viscosity=throat_viscosity,
+        )
+    except KeyError:
+        return generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
 
 
 def valvatne_blunt_throat_conductance(
@@ -807,6 +1069,91 @@ def valvatne_blunt_baseline_conductance(
     )
 
 
+def _select_auto_conductance_model(net: Network) -> str:
+    """Select the richest conductance model supported by the network fields."""
+
+    if "hydraulic_conductance" in net.throat:
+        return "generic_poiseuille"
+    try:
+        _get_hydraulic_size_factors(net)
+    except KeyError:
+        pass
+    else:
+        return "hydraulic_size_factors"
+
+    if (
+        _conduit_lengths_available(net)
+        and _shape_factor_source_available(net, "pore")
+        and _shape_factor_source_available(net, "throat")
+    ):
+        try:
+            throat_area = _get_entity_area(net, "throat")
+            _get_entity_shape_factor(net, "throat", area=throat_area)
+            pore_area = _get_entity_area(net, "pore")
+            _get_entity_shape_factor(net, "pore", area=pore_area)
+        except KeyError:
+            pass
+        else:
+            return "valvatne_blunt"
+
+    if _conduit_lengths_available(net):
+        try:
+            _get_entity_area(net, "throat")
+            _get_entity_area(net, "pore")
+        except KeyError:
+            pass
+        else:
+            return "hagen_poiseuille"
+
+    if _shape_factor_source_available(net, "throat"):
+        try:
+            _require(net, "throat", ("length",))
+            throat_area = _get_entity_area(net, "throat")
+            _get_entity_shape_factor(net, "throat", area=throat_area)
+        except KeyError:
+            pass
+        else:
+            return "valvatne_blunt_throat"
+
+    return "generic_poiseuille"
+
+
+def auto_conductance(
+    net: Network,
+    viscosity: float | np.ndarray | None,
+    *,
+    pore_viscosity: float | np.ndarray | None = None,
+    throat_viscosity: float | np.ndarray | None = None,
+) -> np.ndarray:
+    """Compute conductance using the richest available built-in model.
+
+    The selection hierarchy is:
+
+    1. precomputed ``throat.hydraulic_conductance``
+    2. OpenPNM-style ``throat.hydraulic_size_factors``
+    3. explicit shape-factor pore-throat-pore ``valvatne_blunt``
+    4. circular conduit ``hagen_poiseuille``
+    5. throat-only ``valvatne_blunt_throat``
+    6. fallback ``generic_poiseuille``
+    """
+
+    selected = _select_auto_conductance_model(net)
+    if selected == "hydraulic_size_factors":
+        return _hydraulic_size_factor_conductance(
+            net,
+            viscosity,
+            pore_viscosity=pore_viscosity,
+            throat_viscosity=throat_viscosity,
+        )
+    return throat_conductance(
+        net,
+        viscosity,
+        model=selected,
+        pore_viscosity=pore_viscosity,
+        throat_viscosity=throat_viscosity,
+    )
+
+
 def available_conductance_models() -> tuple[str, ...]:
     """Return the names of built-in hydraulic conductance models.
 
@@ -817,7 +1164,9 @@ def available_conductance_models() -> tuple[str, ...]:
     """
 
     return (
+        "auto",
         "generic_poiseuille",
+        "hagen_poiseuille",
         "valvatne_blunt_throat",
         "valvatne_blunt",
         "valvatne_blunt_baseline",
@@ -827,7 +1176,7 @@ def available_conductance_models() -> tuple[str, ...]:
 def throat_conductance(
     net: Network,
     viscosity: float | np.ndarray | None,
-    model: str = "generic_poiseuille",
+    model: str = "auto",
     *,
     pore_viscosity: float | np.ndarray | None = None,
     throat_viscosity: float | np.ndarray | None = None,
@@ -854,8 +1203,22 @@ def throat_conductance(
         If ``model`` is unknown.
     """
 
+    if model == "auto":
+        return auto_conductance(
+            net,
+            viscosity,
+            pore_viscosity=pore_viscosity,
+            throat_viscosity=throat_viscosity,
+        )
     if model == "generic_poiseuille":
         return generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
+    if model == "hagen_poiseuille":
+        return hagen_poiseuille_conductance(
+            net,
+            viscosity,
+            pore_viscosity=pore_viscosity,
+            throat_viscosity=throat_viscosity,
+        )
     if model == "valvatne_blunt_throat":
         return valvatne_blunt_throat_conductance(
             net,
@@ -882,7 +1245,7 @@ def throat_conductance(
 def throat_conductance_with_sensitivities(
     net: Network,
     viscosity: float | np.ndarray | None,
-    model: str = "generic_poiseuille",
+    model: str = "auto",
     *,
     pore_viscosity: float | np.ndarray | None = None,
     throat_viscosity: float | np.ndarray | None = None,
@@ -905,6 +1268,27 @@ def throat_conductance_with_sensitivities(
         g = generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
         zeros = np.zeros_like(g, dtype=float)
         return g, zeros, zeros
+
+    if model == "auto":
+        selected = _select_auto_conductance_model(net)
+        if selected == "hydraulic_size_factors":
+            return _hydraulic_size_factor_sensitivities(
+                net,
+                viscosity,
+                pore_viscosity=pore_viscosity,
+                throat_viscosity=throat_viscosity,
+                pore_dviscosity_dpressure=pore_dviscosity_dpressure,
+                throat_dviscosity_dpressure=throat_dviscosity_dpressure,
+            )
+        return throat_conductance_with_sensitivities(
+            net,
+            viscosity,
+            model=selected,
+            pore_viscosity=pore_viscosity,
+            throat_viscosity=throat_viscosity,
+            pore_dviscosity_dpressure=pore_dviscosity_dpressure,
+            throat_dviscosity_dpressure=throat_dviscosity_dpressure,
+        )
 
     if model == "generic_poiseuille":
         selected_viscosity = throat_viscosity if throat_viscosity is not None else viscosity
@@ -935,6 +1319,73 @@ def throat_conductance_with_sensitivities(
         dg_dmu = -g / mu_t
         factor = 0.5 * dmu_t
         return g, dg_dmu * factor, dg_dmu * factor
+
+    if model == "hagen_poiseuille":
+        try:
+            if not _conduit_lengths_available(net):
+                raise KeyError("Missing conduit lengths (pore1_length, core_length, pore2_length)")
+            At = _get_entity_area(net, "throat")
+            Ap = _get_entity_area(net, "pore")
+        except KeyError:
+            return throat_conductance_with_sensitivities(
+                net,
+                viscosity,
+                model="generic_poiseuille",
+                pore_viscosity=pore_viscosity,
+                throat_viscosity=throat_viscosity,
+                pore_dviscosity_dpressure=pore_dviscosity_dpressure,
+                throat_dviscosity_dpressure=throat_dviscosity_dpressure,
+            )
+
+        mu_p, mu_t = _resolve_pore_throat_viscosities(
+            net,
+            viscosity,
+            pore_viscosity=pore_viscosity,
+            throat_viscosity=throat_viscosity,
+        )
+        dmu_p = (
+            _broadcast_finite(
+                pore_dviscosity_dpressure,
+                (net.Np,),
+                name="pore_dviscosity_dpressure",
+            )
+            if pore_dviscosity_dpressure is not None
+            else np.zeros(net.Np, dtype=float)
+        )
+        dmu_t = (
+            _broadcast_finite(
+                throat_dviscosity_dpressure,
+                (net.Nt,),
+                name="throat_dviscosity_dpressure",
+            )
+            if throat_dviscosity_dpressure is not None
+            else np.zeros(net.Nt, dtype=float)
+        )
+        Lt = np.asarray(net.throat["core_length"], dtype=float)
+        gt = _segment_conductance_hagen_poiseuille(At, Lt, mu_t)
+        dgt_dmu = np.zeros_like(gt, dtype=float)
+        positive_t = np.isfinite(gt) & (gt > 0.0)
+        dgt_dmu[positive_t] = -gt[positive_t] / mu_t[positive_t]
+        dgt_dpi = dgt_dmu * (0.5 * dmu_t)
+        dgt_dpj = dgt_dmu * (0.5 * dmu_t)
+
+        L1 = np.asarray(net.throat["pore1_length"], dtype=float)
+        L2 = np.asarray(net.throat["pore2_length"], dtype=float)
+        g1 = _segment_conductance_hagen_poiseuille(Ap[i_idx], L1, mu_p[i_idx])
+        g2 = _segment_conductance_hagen_poiseuille(Ap[j_idx], L2, mu_p[j_idx])
+        dg1_dmu = np.zeros_like(g1, dtype=float)
+        dg2_dmu = np.zeros_like(g2, dtype=float)
+        positive_1 = np.isfinite(g1) & (g1 > 0.0)
+        positive_2 = np.isfinite(g2) & (g2 > 0.0)
+        dg1_dmu[positive_1] = -g1[positive_1] / mu_p[i_idx][positive_1]
+        dg2_dmu[positive_2] = -g2[positive_2] / mu_p[j_idx][positive_2]
+        dg1_dpi = dg1_dmu * dmu_p[i_idx]
+        dg2_dpj = dg2_dmu * dmu_p[j_idx]
+
+        g = _harmonic_combine_segments(g1, gt, g2)
+        dg_dpi = _harmonic_sensitivity(g, (g1, gt, g2), (dg1_dpi, dgt_dpi, np.zeros_like(g2)))
+        dg_dpj = _harmonic_sensitivity(g, (g1, gt, g2), (np.zeros_like(g1), dgt_dpj, dg2_dpj))
+        return g, dg_dpi, dg_dpj
 
     if model == "valvatne_blunt_throat":
         selected_viscosity = throat_viscosity if throat_viscosity is not None else viscosity

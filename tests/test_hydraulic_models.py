@@ -13,13 +13,16 @@ from voids.geom.hydraulic import (
     _require,
     _resolve_pore_throat_viscosities,
     _segment_conductance_from_agl,
+    _segment_conductance_hagen_poiseuille,
     _segment_conductance_valvatne_blunt,
     _shape_factor_from_area_perimeter,
     _shape_factor_from_area_inscribed_radius,
     _throat_only_shape_factor_conductance,
     _sanitize_shape_factor,
+    auto_conductance,
     available_conductance_models,
     generic_poiseuille_conductance,
+    hagen_poiseuille_conductance,
     throat_conductance,
     throat_conductance_with_sensitivities,
     valvatne_blunt_conductance,
@@ -32,7 +35,9 @@ def test_available_models_contains_expected_names() -> None:
     """Test the public list of available conductance model names."""
 
     models = available_conductance_models()
+    assert "auto" in models
     assert "generic_poiseuille" in models
+    assert "hagen_poiseuille" in models
     assert "valvatne_blunt_throat" in models
     assert "valvatne_blunt" in models
     assert "valvatne_blunt_baseline" in models
@@ -55,6 +60,82 @@ def test_valvatne_segment_coefficients_follow_reference_shape_classes() -> None:
         ]
     )
     assert np.allclose(g, expected)
+
+
+def test_hagen_poiseuille_segment_matches_area_length_formula() -> None:
+    """The Hagen-Poiseuille segment law is g = A^2 / (8*pi*mu*L)."""
+
+    area = np.array([2.0, 3.0])
+    length = np.array([4.0, 0.0])
+    viscosity = np.array([5.0, 7.0])
+
+    g = _segment_conductance_hagen_poiseuille(area, length, viscosity)
+
+    assert g[0] == pytest.approx(area[0] ** 2 / (8.0 * np.pi * viscosity[0] * length[0]))
+    assert np.isinf(g[1])
+
+
+def test_hagen_poiseuille_uses_pore_throat_pore_series(line_network: Network) -> None:
+    """The conduit model should combine pore, throat, pore resistors."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["pore1_length"] = np.array([0.25, 0.25])
+    net.throat["core_length"] = np.array([0.50, 0.50])
+    net.throat["pore2_length"] = np.array([0.25, 0.25])
+    net.throat["area"] = np.sqrt(8.0 * np.pi * net.throat["core_length"])
+    net.pore["area"] = np.sqrt(8.0 * np.pi * 0.25) * np.ones(net.Np)
+
+    g = hagen_poiseuille_conductance(net, viscosity=1.0)
+
+    assert np.allclose(g, [1 / 3, 1 / 3])
+
+
+def test_hagen_poiseuille_accepts_distinct_pore_and_throat_viscosities(
+    line_network: Network,
+) -> None:
+    """Conduit Hagen-Poiseuille can use different pore and throat viscosities."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["pore1_length"] = np.array([0.25, 0.25])
+    net.throat["core_length"] = np.array([0.50, 0.50])
+    net.throat["pore2_length"] = np.array([0.25, 0.25])
+    net.throat["area"] = np.sqrt(8.0 * np.pi * net.throat["core_length"])
+    net.pore["area"] = np.sqrt(8.0 * np.pi * 0.25) * np.ones(net.Np)
+
+    g = hagen_poiseuille_conductance(
+        net,
+        viscosity=None,
+        pore_viscosity=np.array([1.0, 2.0, 4.0]),
+        throat_viscosity=np.array([3.0, 5.0]),
+    )
+
+    expected = np.array(
+        [
+            1.0 / (1.0 / 1.0 + 1.0 / (1.0 / 3.0) + 1.0 / (1.0 / 2.0)),
+            1.0 / (1.0 / (1.0 / 2.0) + 1.0 / (1.0 / 5.0) + 1.0 / (1.0 / 4.0)),
+        ]
+    )
+    assert np.allclose(g, expected)
+
+
+def test_hagen_poiseuille_falls_back_to_generic_without_conduit_lengths(
+    line_network: Network,
+) -> None:
+    """Without conduit decomposition, Hagen-Poiseuille is one throat segment."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["length"] = np.ones(net.Nt)
+    net.throat["area"] = np.full(net.Nt, np.pi)
+    for key in ("pore1_length", "core_length", "pore2_length"):
+        net.throat.pop(key, None)
+
+    assert np.allclose(
+        hagen_poiseuille_conductance(net, viscosity=1.0),
+        generic_poiseuille_conductance(net, viscosity=1.0),
+    )
 
 
 def test_valvatne_baseline_uses_conduit_lengths_and_pore_geometry(line_network: Network) -> None:
@@ -347,6 +428,26 @@ def test_segment_conductance_from_agl_input_validation(
         _segment_conductance_from_agl(area, shape_factor, length, viscosity)
 
 
+@pytest.mark.parametrize(
+    ("area", "length", "viscosity", "message"),
+    [
+        (np.array([1.0]), np.array([1.0]), 0.0, "viscosity must be positive"),
+        (np.array([-1.0]), np.array([1.0]), 1.0, "area contains negative values"),
+        (np.array([1.0]), np.array([-1.0]), 1.0, "length contains negative values"),
+    ],
+)
+def test_segment_conductance_hagen_poiseuille_input_validation(
+    area: np.ndarray,
+    length: np.ndarray,
+    viscosity: float,
+    message: str,
+) -> None:
+    """Input checks for Hagen-Poiseuille segment conductance are enforced."""
+
+    with pytest.raises(ValueError, match=message):
+        _segment_conductance_hagen_poiseuille(area, length, viscosity)
+
+
 def test_conductance_coefficient_rejects_negative_shape_factor() -> None:
     """Coefficient classifier validates shape-factor sign."""
 
@@ -438,6 +539,16 @@ def test_generic_poiseuille_validation_and_missing_geometry(line_network: Networ
         generic_poiseuille_conductance(missing, viscosity=1.0)
 
 
+def test_hagen_poiseuille_validation_and_precomputed_path(line_network: Network) -> None:
+    """Hagen-Poiseuille validates viscosity and honors precomputed conductance."""
+
+    with pytest.raises(ValueError, match="viscosity must be positive"):
+        hagen_poiseuille_conductance(line_network, viscosity=0.0)
+
+    precomputed = hagen_poiseuille_conductance(line_network, viscosity=1.0)
+    assert np.allclose(precomputed, line_network.throat["hydraulic_conductance"])
+
+
 def test_valvatne_baseline_validation_and_precomputed_path(line_network: Network) -> None:
     """Baseline wrapper validates viscosity and honors precomputed throat conductance."""
 
@@ -449,10 +560,260 @@ def test_valvatne_baseline_validation_and_precomputed_path(line_network: Network
 
 
 def test_throat_conductance_default_model_dispatch(line_network: Network) -> None:
-    """Default dispatcher path maps to generic Poiseuille model."""
+    """Default dispatcher path maps to the data-adaptive auto model."""
 
     g = throat_conductance(line_network, viscosity=1.0)
-    assert np.allclose(g, generic_poiseuille_conductance(line_network, viscosity=1.0))
+    assert np.allclose(g, auto_conductance(line_network, viscosity=1.0))
+
+
+def test_auto_conductance_trusts_precomputed_values(line_network: Network) -> None:
+    """Auto conductance preserves explicit throat hydraulic conductance."""
+
+    g = auto_conductance(line_network, viscosity=1.0)
+    assert np.allclose(g, line_network.throat["hydraulic_conductance"])
+
+
+def test_auto_conductance_prefers_openpnm_hydraulic_size_factors(
+    line_network: Network,
+) -> None:
+    """OpenPNM hydraulic size factors take precedence over geometric fallbacks."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.extra["throat.hydraulic_size_factors"] = np.array([[3.0, 2.0, 6.0], [4.0, 8.0, 12.0]])
+    net.throat["pore1_length"] = np.array([0.25, 0.25])
+    net.throat["core_length"] = np.array([0.50, 0.50])
+    net.throat["pore2_length"] = np.array([0.25, 0.25])
+    net.throat["area"] = np.ones(net.Nt)
+    net.pore["area"] = np.ones(net.Np)
+    net.throat["shape_factor"] = np.full(net.Nt, DEFAULT_G_REF)
+    net.pore["shape_factor"] = np.full(net.Np, DEFAULT_G_REF)
+
+    pore_mu = np.array([1.0, 2.0, 4.0])
+    throat_mu = np.array([5.0, 10.0])
+    g = auto_conductance(
+        net,
+        viscosity=None,
+        pore_viscosity=pore_mu,
+        throat_viscosity=throat_mu,
+    )
+
+    sf = net.extra["throat.hydraulic_size_factors"]
+    g1 = sf[:, 0] / pore_mu[net.throat_conns[:, 0]]
+    gt = sf[:, 1] / throat_mu
+    g2 = sf[:, 2] / pore_mu[net.throat_conns[:, 1]]
+    expected = 1.0 / (1.0 / g1 + 1.0 / gt + 1.0 / g2)
+    assert np.allclose(g, expected)
+
+
+def test_auto_conductance_uses_throat_only_hydraulic_size_factors(
+    line_network: Network,
+) -> None:
+    """Throat-only hydraulic size factors require only throat viscosity."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["hydraulic_size_factors"] = np.array([2.0, 8.0])
+    throat_mu = np.array([2.0, 4.0])
+
+    g, dg_dpi, dg_dpj = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="auto",
+        throat_viscosity=throat_mu,
+        throat_dviscosity_dpressure=np.array([6.0, 10.0]),
+    )
+
+    expected_g = np.array([1.0, 2.0])
+    expected_dg = -(expected_g / throat_mu) * (0.5 * np.array([6.0, 10.0]))
+    assert np.allclose(
+        auto_conductance(net, viscosity=None, throat_viscosity=throat_mu), expected_g
+    )
+    assert np.allclose(g, expected_g)
+    assert np.allclose(dg_dpi, expected_dg)
+    assert np.allclose(dg_dpj, expected_dg)
+
+    with pytest.raises(ValueError, match="Need either viscosity or throat_viscosity"):
+        auto_conductance(net, viscosity=None, throat_viscosity=None)
+    with pytest.raises(ValueError, match="Need either viscosity or throat_viscosity"):
+        throat_conductance_with_sensitivities(
+            net,
+            viscosity=None,
+            model="auto",
+            throat_viscosity=None,
+        )
+
+
+def test_auto_conductance_accepts_size_factor_mappings(line_network: Network) -> None:
+    """Hydraulic size factors may be supplied as OpenPNM-style mappings."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.extra["throat.hydraulic_size_factors"] = {
+        "pore1": np.array([3.0, 4.0]),
+        "throat": np.array([2.0, 8.0]),
+        "pore2": np.array([6.0, 12.0]),
+    }
+    g_named = auto_conductance(
+        net,
+        viscosity=None,
+        pore_viscosity=np.array([1.0, 2.0, 4.0]),
+        throat_viscosity=np.array([5.0, 10.0]),
+    )
+
+    net.extra["throat.hydraulic_size_factors"] = {
+        "left": np.array([3.0, 4.0]),
+        "middle": np.array([2.0, 8.0]),
+        "right": np.array([6.0, 12.0]),
+    }
+    g_ordered = auto_conductance(
+        net,
+        viscosity=None,
+        pore_viscosity=np.array([1.0, 2.0, 4.0]),
+        throat_viscosity=np.array([5.0, 10.0]),
+    )
+    assert np.allclose(g_ordered, g_named)
+
+    net.extra["throat.hydraulic_size_factors"] = {"pore1": np.ones(net.Nt)}
+    with pytest.raises(ValueError, match="mapping must contain pore1"):
+        auto_conductance(net, viscosity=1.0)
+
+
+def test_auto_conductance_uses_hagen_for_conduit_without_explicit_shape(
+    line_network: Network,
+) -> None:
+    """Conduit lengths plus areas select Hagen-Poiseuille when shape data are absent."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["pore1_length"] = np.array([0.25, 0.25])
+    net.throat["core_length"] = np.array([0.50, 0.50])
+    net.throat["pore2_length"] = np.array([0.25, 0.25])
+    net.throat["area"] = np.sqrt(8.0 * np.pi * net.throat["core_length"])
+    net.pore["area"] = np.sqrt(8.0 * np.pi * 0.25) * np.ones(net.Np)
+    net.throat.pop("shape_factor", None)
+    net.throat.pop("perimeter", None)
+    net.pore.pop("shape_factor", None)
+    net.pore.pop("perimeter", None)
+
+    assert np.allclose(
+        auto_conductance(net, viscosity=1.0),
+        hagen_poiseuille_conductance(net, viscosity=1.0),
+    )
+
+
+def test_auto_conductance_uses_valvatne_for_explicit_shape_conduit(
+    line_network: Network,
+) -> None:
+    """Explicit pore and throat shape data select the Valvatne-Blunt conduit model."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["pore1_length"] = np.array([0.25, 0.25])
+    net.throat["core_length"] = np.array([0.50, 0.50])
+    net.throat["pore2_length"] = np.array([0.25, 0.25])
+    net.throat["shape_factor"] = np.full(net.Nt, DEFAULT_G_REF)
+    net.pore["shape_factor"] = np.full(net.Np, DEFAULT_G_REF)
+    net.throat["area"] = np.sqrt(2.0 * net.throat["core_length"] / DEFAULT_G_REF)
+    net.pore["area"] = np.sqrt(2.0 * 0.25 / DEFAULT_G_REF) * np.ones(net.Np)
+
+    assert np.allclose(
+        auto_conductance(net, viscosity=1.0),
+        valvatne_blunt_conductance(net, viscosity=1.0),
+    )
+
+
+def test_auto_conductance_uses_throat_shape_when_conduit_is_unavailable(
+    line_network: Network,
+) -> None:
+    """Explicit throat-only shape data select the throat Valvatne-Blunt model."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["shape_factor"] = np.full(net.Nt, DEFAULT_G_REF)
+    net.throat["area"] = np.full(net.Nt, 2.0)
+    net.throat["length"] = np.ones(net.Nt)
+    for key in ("pore1_length", "core_length", "pore2_length"):
+        net.throat.pop(key, None)
+
+    assert np.allclose(
+        auto_conductance(net, viscosity=1.0),
+        valvatne_blunt_throat_conductance(net, viscosity=1.0),
+    )
+
+
+def test_auto_conductance_falls_back_to_generic_when_only_circular_throat_exists(
+    line_network: Network,
+) -> None:
+    """Generic Poiseuille remains the auto fallback for minimal throat geometry."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["diameter_inscribed"] = np.ones(net.Nt)
+    net.throat["length"] = np.ones(net.Nt)
+    net.throat.pop("shape_factor", None)
+    net.throat.pop("perimeter", None)
+    for key in ("pore1_length", "core_length", "pore2_length"):
+        net.throat.pop(key, None)
+
+    assert np.allclose(
+        auto_conductance(net, viscosity=1.0),
+        generic_poiseuille_conductance(net, viscosity=1.0),
+    )
+
+
+def test_auto_conductance_rejects_malformed_size_factors(line_network: Network) -> None:
+    """Malformed hydraulic size-factor data should not silently fall through."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.extra["throat.hydraulic_size_factors"] = np.ones((1, 3))
+
+    with pytest.raises(ValueError, match="shape \\(Nt,\\) or \\(Nt, 3\\)"):
+        auto_conductance(net, viscosity=1.0)
+
+    net.extra["throat.hydraulic_size_factors"] = np.array([1.0, 0.0])
+    with pytest.raises(ValueError, match="positive finite values"):
+        auto_conductance(net, viscosity=1.0)
+
+
+def test_auto_selector_falls_through_failed_shape_and_conduit_candidates(
+    line_network: Network,
+) -> None:
+    """Auto falls back when explicit-shape candidates lack the required area data."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["pore1_length"] = np.array([0.25, 0.25])
+    net.throat["core_length"] = np.array([0.50, 0.50])
+    net.throat["pore2_length"] = np.array([0.25, 0.25])
+    net.throat["shape_factor"] = np.full(net.Nt, DEFAULT_G_REF)
+    net.pore["shape_factor"] = np.full(net.Np, DEFAULT_G_REF)
+    net.throat["area"] = np.full(net.Nt, np.pi)
+    net.throat["length"] = np.ones(net.Nt)
+    net.pore.pop("area", None)
+    net.pore.pop("diameter_inscribed", None)
+    net.pore.pop("radius_inscribed", None)
+
+    assert np.allclose(
+        auto_conductance(net, viscosity=1.0),
+        generic_poiseuille_conductance(net, viscosity=1.0),
+    )
+
+
+def test_auto_selector_reports_missing_length_after_failed_throat_shape(
+    line_network: Network,
+) -> None:
+    """A failed throat-shape candidate falls through to generic geometry validation."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["shape_factor"] = np.full(net.Nt, DEFAULT_G_REF)
+    net.throat["area"] = np.full(net.Nt, np.pi)
+    net.throat.pop("length", None)
+
+    with pytest.raises(KeyError, match="Missing required throat fields"):
+        auto_conductance(net, viscosity=1.0)
 
 
 def test_throat_conductance_dispatches_all_models_and_validates_name(
@@ -470,6 +831,14 @@ def test_throat_conductance_dispatches_all_models_and_validates_name(
         generic_poiseuille_conductance(net, viscosity=1.0),
     )
     assert np.allclose(
+        throat_conductance(net, viscosity=1.0, model="auto"),
+        auto_conductance(net, viscosity=1.0),
+    )
+    assert np.allclose(
+        throat_conductance(net, viscosity=1.0, model="hagen_poiseuille"),
+        hagen_poiseuille_conductance(net, viscosity=1.0),
+    )
+    assert np.allclose(
         throat_conductance(net, viscosity=1.0, model="valvatne_blunt_throat"),
         valvatne_blunt_throat_conductance(net, viscosity=1.0),
     )
@@ -483,6 +852,8 @@ def test_throat_conductance_dispatches_all_models_and_validates_name(
     )
     with pytest.raises(ValueError, match="Unknown conductance model"):
         throat_conductance(net, viscosity=1.0, model="unknown")
+    with pytest.raises(ValueError, match="Unknown conductance model"):
+        throat_conductance_with_sensitivities(net, viscosity=1.0, model="unknown")
 
 
 def test_generic_poiseuille_sensitivity_matches_analytic_expression(line_network: Network) -> None:
@@ -508,6 +879,160 @@ def test_generic_poiseuille_sensitivity_matches_analytic_expression(line_network
     assert np.allclose(g, expected_g)
     assert np.allclose(dg_dpi, expected_dg)
     assert np.allclose(dg_dpj, expected_dg)
+
+
+def test_auto_size_factor_sensitivity_matches_finite_difference(
+    line_network: Network,
+) -> None:
+    """Auto sensitivity follows OpenPNM hydraulic size-factor conduit data."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.extra["throat.hydraulic_size_factors"] = np.array([[3.0, 2.0, 6.0], [4.0, 8.0, 12.0]])
+    pore_mu = np.array([2.0, 3.0, 5.0])
+    throat_mu = np.array([7.0, 11.0])
+    pore_dmu = np.array([13.0, 17.0, 19.0])
+    throat_dmu = np.array([23.0, 29.0])
+
+    g, dg_dpi, _ = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="auto",
+        pore_viscosity=pore_mu,
+        throat_viscosity=throat_mu,
+        pore_dviscosity_dpressure=pore_dmu,
+        throat_dviscosity_dpressure=throat_dmu,
+    )
+
+    eps = 1.0e-7
+    g_plus = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="auto",
+        pore_viscosity=np.array([pore_mu[0] + pore_dmu[0] * eps, pore_mu[1], pore_mu[2]]),
+        throat_viscosity=np.array([throat_mu[0] + 0.5 * throat_dmu[0] * eps, throat_mu[1]]),
+    )[0]
+    g_minus = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="auto",
+        pore_viscosity=np.array([pore_mu[0] - pore_dmu[0] * eps, pore_mu[1], pore_mu[2]]),
+        throat_viscosity=np.array([throat_mu[0] - 0.5 * throat_dmu[0] * eps, throat_mu[1]]),
+    )[0]
+    fd = (g_plus - g_minus) / (2.0 * eps)
+    assert np.allclose(dg_dpi[0], fd[0], rtol=1.0e-6, atol=1.0e-9)
+    assert np.isfinite(g).all()
+
+
+def test_auto_sensitivity_dispatches_selected_geometric_model(
+    line_network: Network,
+) -> None:
+    """Auto sensitivity delegates to the selected non-size-factor model."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["area"] = np.full(net.Nt, np.pi)
+    net.throat["length"] = np.ones(net.Nt)
+    net.throat.pop("shape_factor", None)
+    net.throat.pop("perimeter", None)
+
+    g_auto, dg_auto_i, dg_auto_j = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="auto",
+        throat_viscosity=np.array([2.0, 4.0]),
+        throat_dviscosity_dpressure=np.array([6.0, 10.0]),
+    )
+    g_generic, dg_generic_i, dg_generic_j = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="generic_poiseuille",
+        throat_viscosity=np.array([2.0, 4.0]),
+        throat_dviscosity_dpressure=np.array([6.0, 10.0]),
+    )
+
+    assert np.allclose(g_auto, g_generic)
+    assert np.allclose(dg_auto_i, dg_generic_i)
+    assert np.allclose(dg_auto_j, dg_generic_j)
+
+
+def test_hagen_poiseuille_conduit_sensitivity_matches_finite_difference(
+    line_network: Network,
+) -> None:
+    """Hagen-Poiseuille conduit sensitivity agrees with a finite-difference perturbation."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["pore1_length"] = np.array([0.25, 0.25])
+    net.throat["core_length"] = np.array([0.50, 0.50])
+    net.throat["pore2_length"] = np.array([0.25, 0.25])
+    net.throat["area"] = np.sqrt(8.0 * np.pi * net.throat["core_length"])
+    net.pore["area"] = np.sqrt(8.0 * np.pi * 0.25) * np.ones(net.Np)
+
+    pore_mu = np.array([2.0, 3.0, 5.0])
+    throat_mu = np.array([7.0, 11.0])
+    pore_dmu = np.array([13.0, 17.0, 19.0])
+    throat_dmu = np.array([23.0, 29.0])
+    g, dg_dpi, _ = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="hagen_poiseuille",
+        pore_viscosity=pore_mu,
+        throat_viscosity=throat_mu,
+        pore_dviscosity_dpressure=pore_dmu,
+        throat_dviscosity_dpressure=throat_dmu,
+    )
+
+    eps = 1.0e-7
+    g_plus = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="hagen_poiseuille",
+        pore_viscosity=np.array([pore_mu[0] + pore_dmu[0] * eps, pore_mu[1], pore_mu[2]]),
+        throat_viscosity=np.array([throat_mu[0] + 0.5 * throat_dmu[0] * eps, throat_mu[1]]),
+    )[0]
+    g_minus = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="hagen_poiseuille",
+        pore_viscosity=np.array([pore_mu[0] - pore_dmu[0] * eps, pore_mu[1], pore_mu[2]]),
+        throat_viscosity=np.array([throat_mu[0] - 0.5 * throat_dmu[0] * eps, throat_mu[1]]),
+    )[0]
+    fd = (g_plus - g_minus) / (2.0 * eps)
+    assert np.allclose(dg_dpi[0], fd[0], rtol=1.0e-6, atol=1.0e-9)
+    assert np.isfinite(g).all()
+
+
+def test_hagen_poiseuille_sensitivity_falls_back_to_generic(
+    line_network: Network,
+) -> None:
+    """Missing conduit segmentation triggers the one-throat Poiseuille path."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["area"] = np.full(net.Nt, np.pi)
+    net.throat["length"] = np.ones(net.Nt)
+    for key in ("pore1_length", "core_length", "pore2_length"):
+        net.throat.pop(key, None)
+
+    g_generic, dg_generic_i, dg_generic_j = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="generic_poiseuille",
+        throat_viscosity=np.array([2.0, 4.0]),
+        throat_dviscosity_dpressure=np.array([6.0, 10.0]),
+    )
+    g_hagen, dg_hagen_i, dg_hagen_j = throat_conductance_with_sensitivities(
+        net,
+        viscosity=None,
+        model="hagen_poiseuille",
+        throat_viscosity=np.array([2.0, 4.0]),
+        throat_dviscosity_dpressure=np.array([6.0, 10.0]),
+    )
+
+    assert np.allclose(g_hagen, g_generic)
+    assert np.allclose(dg_hagen_i, dg_generic_i)
+    assert np.allclose(dg_hagen_j, dg_generic_j)
 
 
 def test_conductance_sensitivities_accept_negative_viscosity_derivatives(
@@ -590,6 +1115,8 @@ def test_conductance_models_require_explicit_viscosity_input(line_network: Netwo
     with pytest.raises(ValueError, match="Need either viscosity or throat_viscosity"):
         generic_poiseuille_conductance(net, viscosity=None, throat_viscosity=None)
     with pytest.raises(ValueError, match="Need either viscosity or throat_viscosity"):
+        hagen_poiseuille_conductance(net, viscosity=None, throat_viscosity=None)
+    with pytest.raises(ValueError, match="Need either viscosity or throat_viscosity"):
         _throat_only_shape_factor_conductance(net, viscosity=None, throat_viscosity=None)
     with pytest.raises(ValueError, match="Need either viscosity or throat_viscosity"):
         valvatne_blunt_throat_conductance(net, viscosity=None, throat_viscosity=None)
@@ -609,6 +1136,19 @@ def test_sensitivity_models_require_explicit_viscosity_input(line_network: Netwo
             viscosity=None,
             model="generic_poiseuille",
             throat_viscosity=None,
+        )
+
+    net.throat["pore1_length"] = np.ones(net.Nt)
+    net.throat["core_length"] = np.ones(net.Nt)
+    net.throat["pore2_length"] = np.ones(net.Nt)
+    net.pore["area"] = np.ones(net.Np)
+    with pytest.raises(ValueError, match="Need either viscosity or pore_viscosity"):
+        throat_conductance_with_sensitivities(
+            net,
+            viscosity=None,
+            model="hagen_poiseuille",
+            pore_viscosity=None,
+            throat_viscosity=np.ones(net.Nt),
         )
     with pytest.raises(ValueError, match="Need either viscosity or throat_viscosity"):
         throat_conductance_with_sensitivities(

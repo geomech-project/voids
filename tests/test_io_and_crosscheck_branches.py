@@ -93,8 +93,8 @@ def test_from_porespy_handles_strict_and_non_strict_paths() -> None:
         from_porespy(partial, strict=False)
 
 
-def test_from_porespy_derives_geometry_aliases_and_warns_for_unsupported_size_factors() -> None:
-    """Test alias handling, geometry derivation, and unsupported-factor warnings."""
+def test_from_porespy_derives_geometry_aliases_and_stores_size_factors() -> None:
+    """Test alias handling, geometry derivation, and size-factor preservation."""
 
     net_dict = {
         "throat.conns": np.array([[0, 1]], dtype=int),
