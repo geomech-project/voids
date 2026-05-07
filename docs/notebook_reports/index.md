@@ -19,6 +19,7 @@ stored outputs are already publication-style:
 - [15 — External Reference CNM Benchmark](15_mwe_external_pnflow_benchmark.md)
 - [16 — `Kabs` Benchmark: Constant vs Thermodynamic Viscosity](16_mwe_viscosity_model_kabs_benchmark.md)
 - [17 — Solver Options Benchmark](17_mwe_solver_options_benchmark.md)
+- [32 — PREGO Synthetic Blob Backend Comparison](32_mwe_prego_blobs_backend_comparison.md)
 
 The complete notebook inventory, including paired `.py` scripts, remains documented in
 [Examples](../examples.md).

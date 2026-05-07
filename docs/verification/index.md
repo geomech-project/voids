@@ -68,3 +68,6 @@ The reproducible software-verification notebook artifacts are:
 - `notebooks/30_mwe_drp443_dilatedifn_raw_porosity_perm.ipynb`
 - `notebooks/31_mwe_drp10_estaillades_raw_porosity_perm.ipynb`, including
   native maximal-ball and `snow2` extraction-backend comparisons
+- `notebooks/32_mwe_prego_blobs_backend_comparison.ipynb`, comparing PoreSpy
+  `snow2`, PREGO, and native maximal-ball extraction on synthetic PoreSpy
+  `blobs` images

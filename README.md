@@ -205,6 +205,14 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
   - DRP-317 Leopard notebook against the Table 1 experimental porosity and permeability values
 - `28_mwe_drp317_parker_raw_porosity_perm`
   - DRP-317 Parker notebook against the Table 1 experimental porosity and permeability values
+- `29_mwe_drp443_ifn_raw_porosity_perm`
+  - DRP-443 IFN fractured-media permeability benchmark against SPE 212849 Table 2
+- `30_mwe_drp443_dilatedifn_raw_porosity_perm`
+  - DRP-443 Dilated IFN fractured-media permeability benchmark against SPE 212849 Table 2
+- `31_mwe_drp10_estaillades_raw_porosity_perm`
+  - DRP-10 Estaillades v2 carbonate benchmark with native maximal-ball and `snow2` extraction-backend comparisons
+- `32_mwe_prego_blobs_backend_comparison`
+  - synthetic `256^3` PoreSpy `blobs` comparison of PoreSpy `snow2`, PREGO, and native maximal-ball extraction
 
 Example data under `examples/data/` includes a deterministic manufactured void image and
 generated artifacts from the extraction/mesh notebooks.

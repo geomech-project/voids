@@ -63,6 +63,7 @@ In practice:
 | `29_mwe_drp443_ifn_raw_porosity_perm` | Benchmark DRP-443 IFN fractured-media permeability against SPE 212849 Table 2 (LBM reference) |
 | `30_mwe_drp443_dilatedifn_raw_porosity_perm` | Benchmark DRP-443 Dilated IFN fractured-media permeability against SPE 212849 Table 2 (LBM reference) |
 | `31_mwe_drp10_estaillades_raw_porosity_perm` | Benchmark DRP-10 Estaillades v2 carbonate permeability and extraction-backend sensitivity against Muljadi et al. (2016) Table 2 (OpenFOAM reference) |
+| `32_mwe_prego_blobs_backend_comparison` | Compare PoreSpy `snow2`, PREGO, and native maximal-ball extraction on synthetic `256^3` PoreSpy `blobs` images |
 
 ---
 
@@ -357,6 +358,31 @@ The corresponding report is documented in
 
 ---
 
+### 32 - PREGO Synthetic Blob Backend Comparison
+
+**`32_mwe_prego_blobs_backend_comparison`**
+
+This notebook reproduces the PREGO paper's synthetic PoreSpy `blobs`
+comparison idea at notebook scale. It generates three spanning `256^3` binary
+blob images, extracts networks from the same images with PoreSpy `snow2`,
+`prego`, and `native_maximal_ball`, and compares:
+
+- pore and throat counts,
+- absolute and effective porosity,
+- coordination number,
+- pore and throat diameter distributions,
+- extraction wall time,
+- and single-phase `Kx` under the same `voids` pressure-boundary solve.
+
+The PREGO branch uses the fast default `peak_footprint="cube"` seed search. The
+slower `peak_footprint="sphere"` mode remains available when PoreSpy/SNOW-style
+spherical peak-search compatibility is more important than runtime.
+
+The corresponding rendered notebook report is documented in
+[Examples / Notebook Reports / PREGO Synthetic Blob Backend Comparison](notebook_reports/32_mwe_prego_blobs_backend_comparison.md).
+
+---
+
 ## DRP-317 Data Source
 
 The DRP-317 notebooks use the following sources and should cite them explicitly in
@@ -390,3 +416,4 @@ notebook outputs.
 - [15 — External Reference CNM Benchmark](notebook_reports/15_mwe_external_pnflow_benchmark.md)
 - [16 — `Kabs` Benchmark: Constant vs Thermodynamic Viscosity](notebook_reports/16_mwe_viscosity_model_kabs_benchmark.md)
 - [17 — Solver Options Benchmark](notebook_reports/17_mwe_solver_options_benchmark.md)
+- [32 — PREGO Synthetic Blob Backend Comparison](notebook_reports/32_mwe_prego_blobs_backend_comparison.md)

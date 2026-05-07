@@ -284,8 +284,8 @@ practical approximation mode, not an exact replica of any external extractor.
 ### PREGO
 
 `backend="prego"` implements a PREGO-style seeded region-growing segmentation
-based on Khan and Gostick's 2024 pore-region growing paper. It uses the
-SNOW peak-filtering stages to choose seed points, orders those seeds by
+based on Khan and Gostick's 2024 pore-region growing paper. It uses local
+distance-transform maxima to choose seed points, orders those seeds by
 descending distance-transform radius, grows non-overlapping seed spheres, and
 fills the remaining foreground voxels with a face-connected FIFO queue. The
 resulting region image is passed to PoreSpy's `regions_to_network`, then
@@ -303,9 +303,17 @@ result = construct_spanning_network(
     phases=phases,
     voxel_size=2.0e-6,
     flow_axis="x",
-    extraction_kwargs={"settings": {"r_max": 4, "sigma": 0.4}},
+    extraction_kwargs={"settings": {"r_max": 4, "sigma": 0.4, "peak_footprint": "cube"}},
 )
 ```
+
+The default `peak_footprint="cube"` uses a fast cubic local-maximum filter for
+seed detection. Set `peak_footprint="sphere"` when compatibility with PoreSpy's
+slower spherical SNOW-style peak search is more important than speed. The
+internal PREGO region-label and FIFO queue arrays use the smallest signed
+integer type that is safe for the image dimensions and number of seeds; for the
+`256^3` blob benchmark this is `int16`, but larger or more heavily seeded images
+automatically widen before integer overflow is possible.
 
 ### Native Maximal-Ball
 
@@ -563,8 +571,9 @@ the full network, while effective transport should use the spanning network.
 
 | Field | Default | Meaning |
 |---|---:|---|
-| `r_max` | `4` | SNOW maximum-filter radius for seed detection |
+| `r_max` | `4` | local-maximum filter radius for seed detection |
 | `sigma` | `0.4` | Gaussian smoothing applied before seed detection |
+| `peak_footprint` | `cube` | local-maximum filter shape for seed detection; use `sphere` for PoreSpy/SNOW-style compatibility |
 | `distance_map_backend` | `auto` | distance-transform implementation |
 | `edt_parallel_threads` | `None` | optional worker count for the `edt` backend |
 | `cleanup_unassigned` | `True` | leave unfilled foreground voxels as background labels |
@@ -705,6 +714,9 @@ result = construct_spanning_network(
 - Basic threshold segmentation is available, but advanced grayscale/ML/manual
   segmentation remains an upstream scientific preprocessing task.
 - The native maximal-ball backend is not yet exact external-reference parity.
+- PREGO's default cubic peak filter is intentionally faster than PoreSpy's
+  spherical `find_peaks` path but can produce a slightly different seed count
+  and therefore a different reduced network.
 - Pore and throat geometry are model reductions, not direct measurements of all
   voxel-scale surface detail.
 - Boundary labels are inferred from Cartesian assumptions unless supplied by the
@@ -717,6 +729,7 @@ For the current single-phase verification status, see:
 - [External Reference CNM Benchmark](verification/pnflow.md)
 - [OpenPNM Extracted-Network Cross-Check](verification/openpnm.md)
 - [XLB Direct-Image Permeability Benchmark](verification/xlb.md)
+- [PREGO Synthetic Blob Backend Comparison](notebook_reports/32_mwe_prego_blobs_backend_comparison.md)
 
 ---
 
@@ -731,6 +744,11 @@ The page above mixes two different sources of methodology:
 
 The most relevant references for the current `voids` image-to-network workflow are:
 
+- Khan, Z. A., and J. T. Gostick (2024). *Enhancing pore network extraction
+  performance via seed-based pore region growing segmentation*. *Advances in
+  Water Resources*, 183, 104591. <https://doi.org/10.1016/j.advwatres.2023.104591>.
+  This is the PREGO reference behind the native seed-based region-growing
+  backend.
 - Dong, H., and M. J. Blunt (2009). *Pore-network extraction from
   micro-computerized-tomography images*. *Physical Review E*, 80, 036307.
   This is the key maximal-ball extraction reference behind the native
