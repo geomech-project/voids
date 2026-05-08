@@ -560,10 +560,10 @@ def test_valvatne_baseline_validation_and_precomputed_path(line_network: Network
 
 
 def test_throat_conductance_default_model_dispatch(line_network: Network) -> None:
-    """Default dispatcher path maps to the data-adaptive auto model."""
+    """Default dispatcher path maps to the conservative generic model."""
 
     g = throat_conductance(line_network, viscosity=1.0)
-    assert np.allclose(g, auto_conductance(line_network, viscosity=1.0))
+    assert np.allclose(g, generic_poiseuille_conductance(line_network, viscosity=1.0))
 
 
 def test_auto_conductance_trusts_precomputed_values(line_network: Network) -> None:

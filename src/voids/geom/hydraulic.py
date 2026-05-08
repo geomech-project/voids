@@ -1176,7 +1176,7 @@ def available_conductance_models() -> tuple[str, ...]:
 def throat_conductance(
     net: Network,
     viscosity: float | np.ndarray | None,
-    model: str = "auto",
+    model: str = "generic_poiseuille",
     *,
     pore_viscosity: float | np.ndarray | None = None,
     throat_viscosity: float | np.ndarray | None = None,
@@ -1245,7 +1245,7 @@ def throat_conductance(
 def throat_conductance_with_sensitivities(
     net: Network,
     viscosity: float | np.ndarray | None,
-    model: str = "auto",
+    model: str = "generic_poiseuille",
     *,
     pore_viscosity: float | np.ndarray | None = None,
     throat_viscosity: float | np.ndarray | None = None,

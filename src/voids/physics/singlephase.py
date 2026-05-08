@@ -149,7 +149,7 @@ class SinglePhaseOptions:
         update.
     """
 
-    conductance_model: str = "auto"
+    conductance_model: str = "generic_poiseuille"
     solver: str = "direct"
     check_mass_balance: bool = True
     regularization: float | None = None
