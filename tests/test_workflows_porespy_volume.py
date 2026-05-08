@@ -804,6 +804,255 @@ def test_porespy_style_external_reservoir_boundary_mode(
     assert np.all(result.net_full.throat["pore2_length"] > 0.0)
 
 
+def test_external_reservoir_helper_size_fallbacks_and_validation() -> None:
+    """Boundary-helper geometry should use explicit fields before conservative fallbacks."""
+
+    with pytest.raises(ValueError, match="flow_boundary_mode must be one of"):
+        nex._resolve_flow_boundary_mode("reservoir")
+    with pytest.raises(ValueError, match="transport_geometry must be None"):
+        nex._resolve_transport_geometry("cylinders")
+
+    net = make_linear_chain_network(num_pores=3)
+
+    net.pore = {"diameter_inscribed": np.array([1.0, 0.0, 2.0])}
+    radius = nex._entity_radius_from_fields(net, "pore", fallback_radius=0.2)
+    assert np.allclose(radius, np.array([0.5, 0.2, 1.0]))
+
+    net.pore = {"area": np.array([4.0 * np.pi, 0.0, 0.25 * np.pi])}
+    radius = nex._entity_radius_from_fields(net, "pore", fallback_radius=0.2)
+    assert np.allclose(radius, np.array([2.0, 0.2, 0.5]))
+
+    net.pore = {}
+    radius = nex._entity_radius_from_fields(net, "pore", fallback_radius=0.2)
+    assert np.allclose(radius, np.array([0.2, 0.2, 0.2]))
+
+    net.pore = {"radius_inscribed": np.array([0.5, 0.0, 2.0])}
+    diameter = nex._entity_diameter_for_pyramids_and_cuboids(
+        net,
+        "pore",
+        fallback_diameter=0.3,
+    )
+    assert diameter[0] == pytest.approx(1.0)
+    assert diameter[1] > 0.0
+    assert diameter[2] == pytest.approx(4.0)
+
+    net.pore = {"area": np.array([4.0, 0.0, 9.0])}
+    diameter = nex._entity_diameter_for_pyramids_and_cuboids(
+        net,
+        "pore",
+        fallback_diameter=0.3,
+    )
+    assert diameter[0] == pytest.approx(2.0)
+    assert diameter[1] > 0.0
+    assert diameter[2] == pytest.approx(3.0)
+
+    net.pore = {}
+    diameter = nex._entity_diameter_for_pyramids_and_cuboids(
+        net,
+        "pore",
+        fallback_diameter=0.3,
+    )
+    assert np.allclose(diameter, np.full(net.Np, 0.3))
+
+
+def test_external_reservoir_field_extension_branches() -> None:
+    """Helper pore and throat extension should preserve field semantics."""
+
+    helper_coords = np.array([[10.0, 11.0, 12.0], [20.0, 21.0, 22.0]])
+    helper_radii = np.array([0.5, 0.75])
+    helper_area = np.pi * helper_radii**2
+    helper_source_indices = np.array([1, 0], dtype=np.int64)
+
+    local_peak = nex._extend_pore_field(
+        "local_peak",
+        np.array([[1.0, 2.0], [3.0, 4.0]]),
+        helper_coords=helper_coords,
+        helper_radii=helper_radii,
+        helper_area=helper_area,
+        helper_source_indices=helper_source_indices,
+    )
+    assert np.allclose(local_peak[2:], helper_coords[:, :2])
+
+    phase = nex._extend_pore_field(
+        "phase",
+        np.array([7, 9], dtype=np.int64),
+        helper_coords=helper_coords,
+        helper_radii=helper_radii,
+        helper_area=helper_area,
+        helper_source_indices=helper_source_indices,
+    )
+    assert np.array_equal(phase, np.array([7, 9, 9, 7]))
+
+    pore_flag = nex._extend_pore_field(
+        "boundary_flag",
+        np.array([True, False]),
+        helper_coords=helper_coords,
+        helper_radii=helper_radii,
+        helper_area=helper_area,
+        helper_source_indices=helper_source_indices,
+    )
+    assert np.array_equal(pore_flag, np.array([True, False, False, False]))
+
+    pore_unknown = nex._extend_pore_field(
+        "quality_score",
+        np.array([1.5, 2.5]),
+        helper_coords=helper_coords,
+        helper_radii=helper_radii,
+        helper_area=helper_area,
+        helper_source_indices=helper_source_indices,
+    )
+    assert np.allclose(pore_unknown, np.array([1.5, 2.5, 0.0, 0.0]))
+
+    boundary_length = np.array([1.0, 2.0])
+    boundary_area = np.array([3.0, 5.0])
+    boundary_radius = np.array([0.4, 0.6])
+    boundary_pore1_length = np.array([0.1, 0.2])
+    boundary_core_length = np.array([0.7, 1.6])
+    boundary_pore2_length = np.array([0.2, 0.2])
+    boundary_centroid = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+
+    kwargs = {
+        "boundary_length": boundary_length,
+        "boundary_area": boundary_area,
+        "boundary_radius": boundary_radius,
+        "boundary_pore1_length": boundary_pore1_length,
+        "boundary_core_length": boundary_core_length,
+        "boundary_pore2_length": boundary_pore2_length,
+        "boundary_centroid": boundary_centroid,
+    }
+
+    assert np.allclose(
+        nex._extend_throat_field("pore1_length", np.array([9.0]), **kwargs)[1:],
+        boundary_pore1_length,
+    )
+    assert np.allclose(
+        nex._extend_throat_field("core_length", np.array([9.0]), **kwargs)[1:],
+        boundary_core_length,
+    )
+    assert np.allclose(
+        nex._extend_throat_field("pore2_length", np.array([9.0]), **kwargs)[1:],
+        boundary_pore2_length,
+    )
+    assert np.allclose(
+        nex._extend_throat_field("cross_sectional_area", np.array([9.0]), **kwargs)[1:],
+        boundary_area,
+    )
+    assert np.allclose(
+        nex._extend_throat_field("shape_factor_radius", np.array([9.0]), **kwargs)[1:],
+        boundary_radius,
+    )
+    assert np.allclose(
+        nex._extend_throat_field("equivalent_diameter", np.array([9.0]), **kwargs)[1:],
+        2.0 * boundary_radius,
+    )
+    assert np.allclose(
+        nex._extend_throat_field("shape_factor", np.array([9.0]), **kwargs)[1:],
+        np.full(2, nex.DEFAULT_G_REF),
+    )
+    assert np.allclose(
+        nex._extend_throat_field("volume", np.array([9.0]), **kwargs)[1:],
+        boundary_area * boundary_core_length,
+    )
+
+    centroid = nex._extend_throat_field(
+        "centroid",
+        np.array([[8.0, 9.0]]),
+        **kwargs,
+    )
+    assert np.allclose(centroid[1:], boundary_centroid[:, :2])
+
+    face_count = nex._extend_throat_field("face_count", np.array([4], dtype=np.int64), **kwargs)
+    assert np.array_equal(face_count, np.array([4, 1, 1]))
+
+    active = nex._extend_throat_field("active", np.array([True]), **kwargs)
+    assert np.array_equal(active, np.array([True, False, False]))
+
+    throat_unknown = nex._extend_throat_field("roughness", np.array([1.25]), **kwargs)
+    assert np.allclose(throat_unknown, np.array([1.25, 0.0, 0.0]))
+
+    with pytest.raises(ValueError, match="precomputed throat.hydraulic_conductance"):
+        nex._extend_throat_field("hydraulic_conductance", np.array([1.0]), **kwargs)
+
+
+def test_external_reservoir_network_validation_branches() -> None:
+    """External reservoirs should reject inconsistent boundary geometry early."""
+
+    def without_precomputed_conductance():
+        net = make_linear_chain_network(num_pores=2)
+        net.throat.pop("hydraulic_conductance")
+        return net
+
+    kwargs = {
+        "axis": "x",
+        "axis_length": 1.0,
+        "voxel_size": 1.0,
+        "boundary_length_epsilon": 1.0e-9,
+        "boundary_radius_scale": 1.1,
+    }
+
+    with pytest.raises(ValueError, match="boundary_axis must be one of"):
+        nex._add_external_reservoirs_to_network(
+            without_precomputed_conductance(), **{**kwargs, "axis": "q"}
+        )
+    with pytest.raises(ValueError, match="boundary_length_epsilon must be positive"):
+        nex._add_external_reservoirs_to_network(
+            without_precomputed_conductance(),
+            **{**kwargs, "boundary_length_epsilon": 0.0},
+        )
+    with pytest.raises(ValueError, match="boundary_radius_scale must be positive"):
+        nex._add_external_reservoirs_to_network(
+            without_precomputed_conductance(),
+            **{**kwargs, "boundary_radius_scale": 0.0},
+        )
+    with pytest.raises(ValueError, match="precomputed throat.hydraulic_conductance"):
+        nex._add_external_reservoirs_to_network(make_linear_chain_network(num_pores=2), **kwargs)
+
+    missing_labels = without_precomputed_conductance()
+    missing_labels.pore_labels.pop("outlet_xmax")
+    with pytest.raises(KeyError, match="Missing pore boundary labels"):
+        nex._add_external_reservoirs_to_network(missing_labels, **kwargs)
+
+    no_boundary_pores = without_precomputed_conductance()
+    no_boundary_pores.pore_labels["inlet_xmin"][:] = False
+    no_boundary_pores.pore_labels["outlet_xmax"][:] = False
+    assert nex._add_external_reservoirs_to_network(no_boundary_pores, **kwargs) is no_boundary_pores
+
+    labeled = without_precomputed_conductance()
+    labeled.pore_labels["interior_marker"] = np.array([False, True])
+    augmented = nex._add_external_reservoirs_to_network(labeled, **kwargs)
+    assert np.array_equal(
+        augmented.pore_labels["interior_marker"],
+        np.array([False, True, False, False]),
+    )
+
+
+def test_transport_geometry_rejects_missing_or_nonfinite_conduit_geometry() -> None:
+    """Pyramids-and-cuboids size factors require complete finite conduit inputs."""
+
+    with pytest.raises(KeyError, match="requires conduit lengths"):
+        nex._assign_pyramids_and_cuboids_transport_geometry(
+            make_linear_chain_network(num_pores=2),
+            voxel_size=1.0,
+        )
+
+    bad = make_linear_chain_network(num_pores=2)
+    bad.pore["radius_inscribed"] = np.array([1.0, 1.0])
+    bad.throat["radius_inscribed"] = np.array([0.5])
+    bad.throat["pore1_length"] = np.array([np.nan])
+    bad.throat["core_length"] = np.array([1.0])
+    bad.throat["pore2_length"] = np.array([1.0])
+    with pytest.raises(ValueError, match="positive and finite"):
+        nex._assign_pyramids_and_cuboids_transport_geometry(bad, voxel_size=1.0)
+
+    with pytest.raises(ValueError, match="boundary_axis 'z' is not compatible"):
+        extract_spanning_pore_network(
+            np.ones((2, 2), dtype=int),
+            voxel_size=1.0,
+            backend="porespy",
+            extraction_kwargs={"boundary_axis": "z"},
+        )
+
+
 def test_pyramids_and_cuboids_transport_geometry_adds_hydraulic_size_factors(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
