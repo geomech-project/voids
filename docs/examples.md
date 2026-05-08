@@ -378,9 +378,9 @@ blob images, extracts networks from the same images with PoreSpy `snow2`,
 - extraction wall time,
 - and single-phase `Kx` under the same `voids` pressure-boundary solve.
 
-The PREGO branch uses the fast default `peak_footprint="cube"` seed search. The
-slower `peak_footprint="sphere"` mode remains available when PoreSpy/SNOW-style
-spherical peak-search compatibility is more important than runtime.
+The PREGO branch uses the paper-like spherical seed search and level-queue
+region-growth mode. The faster cubic seed search and stamped-sphere growth path
+remain available as explicit opt-in settings for runtime-focused comparisons.
 
 The corresponding rendered notebook report is documented in
 [Examples / Notebook Reports / PREGO Synthetic Blob Backend Comparison](notebook_reports/32_mwe_prego_blobs_backend_comparison.md).

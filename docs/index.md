@@ -125,7 +125,7 @@ important ones are:
 | Absolute and effective porosity | ✅ |
 | Connectivity metrics | ✅ |
 | Single-phase incompressible flow | ✅ |
-| Shape-aware Valvatne-Blunt conductance models | ✅ |
+| Data-adaptive, size-factor, and shape-aware conductance models | ✅ |
 | Pressure-dependent water viscosity via `thermo` / `CoolProp` | ✅ |
 | Damped Newton and Picard nonlinear solves | ✅ |
 | Krylov linear solvers with optional `pyamg` preconditioning | ✅ |

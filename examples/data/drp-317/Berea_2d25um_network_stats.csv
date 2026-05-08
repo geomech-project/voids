@@ -10,17 +10,17 @@ porespy,PoreSpy snow2,Median throat size (diameter_equivalent),16.05711704537494
 porespy,PoreSpy snow2,Connected components,1.0,count
 porespy,PoreSpy snow2,Giant component fraction,1.0,-
 porespy,PoreSpy snow2,Dead-end pore fraction,0.3123181377303589,-
-prego,PREGO,Np,1185.0,count
-prego,PREGO,Nt,2566.0,count
-prego,PREGO,Mean coordination,4.330801687763713,-
-prego,PREGO,Max coordination,17.0,-
-prego,PREGO,Mean pore size (diameter_equivalent),35.2167621570725,um
-prego,PREGO,Median pore size (diameter_equivalent),32.9871117771685,um
-prego,PREGO,Mean throat size (diameter_equivalent),18.602450227136874,um
-prego,PREGO,Median throat size (diameter_equivalent),16.64837329574682,um
+prego,PREGO,Np,1501.0,count
+prego,PREGO,Nt,3301.0,count
+prego,PREGO,Mean coordination,4.39840106595603,-
+prego,PREGO,Max coordination,18.0,-
+prego,PREGO,Mean pore size (diameter_equivalent),32.63083423270547,um
+prego,PREGO,Median pore size (diameter_equivalent),30.404449782456485,um
+prego,PREGO,Mean throat size (diameter_equivalent),17.832401952122922,um
+prego,PREGO,Median throat size (diameter_equivalent),16.05711704537494,um
 prego,PREGO,Connected components,1.0,count
 prego,PREGO,Giant component fraction,1.0,-
-prego,PREGO,Dead-end pore fraction,0.07932489451476793,-
+prego,PREGO,Dead-end pore fraction,0.07195203197868089,-
 native_maximal_ball,Native maximal-ball,Np,963.0,count
 native_maximal_ball,Native maximal-ball,Nt,1651.0,count
 native_maximal_ball,Native maximal-ball,Mean coordination,3.4288681204569054,-

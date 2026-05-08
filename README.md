@@ -44,7 +44,8 @@ The current `v0.1.x` implementation includes:
   - effective porosity
   - connectivity metrics
 - single-phase incompressible flow with directional permeability estimation
-- shape-aware `valvatne_blunt_throat` and `valvatne_blunt` conductance closures
+- data-adaptive `auto`, OpenPNM size-factor, circular `hagen_poiseuille`, and
+  shape-aware `valvatne_blunt_throat` / `valvatne_blunt` conductance closures
 - pressure-dependent water viscosity via `thermo` and `CoolProp`
 - Picard and damped-Newton nonlinear solves for variable-viscosity problems
 - Krylov linear solvers with optional `pyamg` preconditioning
@@ -176,7 +177,7 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
 - `13_mwe_synthetic_volume_xlb_benchmark`
   - synthetic segmented volumes, direct-image XLB solves, extracted-network `voids` solves, and `Kabs` comparison between voxel-scale LBM and PNM
 - `14_mwe_shape_factor_conductance_comparison`
-  - synthetic and extracted-network comparison of conductance closures (`generic_poiseuille`, `valvatne_blunt_throat`, and `valvatne_blunt`) and permeability sensitivity to shape factors
+  - synthetic and extracted-network comparison of circular and shape-aware conductance closures, and permeability sensitivity to shape factors
 - `15_mwe_external_pnflow_benchmark`
   - committed external `pnextract`/`pnflow` reference cases, including explicit same-network parity on the saved CNM and a separate `snow2` workflow comparison on the original images
 - `16_mwe_viscosity_model_kabs_benchmark`

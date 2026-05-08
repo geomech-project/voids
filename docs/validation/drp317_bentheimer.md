@@ -36,7 +36,7 @@ Notebook: `19_mwe_drp317_bentheimer_raw_porosity_perm`
 | Backend | Network phi [%] | Kx [mD] | Ky [mD] | Kz [mD] | RMS K [mD] | Rel. K error [%] | Np | Nt |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | PoreSpy snow2 | 27.57 | 426.82 | 536.39 | 543.85 | 505.19 | 30.88 | 2625 | 4639 |
-| PREGO | 26.53 | 775.18 | 945.29 | 915.94 | 881.93 | 128.48 | 1444 | 3643 |
+| PREGO | 26.53 | 819.67 | 971.07 | 963.41 | 920.69 | 138.52 | 1816 | 4623 |
 | Native maximal-ball | 26.53 | 218.22 | 315.43 | 330.66 | 292.38 | -24.25 | 1126 | 2130 |
 
 ![Bentheimer directional permeability](../assets/validation/drp317_bentheimer_directional.png)
@@ -46,7 +46,7 @@ Notebook: `19_mwe_drp317_bentheimer_raw_porosity_perm`
 | Backend | Mean coordination | Dead-end pore fraction |
 |---|---:|---:|
 | PoreSpy snow2 | 3.53 | 0.337 |
-| PREGO | 5.05 | 0.063 |
+| PREGO | 5.09 | 0.059 |
 | Native maximal-ball | 3.78 | 0.219 |
 
 ## Interpretation
@@ -54,7 +54,7 @@ Notebook: `19_mwe_drp317_bentheimer_raw_porosity_perm`
 For `Bentheimer`, the closest aggregate permeability in this rerun is
 from `Native maximal-ball` with a relative permeability error of
 `-24.25%`. The spread between the
-largest and smallest backend aggregate permeability is about `3.02`x,
+largest and smallest backend aggregate permeability is about `3.15`x,
 which makes extraction sensitivity a material part of this sample's validation
 result.
 

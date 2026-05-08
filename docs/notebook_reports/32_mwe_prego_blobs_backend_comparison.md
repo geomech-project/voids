@@ -1,5 +1,12 @@
 # MWE 32 - PREGO comparison on synthetic PoreSpy blobs
 
+!!! warning "Rendered output needs refresh"
+    The source notebook has been updated to use PREGO's paper-like spherical
+    seed search, level-queue growth path, and the shared `hagen_poiseuille`
+    conductance model for all backends. Re-run the notebook and refresh this
+    report before using the rendered figures or tables as current benchmark
+    evidence.
+
 This notebook reproduces the paper-style comparison idea on synthetic
 `256^3` PoreSpy `blobs` volumes. It sends the same binary images through three
 extraction backends:
@@ -14,9 +21,9 @@ Scientific scope and assumptions:
 
 - the images are synthetic binary blobs, not scanner-derived segmentations
 - the notebook compares extracted-network behavior, not direct image physics
-- the same `voids` single-phase conductance model and boundary conditions are
-  used after extraction, so permeability differences mostly reflect extracted
-  topology and geometry
+- the same `voids` `hagen_poiseuille` conductance model and boundary
+  conditions are used after extraction, so permeability differences mostly
+  reflect extracted topology and geometry
 - the PREGO implementation follows the paper's published algorithmic
   description, but it is not a bitwise reproduction of the authors' code
 - `256^3` cases are large enough to expose runtime differences and give more
@@ -98,7 +105,7 @@ axis_index = 0
 voxel_size = 2.0e-6
 fluid = FluidSinglePhase(viscosity=1.0e-3)
 bc = PressureBC("inlet_xmin", "outlet_xmax", pin=1.0, pout=0.0)
-options = SinglePhaseOptions(conductance_model="valvatne_blunt", solver="direct")
+options = SinglePhaseOptions(conductance_model="hagen_poiseuille", solver="direct")
 
 sample_shape = (256, 256, 256)
 case_specs = [
@@ -138,7 +145,8 @@ backend_specs = [
             "settings": {
                 "r_max": 4,
                 "sigma": 0.4,
-                "peak_footprint": "cube",
+                "peak_footprint": "sphere",
+                "growth_mode": "level_queue",
                 "distance_map_backend": "scipy",
             },
         },
@@ -183,9 +191,10 @@ case_specs
 The PREGO paper used PoreSpy `blobs` images for its segmentation performance
 scaling comparison. Here each case is generated directly from
 `porespy.generators.blobs`, then accepted only if it has a face-connected void
-path across the selected flow axis. PREGO uses a cubic local-maximum filter for
-seed detection by default; set `peak_footprint="sphere"` in the settings above
-to recover the slower PoreSpy/SNOW spherical peak-filter compatibility path.
+path across the selected flow axis. The PREGO branch uses the paper-like
+spherical seed search and level-queue region growth; the faster cubic seed
+search and stamped-sphere growth path remain available as explicit opt-in
+settings for runtime-focused comparisons.
 
 
 ```python
@@ -313,7 +322,11 @@ The metrics below follow the paper's comparison categories: pore count, throat
 count, pore/throat size, coordination number, porosity, permeability, and CPU
 time. The reported CPU time is notebook-level wall time for extraction or
 solve on these small cases; it should not be interpreted as the large-volume
-scaling result from the paper.
+scaling result from the paper. All extraction backends are solved with the
+same `hagen_poiseuille` conductance model, so this comparison isolates
+extraction behavior rather than mixing conductance closures. If an extracted
+network lacks pore-throat-pore conduit lengths, `hagen_poiseuille` falls back
+to the one-throat circular Poiseuille law.
 
 
 ```python
@@ -359,6 +372,7 @@ for case_name, image in images.items():
                 "backend": backend_spec["backend"],
                 "backend_label": backend_spec["label"],
                 "backend_version": construction.backend_version,
+                "conductance_model": options.conductance_model,
                 "shape": str(image.shape),
                 "phi_image": float(image.mean()),
                 "phi_abs": float(absolute_porosity(net)),

@@ -286,10 +286,10 @@ practical approximation mode, not an exact replica of any external extractor.
 `backend="prego"` implements a PREGO-style seeded region-growing segmentation
 based on Khan and Gostick's 2024 pore-region growing paper. It uses local
 distance-transform maxima to choose seed points, orders those seeds by
-descending distance-transform radius, grows non-overlapping seed spheres, and
-fills the remaining foreground voxels with a face-connected FIFO queue. The
-resulting region image is passed to PoreSpy's `regions_to_network`, then
-imported into the canonical `voids.Network` schema.
+descending distance-transform radius, grows pore regions with a configurable
+FIFO strategy, and fills the remaining foreground voxels with a face-connected
+queue. The resulting region image is passed to PoreSpy's `regions_to_network`,
+then imported into the canonical `voids.Network` schema.
 
 The paper leaves some floating-point tie cases and exact queue-level behavior
 underspecified, so this backend is a transparent native implementation rather
@@ -303,17 +303,42 @@ result = construct_spanning_network(
     phases=phases,
     voxel_size=2.0e-6,
     flow_axis="x",
-    extraction_kwargs={"settings": {"r_max": 4, "sigma": 0.4, "peak_footprint": "cube"}},
+    extraction_kwargs={
+        "settings": {
+            "r_max": 4,
+            "sigma": 0.4,
+            "peak_footprint": "sphere",
+            "growth_mode": "level_queue",
+        }
+    },
 )
 ```
 
-The default `peak_footprint="cube"` uses a fast cubic local-maximum filter for
-seed detection. Set `peak_footprint="sphere"` when compatibility with PoreSpy's
-slower spherical SNOW-style peak search is more important than speed. The
-internal PREGO region-label and FIFO queue arrays use the smallest signed
+The default `peak_footprint="sphere"` uses PoreSpy's SNOW-style spherical peak
+search for closer compatibility with the paper. Set `peak_footprint="cube"` for
+a faster cubic local-maximum filter when runtime is more important than strict
+seed-search fidelity.
+
+The default `growth_mode="level_queue"` uses delayed seed activation and
+level-by-level FIFO growth closer to the PREGO paper's flow chart and
+pseudocode. Set `growth_mode="fast"` to use the faster approximation that
+stamps non-overlapping seed spheres in descending radius order before the final
+FIFO fill. The paper-like mode is more faithful, but it is not claimed to be a
+bitwise reproduction of the authors' implementation.
+
+The internal PREGO region-label and FIFO queue arrays use the smallest signed
 integer type that is safe for the image dimensions and number of seeds; for the
 `256^3` blob benchmark this is `int16`, but larger or more heavily seeded images
 automatically widen before integer overflow is possible.
+
+PoreSpy's `regions_to_network` output commonly contains pore/throat diameters,
+`throat.direct_length`, and `throat.total_length`, but not explicit
+`throat.conduit_lengths.*` arrays. During import, `voids` preserves explicit
+conduit lengths when present and otherwise derives a sphere-cylinder
+pore1-core-pore2 split from the available diameters and direct length. The
+derivation metadata is stored in `net.extra["conduit_lengths"]`, so PREGO
+networks can use the `hagen_poiseuille` conduit model instead of silently
+collapsing to a one-throat model whenever that geometry is available.
 
 ### Native Maximal-Ball
 
@@ -573,7 +598,8 @@ the full network, while effective transport should use the spanning network.
 |---|---:|---|
 | `r_max` | `4` | local-maximum filter radius for seed detection |
 | `sigma` | `0.4` | Gaussian smoothing applied before seed detection |
-| `peak_footprint` | `cube` | local-maximum filter shape for seed detection; use `sphere` for PoreSpy/SNOW-style compatibility |
+| `peak_footprint` | `sphere` | local-maximum filter shape for seed detection; use `cube` for a faster local approximation |
+| `growth_mode` | `level_queue` | delayed seed activation closer to the PREGO paper; use `fast` for stamped spheres plus FIFO fill |
 | `distance_map_backend` | `auto` | distance-transform implementation |
 | `edt_parallel_threads` | `None` | optional worker count for the `edt` backend |
 | `cleanup_unassigned` | `True` | leave unfilled foreground voxels as background labels |
@@ -714,9 +740,10 @@ result = construct_spanning_network(
 - Basic threshold segmentation is available, but advanced grayscale/ML/manual
   segmentation remains an upstream scientific preprocessing task.
 - The native maximal-ball backend is not yet exact external-reference parity.
-- PREGO's default cubic peak filter is intentionally faster than PoreSpy's
-  spherical `find_peaks` path but can produce a slightly different seed count
-  and therefore a different reduced network.
+- PREGO's default seed search and growth path now favor paper-like behavior
+  over the older fast approximation, but the backend still relies on PoreSpy's
+  `regions_to_network` geometry reduction and `voids` conduit-length derivation
+  downstream.
 - Pore and throat geometry are model reductions, not direct measurements of all
   voxel-scale surface detail.
 - Boundary labels are inferred from Cartesian assumptions unless supplied by the
