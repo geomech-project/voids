@@ -1,9 +1,9 @@
 # %% [markdown]
 # # MWE 32 - PREGO comparison on synthetic PoreSpy blobs
 #
-# This notebook reproduces the paper-style comparison idea on synthetic
-# `256^3` PoreSpy `blobs` volumes. It sends the same binary images through three
-# extraction backends:
+# This notebook compares extraction backends on synthetic `256^3` PoreSpy
+# `blobs` volumes. It sends the same binary images through three extraction
+# backends:
 #
 # - PoreSpy `snow2`, the established watershed/SNOW-style reference path in
 #   `voids`
@@ -159,13 +159,13 @@ case_specs
 # %% [markdown]
 # ## Generate spanning PoreSpy blob images
 #
-# The PREGO paper used PoreSpy `blobs` images for its segmentation performance
-# scaling comparison. Here each case is generated directly from
+# PoreSpy `blobs` images provide controlled, reproducible synthetic pore-space
+# morphologies. Here each case is generated directly from
 # `porespy.generators.blobs`, then accepted only if it has a face-connected void
-# path across the selected flow axis. The PREGO branch uses the paper-like
-# spherical seed search and level-queue region growth; the faster cubic seed
-# search and stamped-sphere growth path remain available as explicit opt-in
-# settings for runtime-focused comparisons.
+# path across the selected flow axis. The PREGO branch uses spherical seed search
+# and level-queue region growth; the faster cubic seed search and stamped-sphere
+# growth path remain available as explicit opt-in settings for runtime-focused
+# comparisons.
 
 # %%
 images: dict[str, np.ndarray] = {}
