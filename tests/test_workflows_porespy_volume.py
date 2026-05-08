@@ -21,6 +21,7 @@ from voids.image import (
     largest_true_rectangle,
     preprocess_grayscale_cylindrical_volume,
 )
+from voids.io.hdf5 import load_hdf5, save_hdf5
 
 
 def test_area_equivalent_diameter_and_characteristic_size_priority() -> None:
@@ -758,6 +759,85 @@ def _make_minimal_network_dict() -> dict[str, object]:
         "throat.conduit_lengths.throat": np.array([0.6], dtype=float),
         "throat.conduit_lengths.pore2": np.array([0.2], dtype=float),
     }
+
+
+def test_porespy_style_external_reservoir_boundary_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PoreSpy-style image backends can use helper reservoir pores for flow BCs."""
+
+    monkeypatch.setattr(nex, "_extract_network_dict", lambda *a, **kw: _make_minimal_network_dict())
+
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="porespy",
+        flow_axis="x",
+        extraction_kwargs={"flow_boundary_mode": "external_reservoir"},
+        geometry_repairs=None,
+    )
+
+    assert result.net_full.Np == 4
+    assert result.net_full.Nt == 3
+    assert np.array_equal(
+        result.net_full.throat_conns,
+        np.array([[0, 1], [2, 0], [1, 3]], dtype=np.int64),
+    )
+    assert np.array_equal(
+        result.net_full.pore_labels["inlet_xmin"],
+        np.array([False, False, True, False]),
+    )
+    assert np.array_equal(
+        result.net_full.pore_labels["outlet_xmax"],
+        np.array([False, False, False, True]),
+    )
+    assert np.array_equal(
+        result.net_full.pore_labels["boundary_connected_inlet_xmin"],
+        np.array([True, False, False, False]),
+    )
+    assert np.array_equal(
+        result.net_full.pore_labels["boundary_connected_outlet_xmax"],
+        np.array([False, True, False, False]),
+    )
+    assert np.all(result.net_full.throat["pore1_length"] > 0.0)
+    assert np.all(result.net_full.throat["core_length"] > 0.0)
+    assert np.all(result.net_full.throat["pore2_length"] > 0.0)
+
+
+def test_prego_paper_transport_geometry_adds_hydraulic_size_factors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """The PREGO-paper option stores pyramids-and-cuboids conduit size factors."""
+
+    monkeypatch.setattr(nex, "_extract_network_dict", lambda *a, **kw: _make_minimal_network_dict())
+
+    result = extract_spanning_pore_network(
+        np.ones((2, 2, 2), dtype=int),
+        voxel_size=1.0,
+        backend="prego",
+        flow_axis="x",
+        extraction_kwargs={
+            "flow_boundary_mode": "external_reservoir",
+            "transport_geometry": "prego_paper",
+        },
+        geometry_repairs=None,
+    )
+
+    sf = result.net_full.throat["hydraulic_size_factors"]
+    assert sf.shape == (result.net_full.Nt, 3)
+    assert np.all(np.isfinite(sf))
+    assert np.all(sf > 0.0)
+    assert result.net_full.extra["transport_geometry"]["mode"] == "prego_paper"
+    assert (
+        result.net_full.extra["transport_geometry"]["hydraulic_size_factors_location"]
+        == "throat.hydraulic_size_factors"
+    )
+
+    path = tmp_path / "prego_paper_transport_geometry.h5"
+    save_hdf5(result.net_full, path)
+    loaded = load_hdf5(path)
+    assert np.allclose(loaded.throat["hydraulic_size_factors"], sf)
 
 
 def test_extract_spanning_pore_network_uses_voids_version_for_native_backend(

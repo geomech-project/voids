@@ -132,8 +132,10 @@ def test_segment_conductance_input_validation(
 def test_generic_poiseuille_validation_and_area_fallback(line_network: Network) -> None:
     """Test validation and area-based fallback paths in Poiseuille conductance."""
 
+    geometric = line_network.copy()
+    geometric.throat.pop("hydraulic_conductance")
     with pytest.raises(ValueError, match="viscosity must be positive"):
-        generic_poiseuille_conductance(line_network, viscosity=0.0)
+        generic_poiseuille_conductance(geometric, viscosity=0.0)
 
     negative = line_network.copy()
     negative.throat["hydraulic_conductance"][0] = -1.0
@@ -165,10 +167,12 @@ def test_generic_poiseuille_validation_and_area_fallback(line_network: Network) 
 def test_valvatne_shape_factor_branches_and_model_selection(line_network: Network) -> None:
     """Test shape-factor conductance branches and model-dispatch behavior."""
 
+    geometric = line_network.copy()
+    geometric.throat.pop("hydraulic_conductance")
     with pytest.raises(ValueError, match="viscosity must be positive"):
-        valvatne_blunt_baseline_conductance(line_network, viscosity=0.0)
+        valvatne_blunt_baseline_conductance(geometric, viscosity=0.0)
 
-    trusted = valvatne_blunt_baseline_conductance(line_network, viscosity=1.0)
+    trusted = valvatne_blunt_baseline_conductance(line_network, viscosity=None)
     assert np.allclose(trusted, line_network.throat["hydraulic_conductance"])
 
     throat_only = line_network.copy()

@@ -10,6 +10,7 @@ from voids.geom.hydraulic import (
     _broadcast_finite,
     _broadcast_viscosity,
     _conductance_coefficient_from_shape_factor,
+    _harmonic_combine_segments,
     _require,
     _resolve_pore_throat_viscosities,
     _segment_conductance_from_agl,
@@ -89,6 +90,38 @@ def test_hagen_poiseuille_uses_pore_throat_pore_series(line_network: Network) ->
     g = hagen_poiseuille_conductance(net, viscosity=1.0)
 
     assert np.allclose(g, [1 / 3, 1 / 3])
+
+
+def test_series_conductance_blocks_on_zero_segment() -> None:
+    """A blocked segment in series should block the whole conduit."""
+
+    assert np.allclose(
+        _harmonic_combine_segments(np.array([1.0]), np.array([0.0]), np.array([1.0])),
+        np.array([0.0]),
+    )
+    assert np.allclose(
+        _harmonic_combine_segments(np.array([1.0]), np.array([np.inf]), np.array([1.0])),
+        np.array([0.5]),
+    )
+    with pytest.raises(ValueError, match="negative"):
+        _harmonic_combine_segments(np.array([1.0]), np.array([-1.0]), np.array([1.0]))
+
+
+def test_conduit_models_block_on_zero_throat_area(line_network: Network) -> None:
+    """Zero-area throat segments should not be skipped in conduit series sums."""
+
+    net = line_network.copy()
+    net.throat.pop("hydraulic_conductance", None)
+    net.throat["pore1_length"] = np.array([0.25, 0.25])
+    net.throat["core_length"] = np.array([0.50, 0.50])
+    net.throat["pore2_length"] = np.array([0.25, 0.25])
+    net.throat["area"] = np.array([0.0, 1.0])
+    net.pore["area"] = np.ones(net.Np)
+    net.throat["shape_factor"] = np.full(net.Nt, DEFAULT_G_REF)
+    net.pore["shape_factor"] = np.full(net.Np, DEFAULT_G_REF)
+
+    assert hagen_poiseuille_conductance(net, viscosity=1.0)[0] == pytest.approx(0.0)
+    assert valvatne_blunt_conductance(net, viscosity=1.0)[0] == pytest.approx(0.0)
 
 
 def test_hagen_poiseuille_accepts_distinct_pore_and_throat_viscosities(
@@ -494,10 +527,12 @@ def test_valvatne_throat_model_validates_viscosity_and_uses_precomputed(
 ) -> None:
     """Throat-only wrapper validates viscosity and returns precomputed values when present."""
 
+    geometric_net = line_network.copy()
+    geometric_net.throat.pop("hydraulic_conductance", None)
     with pytest.raises(ValueError, match="viscosity must be positive"):
-        valvatne_blunt_throat_conductance(line_network, viscosity=0.0)
+        valvatne_blunt_throat_conductance(geometric_net, viscosity=0.0)
 
-    precomputed = valvatne_blunt_throat_conductance(line_network, viscosity=1.0)
+    precomputed = valvatne_blunt_throat_conductance(line_network, viscosity=None)
     assert np.allclose(precomputed, line_network.throat["hydraulic_conductance"])
 
 
@@ -523,13 +558,18 @@ def test_valvatne_baseline_warns_and_falls_back_when_shape_geometry_missing(
 def test_generic_poiseuille_validation_and_missing_geometry(line_network: Network) -> None:
     """Generic model validates viscosity, precomputed sign, and geometry availability."""
 
+    geometric = line_network.copy()
+    geometric.throat.pop("hydraulic_conductance", None)
     with pytest.raises(ValueError, match="viscosity must be positive"):
-        generic_poiseuille_conductance(line_network, viscosity=0.0)
+        generic_poiseuille_conductance(geometric, viscosity=0.0)
+
+    precomputed = generic_poiseuille_conductance(line_network, viscosity=None)
+    assert np.allclose(precomputed, line_network.throat["hydraulic_conductance"])
 
     negative = line_network.copy()
     negative.throat["hydraulic_conductance"] = np.array([-1.0, 1.0])
     with pytest.raises(ValueError, match="contains negative values"):
-        generic_poiseuille_conductance(negative, viscosity=1.0)
+        generic_poiseuille_conductance(negative, viscosity=None)
 
     missing = line_network.copy()
     missing.throat.pop("hydraulic_conductance", None)
@@ -542,20 +582,24 @@ def test_generic_poiseuille_validation_and_missing_geometry(line_network: Networ
 def test_hagen_poiseuille_validation_and_precomputed_path(line_network: Network) -> None:
     """Hagen-Poiseuille validates viscosity and honors precomputed conductance."""
 
+    geometric = line_network.copy()
+    geometric.throat.pop("hydraulic_conductance", None)
     with pytest.raises(ValueError, match="viscosity must be positive"):
-        hagen_poiseuille_conductance(line_network, viscosity=0.0)
+        hagen_poiseuille_conductance(geometric, viscosity=0.0)
 
-    precomputed = hagen_poiseuille_conductance(line_network, viscosity=1.0)
+    precomputed = hagen_poiseuille_conductance(line_network, viscosity=None)
     assert np.allclose(precomputed, line_network.throat["hydraulic_conductance"])
 
 
 def test_valvatne_baseline_validation_and_precomputed_path(line_network: Network) -> None:
     """Baseline wrapper validates viscosity and honors precomputed throat conductance."""
 
+    geometric = line_network.copy()
+    geometric.throat.pop("hydraulic_conductance", None)
     with pytest.raises(ValueError, match="viscosity must be positive"):
-        valvatne_blunt_conductance(line_network, viscosity=0.0)
+        valvatne_blunt_conductance(geometric, viscosity=0.0)
 
-    precomputed = valvatne_blunt_conductance(line_network, viscosity=1.0)
+    precomputed = valvatne_blunt_conductance(line_network, viscosity=None)
     assert np.allclose(precomputed, line_network.throat["hydraulic_conductance"])
 
 
@@ -569,7 +613,7 @@ def test_throat_conductance_default_model_dispatch(line_network: Network) -> Non
 def test_auto_conductance_trusts_precomputed_values(line_network: Network) -> None:
     """Auto conductance preserves explicit throat hydraulic conductance."""
 
-    g = auto_conductance(line_network, viscosity=1.0)
+    g = auto_conductance(line_network, viscosity=None)
     assert np.allclose(g, line_network.throat["hydraulic_conductance"])
 
 
@@ -1166,7 +1210,7 @@ def test_conductance_sensitivities_return_zero_for_precomputed_hydraulic_conduct
 
     g, dg_dpi, dg_dpj = throat_conductance_with_sensitivities(
         line_network,
-        viscosity=1.0,
+        viscosity=None,
         model="valvatne_blunt",
     )
     assert np.allclose(g, line_network.throat["hydraulic_conductance"])

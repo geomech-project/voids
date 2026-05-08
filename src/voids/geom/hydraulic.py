@@ -512,15 +512,16 @@ def generic_poiseuille_conductance(
     ``throat.area``.
     """
 
-    selected_viscosity = throat_viscosity if throat_viscosity is not None else viscosity
-    if selected_viscosity is None:
-        raise ValueError("Need either viscosity or throat_viscosity")
-    mu_t = _broadcast_viscosity(selected_viscosity, (net.Nt,))
     if "hydraulic_conductance" in net.throat:
         g = np.asarray(net.throat["hydraulic_conductance"], dtype=float)
         if (g < 0).any():
             raise ValueError("throat.hydraulic_conductance contains negative values")
         return g.copy()
+
+    selected_viscosity = throat_viscosity if throat_viscosity is not None else viscosity
+    if selected_viscosity is None:
+        raise ValueError("Need either viscosity or throat_viscosity")
+    mu_t = _broadcast_viscosity(selected_viscosity, (net.Nt,))
 
     _require(net, "throat", ("length",))
     L = np.asarray(net.throat["length"], dtype=float)
@@ -623,17 +624,25 @@ def _harmonic_combine_segments(*segments: np.ndarray) -> np.ndarray:
     -------
     numpy.ndarray
         Equivalent series conductance satisfying
-        ``1 / g_eq = sum_k 1 / g_k`` over positive conductances.
+        ``1 / g_eq = sum_k 1 / g_k``. A finite zero segment blocks the
+        conduit, while ``+inf`` represents a zero-resistance segment.
     """
 
     recip = np.zeros_like(np.asarray(segments[0], dtype=float))
+    blocked = np.zeros_like(recip, dtype=bool)
     for s in segments:
         arr = np.asarray(s, dtype=float)
-        positive = arr > 0
+        if np.any(arr < 0.0):
+            raise ValueError("segment conductance contains negative values")
+        finite = np.isfinite(arr)
+        blocked |= finite & (arr <= 0.0)
+        positive = finite & (arr > 0.0)
         recip[positive] += 1.0 / arr[positive]
     out = np.zeros_like(recip)
-    positive = recip > 0
+    positive = (~blocked) & (recip > 0.0)
     out[positive] = 1.0 / recip[positive]
+    zero_resistance = (~blocked) & (recip == 0.0)
+    out[zero_resistance] = np.inf
     return out
 
 
@@ -956,12 +965,12 @@ def valvatne_blunt_throat_conductance(
         If required throat geometry is unavailable.
     """
 
+    if "hydraulic_conductance" in net.throat:
+        return generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
     selected_viscosity = throat_viscosity if throat_viscosity is not None else viscosity
     if selected_viscosity is None:
         raise ValueError("Need either viscosity or throat_viscosity")
     _broadcast_viscosity(selected_viscosity, (net.Nt,))
-    if "hydraulic_conductance" in net.throat:
-        return generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
     return _throat_only_shape_factor_conductance(
         net,
         viscosity,
@@ -1017,15 +1026,15 @@ def valvatne_blunt_conductance(
     intentionally out of scope here.
     """
 
+    if "hydraulic_conductance" in net.throat:
+        return generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
+
     _resolve_pore_throat_viscosities(
         net,
         viscosity,
         pore_viscosity=pore_viscosity,
         throat_viscosity=throat_viscosity,
     )
-
-    if "hydraulic_conductance" in net.throat:
-        return generic_poiseuille_conductance(net, viscosity, throat_viscosity=throat_viscosity)
 
     try:
         return _valvatne_conduit_baseline(

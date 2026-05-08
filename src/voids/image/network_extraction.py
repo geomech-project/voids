@@ -11,6 +11,8 @@ from voids.core.network import Network
 from voids.version import __version__ as _voids_version
 from voids.core.provenance import Provenance
 from voids.core.sample import SampleGeometry
+from voids.core.validation import validate_network
+from voids.geom.hydraulic import DEFAULT_G_REF
 from voids.graph import spanning_subnetwork
 from voids.image.maximal_ball import (
     MaximalBallSettings,
@@ -25,6 +27,8 @@ _IMPERIAL_SNOW2_DEFAULTS: dict[str, object] = {
     "r_max": 4,
     "boundary_width": 1,
 }
+_PORESPY_STYLE_IMAGE_BACKENDS = frozenset({"porespy_snow2", "porespy_snow2_imperial", "prego"})
+_AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
 
 
 @dataclass(slots=True)
@@ -246,6 +250,399 @@ def _merge_provenance_notes(provenance: Provenance, notes: dict[str, object] | N
     return merged
 
 
+def _resolve_flow_boundary_mode(flow_boundary_mode: str) -> str:
+    """Normalize the network boundary treatment used for flow solves."""
+
+    normalized = str(flow_boundary_mode).strip().lower()
+    if normalized not in {"direct", "external_reservoir"}:
+        raise ValueError("flow_boundary_mode must be one of {'direct', 'external_reservoir'}")
+    return normalized
+
+
+def _resolve_transport_geometry(transport_geometry: object) -> str | None:
+    """Normalize optional post-extraction hydraulic geometry enrichment."""
+
+    if transport_geometry is None:
+        return None
+    normalized = str(transport_geometry).strip().lower()
+    aliases = {
+        "none": None,
+        "direct": None,
+        "prego_paper": "prego_paper",
+        "prego-paper": "prego_paper",
+        "paper": "prego_paper",
+        "pyramids_and_cuboids": "prego_paper",
+        "openpnm_pyramids_and_cuboids": "prego_paper",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            "transport_geometry must be None or one of {'prego_paper', 'pyramids_and_cuboids'}"
+        )
+    return aliases[normalized]
+
+
+def _entity_radius_from_fields(net: Network, kind: str, *, fallback_radius: float) -> np.ndarray:
+    """Return positive pore or throat radii from canonical fields when possible."""
+
+    store = net.pore if kind == "pore" else net.throat
+    count = net.Np if kind == "pore" else net.Nt
+    if "radius_inscribed" in store:
+        radius = np.asarray(store["radius_inscribed"], dtype=float)
+    elif "diameter_inscribed" in store:
+        radius = 0.5 * np.asarray(store["diameter_inscribed"], dtype=float)
+    elif "area" in store:
+        radius = np.sqrt(np.asarray(store["area"], dtype=float) / np.pi)
+    else:
+        radius = np.full(count, float(fallback_radius), dtype=float)
+    return np.maximum(radius, float(fallback_radius))
+
+
+def _entity_diameter_for_pyramids_and_cuboids(
+    net: Network, kind: str, *, fallback_diameter: float
+) -> np.ndarray:
+    """Return positive square/pyramid side-length surrogates for size factors."""
+
+    store = net.pore if kind == "pore" else net.throat
+    count = net.Np if kind == "pore" else net.Nt
+    minimum = float(np.finfo(float).tiny)
+    if "diameter_inscribed" in store:
+        diameter = np.asarray(store["diameter_inscribed"], dtype=float)
+    elif "radius_inscribed" in store:
+        diameter = 2.0 * np.asarray(store["radius_inscribed"], dtype=float)
+    elif "area" in store:
+        diameter = np.sqrt(np.asarray(store["area"], dtype=float))
+    else:
+        diameter = np.full(count, float(fallback_diameter), dtype=float)
+        minimum = max(float(fallback_diameter), minimum)
+    return np.maximum(diameter, minimum)
+
+
+def _extend_pore_field(
+    name: str,
+    values: np.ndarray,
+    *,
+    helper_coords: np.ndarray,
+    helper_radii: np.ndarray,
+    helper_area: np.ndarray,
+    helper_source_indices: np.ndarray,
+) -> np.ndarray:
+    """Append helper-pore values to an existing pore field."""
+
+    arr = np.asarray(values)
+    helper_count = int(helper_radii.size)
+    fill_shape = (helper_count, *arr.shape[1:])
+    if name in {"radius_inscribed"}:
+        fill = helper_radii
+    elif name in {"diameter_inscribed", "equivalent_diameter", "extended_diameter"}:
+        fill = 2.0 * helper_radii
+    elif name == "area":
+        fill = helper_area
+    elif name in {"volume", "region_volume", "surface_area"}:
+        fill = np.zeros(fill_shape, dtype=arr.dtype)
+    elif name == "shape_factor":
+        fill = np.full(fill_shape, DEFAULT_G_REF, dtype=float)
+    elif name in {"local_peak", "global_peak", "geometric_centroid"} and arr.ndim == 2:
+        fill = np.zeros(fill_shape, dtype=arr.dtype)
+        cols = min(arr.shape[1], helper_coords.shape[1])
+        fill[:, :cols] = helper_coords[:, :cols]
+    elif name == "phase" and arr.ndim == 1 and helper_source_indices.size:
+        fill = arr[helper_source_indices]
+    elif np.issubdtype(arr.dtype, np.bool_):
+        fill = np.zeros(fill_shape, dtype=bool)
+    else:
+        fill = np.zeros(fill_shape, dtype=arr.dtype)
+    return np.concatenate([arr, np.asarray(fill, dtype=arr.dtype)], axis=0)
+
+
+def _extend_throat_field(
+    name: str,
+    values: np.ndarray,
+    *,
+    boundary_length: np.ndarray,
+    boundary_area: np.ndarray,
+    boundary_radius: np.ndarray,
+    boundary_pore1_length: np.ndarray,
+    boundary_core_length: np.ndarray,
+    boundary_pore2_length: np.ndarray,
+    boundary_centroid: np.ndarray,
+) -> np.ndarray:
+    """Append helper-throat values to an existing throat field."""
+
+    arr = np.asarray(values)
+    helper_count = int(boundary_length.size)
+    fill_shape = (helper_count, *arr.shape[1:])
+    if name in {"length", "total_length", "direct_length"}:
+        fill = boundary_length
+    elif name in {"pore1_length"}:
+        fill = boundary_pore1_length
+    elif name in {"core_length"}:
+        fill = boundary_core_length
+    elif name in {"pore2_length"}:
+        fill = boundary_pore2_length
+    elif name in {"area", "cross_sectional_area"}:
+        fill = boundary_area
+    elif name in {"radius_inscribed", "shape_factor_radius"}:
+        fill = boundary_radius
+    elif name in {"diameter_inscribed", "equivalent_diameter"}:
+        fill = 2.0 * boundary_radius
+    elif name == "shape_factor":
+        fill = np.full(fill_shape, DEFAULT_G_REF, dtype=float)
+    elif name == "volume":
+        fill = boundary_area * boundary_core_length
+    elif name in {"centroid", "global_peak"} and arr.ndim == 2:
+        fill = np.zeros(fill_shape, dtype=arr.dtype)
+        cols = min(arr.shape[1], boundary_centroid.shape[1])
+        fill[:, :cols] = boundary_centroid[:, :cols]
+    elif name == "face_count":
+        fill = np.ones(fill_shape, dtype=arr.dtype)
+    elif name == "hydraulic_conductance":
+        raise ValueError(
+            "external_reservoir boundary mode cannot extend precomputed "
+            "throat.hydraulic_conductance"
+        )
+    elif np.issubdtype(arr.dtype, np.bool_):
+        fill = np.zeros(fill_shape, dtype=bool)
+    else:
+        fill = np.zeros(fill_shape, dtype=arr.dtype)
+    return np.concatenate([arr, np.asarray(fill, dtype=arr.dtype)], axis=0)
+
+
+def _add_external_reservoirs_to_network(
+    net: Network,
+    *,
+    axis: str,
+    axis_length: float,
+    voxel_size: float,
+    boundary_length_epsilon: float,
+    boundary_radius_scale: float,
+) -> Network:
+    """Attach zero-volume helper pores to PoreSpy-style boundary pores."""
+
+    if axis not in _AXIS_INDEX:
+        raise ValueError("boundary_axis must be one of {'x', 'y', 'z'}")
+    if boundary_length_epsilon <= 0.0:
+        raise ValueError("boundary_length_epsilon must be positive")
+    if boundary_radius_scale <= 0.0:
+        raise ValueError("boundary_radius_scale must be positive")
+    if "hydraulic_conductance" in net.throat:
+        raise ValueError(
+            "external_reservoir boundary mode cannot extend networks with "
+            "precomputed throat.hydraulic_conductance"
+        )
+
+    inlet_label = f"inlet_{axis}min"
+    outlet_label = f"outlet_{axis}max"
+    if inlet_label not in net.pore_labels or outlet_label not in net.pore_labels:
+        raise KeyError(f"Missing pore boundary labels {inlet_label!r} and/or {outlet_label!r}")
+
+    axis_index = _AXIS_INDEX[axis]
+    inlet_mask = np.asarray(net.pore_labels[inlet_label], dtype=bool)
+    outlet_mask = np.asarray(net.pore_labels[outlet_label], dtype=bool)
+    boundary_specs: list[tuple[int, str]] = [
+        *[(int(i), "lower") for i in np.flatnonzero(inlet_mask)],
+        *[(int(i), "upper") for i in np.flatnonzero(outlet_mask)],
+    ]
+    if not boundary_specs:
+        return net
+
+    fallback_radius = max(0.5 * float(voxel_size), boundary_length_epsilon)
+    pore_radii = _entity_radius_from_fields(net, "pore", fallback_radius=fallback_radius)
+    helper_coords: list[np.ndarray] = []
+    helper_radii: list[float] = []
+    helper_source_indices: list[int] = []
+    boundary_conns: list[tuple[int, int]] = []
+    boundary_lengths: list[float] = []
+    boundary_areas: list[float] = []
+    boundary_radii: list[float] = []
+    boundary_pore1_lengths: list[float] = []
+    boundary_core_lengths: list[float] = []
+    boundary_pore2_lengths: list[float] = []
+    boundary_centroids: list[np.ndarray] = []
+    helper_inlet = np.zeros(len(boundary_specs), dtype=bool)
+    helper_outlet = np.zeros(len(boundary_specs), dtype=bool)
+
+    for helper_offset, (pore_index, side) in enumerate(boundary_specs):
+        helper_index = net.Np + helper_offset
+        boundary_coordinate = 0.0 if side == "lower" else float(axis_length)
+        source_coord = net.pore_coords[pore_index]
+        helper_coord = source_coord.copy()
+        helper_coord[axis_index] = boundary_coordinate
+        contact_radius = max(float(pore_radii[pore_index]), fallback_radius)
+        helper_radius = boundary_radius_scale * contact_radius
+        center_to_boundary = abs(float(source_coord[axis_index] - boundary_coordinate))
+        total_length = max(
+            center_to_boundary, 3.01 * float(voxel_size), 3.0 * boundary_length_epsilon
+        )
+        internal_pore_length = max(0.67 * center_to_boundary, boundary_length_epsilon)
+        core_length = max(
+            total_length - boundary_length_epsilon - internal_pore_length,
+            boundary_length_epsilon,
+        )
+        length = boundary_length_epsilon + core_length + internal_pore_length
+
+        helper_coords.append(helper_coord)
+        helper_radii.append(helper_radius)
+        helper_source_indices.append(pore_index)
+        boundary_lengths.append(length)
+        boundary_areas.append(np.pi * contact_radius**2)
+        boundary_radii.append(contact_radius)
+        boundary_core_lengths.append(core_length)
+        boundary_centroids.append(helper_coord.copy())
+        if side == "lower":
+            boundary_conns.append((helper_index, pore_index))
+            boundary_pore1_lengths.append(boundary_length_epsilon)
+            boundary_pore2_lengths.append(internal_pore_length)
+            helper_inlet[helper_offset] = True
+        else:
+            boundary_conns.append((pore_index, helper_index))
+            boundary_pore1_lengths.append(internal_pore_length)
+            boundary_pore2_lengths.append(boundary_length_epsilon)
+            helper_outlet[helper_offset] = True
+
+    helper_coords_arr = np.asarray(helper_coords, dtype=float)
+    helper_radii_arr = np.asarray(helper_radii, dtype=float)
+    helper_source_arr = np.asarray(helper_source_indices, dtype=np.int64)
+    boundary_conns_arr = np.asarray(boundary_conns, dtype=np.int64)
+    boundary_lengths_arr = np.asarray(boundary_lengths, dtype=float)
+    boundary_area_arr = np.asarray(boundary_areas, dtype=float)
+    boundary_radius_arr = np.asarray(boundary_radii, dtype=float)
+    boundary_pore1_arr = np.asarray(boundary_pore1_lengths, dtype=float)
+    boundary_core_arr = np.asarray(boundary_core_lengths, dtype=float)
+    boundary_pore2_arr = np.asarray(boundary_pore2_lengths, dtype=float)
+    boundary_centroid_arr = np.asarray(boundary_centroids, dtype=float)
+    helper_area_arr = np.pi * helper_radii_arr**2
+
+    pore_labels: dict[str, np.ndarray] = {}
+    for name, mask in net.pore_labels.items():
+        old = np.asarray(mask, dtype=bool)
+        if name == inlet_label:
+            new = np.zeros(net.Np + helper_radii_arr.size, dtype=bool)
+            new[net.Np :] = helper_inlet
+        elif name == outlet_label:
+            new = np.zeros(net.Np + helper_radii_arr.size, dtype=bool)
+            new[net.Np :] = helper_outlet
+        elif name == "boundary":
+            new = np.concatenate([old, np.ones(helper_radii_arr.size, dtype=bool)])
+        else:
+            new = np.concatenate([old, np.zeros(helper_radii_arr.size, dtype=bool)])
+        pore_labels[name] = new
+    connected_inlet = np.concatenate([inlet_mask, np.zeros(helper_radii_arr.size, dtype=bool)])
+    connected_outlet = np.concatenate([outlet_mask, np.zeros(helper_radii_arr.size, dtype=bool)])
+    pore_labels[f"boundary_connected_{inlet_label}"] = connected_inlet
+    pore_labels[f"boundary_connected_{outlet_label}"] = connected_outlet
+    pore_labels.setdefault(
+        "boundary",
+        np.concatenate([np.zeros(net.Np, dtype=bool), np.ones(helper_radii_arr.size, dtype=bool)]),
+    )
+
+    throat_labels = {
+        name: np.concatenate(
+            [np.asarray(mask, dtype=bool), np.zeros(boundary_conns_arr.shape[0], dtype=bool)]
+        )
+        for name, mask in net.throat_labels.items()
+    }
+    throat_labels["boundary_reservoir"] = np.concatenate(
+        [np.zeros(net.Nt, dtype=bool), np.ones(boundary_conns_arr.shape[0], dtype=bool)]
+    )
+
+    out = Network(
+        throat_conns=np.vstack([net.throat_conns, boundary_conns_arr]),
+        pore_coords=np.vstack([net.pore_coords, helper_coords_arr]),
+        sample=net.sample,
+        provenance=net.provenance,
+        schema_version=net.schema_version,
+        pore={
+            name: _extend_pore_field(
+                name,
+                values,
+                helper_coords=helper_coords_arr,
+                helper_radii=helper_radii_arr,
+                helper_area=helper_area_arr,
+                helper_source_indices=helper_source_arr,
+            )
+            for name, values in net.pore.items()
+        },
+        throat={
+            name: _extend_throat_field(
+                name,
+                values,
+                boundary_length=boundary_lengths_arr,
+                boundary_area=boundary_area_arr,
+                boundary_radius=boundary_radius_arr,
+                boundary_pore1_length=boundary_pore1_arr,
+                boundary_core_length=boundary_core_arr,
+                boundary_pore2_length=boundary_pore2_arr,
+                boundary_centroid=boundary_centroid_arr,
+            )
+            for name, values in net.throat.items()
+        },
+        pore_labels=pore_labels,
+        throat_labels=throat_labels,
+        extra={
+            **net.extra,
+            "external_reservoirs": {
+                "axis": axis,
+                "helper_pore_count": int(helper_radii_arr.size),
+                "boundary_length_epsilon": float(boundary_length_epsilon),
+                "boundary_radius_scale": float(boundary_radius_scale),
+            },
+        },
+    )
+    validate_network(out)
+    return out
+
+
+def _assign_prego_paper_transport_geometry(net: Network, *, voxel_size: float) -> Network:
+    """Attach OpenPNM-style pyramids-and-cuboids hydraulic size factors."""
+
+    required_lengths = ("pore1_length", "core_length", "pore2_length")
+    if not all(name in net.throat for name in required_lengths):
+        raise KeyError(
+            "prego_paper transport geometry requires conduit lengths "
+            "(pore1_length, core_length, pore2_length)"
+        )
+    fallback_diameter = max(float(voxel_size), float(np.finfo(float).tiny))
+    pore_diameter = _entity_diameter_for_pyramids_and_cuboids(
+        net,
+        "pore",
+        fallback_diameter=fallback_diameter,
+    )
+    throat_diameter = _entity_diameter_for_pyramids_and_cuboids(
+        net,
+        "throat",
+        fallback_diameter=fallback_diameter,
+    )
+    conns = net.throat_conns
+    d1 = pore_diameter[conns[:, 0]]
+    d2 = pore_diameter[conns[:, 1]]
+    dt_limit = np.minimum(d1, d2) * (1.0 - 1.0e-12)
+    dt = np.minimum(throat_diameter, dt_limit)
+    dt = np.maximum(dt, np.finfo(float).tiny)
+    l1 = np.asarray(net.throat["pore1_length"], dtype=float)
+    lt = np.asarray(net.throat["core_length"], dtype=float)
+    l2 = np.asarray(net.throat["pore2_length"], dtype=float)
+
+    f1 = (l1 * (d1 * d1 + d1 * dt + dt * dt)) / (3.0 * d1**3 * dt**3)
+    ft = lt / dt**4
+    f2 = (l2 * (d2 * d2 + d2 * dt + dt * dt)) / (3.0 * d2**3 * dt**3)
+    moment_factor = 1.0 / 6.0
+    prefactor = 1.0 / (16.0 * np.pi**2 * moment_factor)
+    sf = np.column_stack([prefactor / f1, prefactor / ft, prefactor / f2])
+    if not np.all(np.isfinite(sf)) or np.any(sf <= 0.0):
+        raise ValueError("Computed PREGO-paper hydraulic size factors must be positive and finite")
+
+    out = net.copy()
+    out.throat["hydraulic_size_factors"] = sf
+    out.extra["transport_geometry"] = {
+        "mode": "prego_paper",
+        "size_factor_model": "pyramids_and_cuboids",
+        "hydraulic_size_factors_location": "throat.hydraulic_size_factors",
+        "throat_diameter_clipped": int(np.count_nonzero(throat_diameter > dt_limit)),
+    }
+    validate_network(out)
+    return out
+
+
 def _construction_result_from_extraction(
     result: NetworkExtractionResult,
 ) -> NetworkConstructionResult:
@@ -413,8 +810,12 @@ def extract_spanning_pore_network(
         built-in defaults ``sigma=1.0``, ``r_max=4``, and ``boundary_width=1``.
         For the PREGO backend, supported keys are ``settings`` or
         ``prego_settings``, ``distance_map``, ``peaks``, and
-        ``regions_to_network_kwargs``. For the native maximal-ball backend,
-        supported keys are
+        ``regions_to_network_kwargs``. PoreSpy-style backends
+        (``"porespy"``, the `snow2` aliases, and ``"prego"``) also accept
+        post-import transport keys ``flow_boundary_mode``, ``boundary_axis``,
+        ``boundary_length_epsilon``, ``boundary_radius_scale``, and
+        ``transport_geometry``. For the native maximal-ball backend, supported
+        keys are
         ``distance_map_backend``, ``edt_parallel_threads``,
         ``apply_boundary_clipping``,
         ``flow_boundary_mode``, ``boundary_axis``,
@@ -459,11 +860,38 @@ def extract_spanning_pore_network(
         raise ValueError(f"flow_axis '{selected_axis}' is not compatible with shape {arr.shape}")
 
     backend_normalized = _normalize_extraction_backend(backend)
+    extraction_kwargs_for_backend = dict(extraction_kwargs or {})
+    flow_boundary_mode = "direct"
+    boundary_axis = selected_axis
+    boundary_length_epsilon = 1.0e-300
+    boundary_radius_scale = 1.1
+    transport_geometry: str | None = None
+    if backend_normalized in _PORESPY_STYLE_IMAGE_BACKENDS:
+        flow_boundary_mode = _resolve_flow_boundary_mode(
+            str(extraction_kwargs_for_backend.pop("flow_boundary_mode", "direct"))
+        )
+        boundary_axis = str(extraction_kwargs_for_backend.pop("boundary_axis", selected_axis))
+        if boundary_axis not in axis_lengths:
+            raise ValueError(
+                f"boundary_axis '{boundary_axis}' is not compatible with shape {arr.shape}"
+            )
+        boundary_length_epsilon = float(
+            cast(
+                float | int | str,
+                extraction_kwargs_for_backend.pop("boundary_length_epsilon", 1.0e-300),
+            )
+        )
+        boundary_radius_scale = float(
+            cast(float | int | str, extraction_kwargs_for_backend.pop("boundary_radius_scale", 1.1))
+        )
+        transport_geometry = _resolve_transport_geometry(
+            extraction_kwargs_for_backend.pop("transport_geometry", None)
+        )
     network_dict = _extract_network_dict(
         arr,
         backend=backend_normalized,
         voxel_size=float(voxel_size),
-        extraction_kwargs=extraction_kwargs,
+        extraction_kwargs=extraction_kwargs_for_backend or None,
         flow_axis=selected_axis,
     )
     importer_geometry_repairs = geometry_repairs
@@ -505,6 +933,23 @@ def extract_spanning_pore_network(
         geometry_repairs=importer_geometry_repairs,
         repair_seed=repair_seed,
     )
+    if (
+        backend_normalized in _PORESPY_STYLE_IMAGE_BACKENDS
+        and flow_boundary_mode == "external_reservoir"
+    ):
+        net_full = _add_external_reservoirs_to_network(
+            net_full,
+            axis=boundary_axis,
+            axis_length=axis_lengths[boundary_axis],
+            voxel_size=float(voxel_size),
+            boundary_length_epsilon=boundary_length_epsilon,
+            boundary_radius_scale=boundary_radius_scale,
+        )
+    if transport_geometry == "prego_paper":
+        net_full = _assign_prego_paper_transport_geometry(
+            net_full,
+            voxel_size=float(voxel_size),
+        )
     net, pore_indices, throat_mask = spanning_subnetwork(net_full, axis=selected_axis)
     return NetworkExtractionResult(
         image=arr,
