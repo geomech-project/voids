@@ -38,7 +38,8 @@ The current `v0.1.x` implementation includes:
 
 - canonical `Network`, `SampleGeometry`, and `Provenance` data structures
 - import of PoreSpy/OpenPNM-style dictionaries into the canonical model
-- geometry normalization helpers for extracted networks
+- geometry normalization helpers for extracted networks, including optional
+  external-reservoir boundary augmentation for image-extracted flow benchmarks
 - static petrophysics:
   - absolute porosity
   - effective porosity
@@ -46,6 +47,8 @@ The current `v0.1.x` implementation includes:
 - single-phase incompressible flow with directional permeability estimation
 - data-adaptive `auto`, OpenPNM size-factor, circular `hagen_poiseuille`, and
   shape-aware `valvatne_blunt_throat` / `valvatne_blunt` conductance closures
+- optional PoreSpy/PREGO hydraulic size factors for
+  pyramids-and-cuboids conduit transport
 - pressure-dependent water viscosity via `thermo` and `CoolProp`
 - Picard and damped-Newton nonlinear solves for variable-viscosity problems
 - Krylov linear solvers with optional `pyamg` preconditioning

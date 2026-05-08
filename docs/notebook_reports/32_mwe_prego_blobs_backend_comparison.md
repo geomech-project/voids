@@ -1,15 +1,14 @@
 # MWE 32 - PREGO comparison on synthetic PoreSpy blobs
 
 !!! warning "Rendered output needs refresh"
-    The source notebook has been updated to use PREGO's paper-like spherical
-    seed search, level-queue growth path, and the shared `hagen_poiseuille`
-    conductance model for all backends. Re-run the notebook and refresh this
-    report before using the rendered figures or tables as current benchmark
-    evidence.
+    The source notebook has been updated to use spherical seed search,
+    level-queue growth, and the shared `hagen_poiseuille` conductance model for
+    all backends. Re-run the notebook and refresh this report before using the
+    rendered figures or tables as current benchmark evidence.
 
-This notebook reproduces the paper-style comparison idea on synthetic
-`256^3` PoreSpy `blobs` volumes. It sends the same binary images through three
-extraction backends:
+This notebook compares extraction backends on synthetic `256^3` PoreSpy
+`blobs` volumes. It sends the same binary images through three extraction
+backends:
 
 - PoreSpy `snow2`, the established watershed/SNOW-style reference path in
   `voids`
@@ -188,13 +187,13 @@ case_specs
 
 ## Generate spanning PoreSpy blob images
 
-The PREGO paper used PoreSpy `blobs` images for its segmentation performance
-scaling comparison. Here each case is generated directly from
+PoreSpy `blobs` images provide controlled, reproducible synthetic pore-space
+morphologies. Here each case is generated directly from
 `porespy.generators.blobs`, then accepted only if it has a face-connected void
-path across the selected flow axis. The PREGO branch uses the paper-like
-spherical seed search and level-queue region growth; the faster cubic seed
-search and stamped-sphere growth path remain available as explicit opt-in
-settings for runtime-focused comparisons.
+path across the selected flow axis. The PREGO branch uses spherical seed search
+and level-queue region growth; the faster cubic seed search and stamped-sphere
+growth path remain available as explicit opt-in settings for runtime-focused
+comparisons.
 
 
 ```python

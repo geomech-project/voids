@@ -20,7 +20,11 @@ Notebook: `19_mwe_drp317_bentheimer_raw_porosity_perm`
 - Selected ROI origin: `(0, 0, 700)`
 - ROI porosity: `26.75%`
 - Extraction backends: `porespy`, `prego`, `native_maximal_ball`
-- Conductance model: `generic_poiseuille`
+- Primary reported conductance model: `generic_poiseuille`
+- Conductance-model audit: `generic_poiseuille`, `hagen_poiseuille`,
+  `valvatne_blunt`, and `auto` on the same extracted networks
+- PoreSpy/PREGO boundary and transport geometry: external-reservoir helper pores
+  with generated pyramids-and-cuboids hydraulic size factors available to `auto`
 - Viscosity model: tabulated water viscosity from `thermo`, `298.15 K`
 - Boundary pressures: `pout = 5.0 MPa`, `pin = pout + 10 kPa/m * L`
 
@@ -35,8 +39,8 @@ Notebook: `19_mwe_drp317_bentheimer_raw_porosity_perm`
 
 | Backend | Network phi [%] | Kx [mD] | Ky [mD] | Kz [mD] | RMS K [mD] | Rel. K error [%] | Np | Nt |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| PoreSpy snow2 | 27.57 | 426.82 | 536.39 | 543.85 | 505.19 | 30.88 | 2625 | 4639 |
-| PREGO | 26.53 | 819.67 | 971.07 | 963.41 | 920.69 | 138.52 | 1816 | 4623 |
+| PoreSpy snow2 | 27.57 | 409.55 | 495.34 | 485.67 | 465.11 | 20.49 | 3179 | 5193 |
+| PREGO | 26.53 | 779.42 | 926.15 | 920.10 | 877.84 | 127.42 | 2119 | 4926 |
 | Native maximal-ball | 26.53 | 218.22 | 315.43 | 330.66 | 292.38 | -24.25 | 1126 | 2130 |
 
 ![Bentheimer directional permeability](../assets/validation/drp317_bentheimer_directional.png)
@@ -45,18 +49,35 @@ Notebook: `19_mwe_drp317_bentheimer_raw_porosity_perm`
 
 | Backend | Mean coordination | Dead-end pore fraction |
 |---|---:|---:|
-| PoreSpy snow2 | 3.53 | 0.337 |
-| PREGO | 5.09 | 0.059 |
+| PoreSpy snow2 | 3.27 | 0.361 |
+| PREGO | 4.65 | 0.181 |
 | Native maximal-ball | 3.78 | 0.219 |
+
+## Conductance-Model Audit
+
+![Bentheimer conductance-model audit](../assets/validation/drp317_bentheimer_conductance_audit.png)
+
+| Backend | generic [mD] | Hagen-Poiseuille [mD] | Valvatne-Blunt [mD] | auto [mD] |
+|---|---:|---:|---:|---:|
+| PoreSpy snow2 | 465.11 | 1951.71 | 1283.64 | 743.38 |
+| PREGO | 877.84 | 2009.74 | 1562.90 | 1431.73 |
+| Native maximal-ball | 292.38 | 12167.39 | 3558.18 | 3558.18 |
 
 ## Interpretation
 
 For `Bentheimer`, the closest aggregate permeability in this rerun is
 from `Native maximal-ball` with a relative permeability error of
 `-24.25%`. The spread between the
-largest and smallest backend aggregate permeability is about `3.15`x,
+largest and smallest primary backend aggregate permeability is about `3.00`x,
 which makes extraction sensitivity a material part of this sample's validation
 result.
+
+The conductance audit is the sharper diagnostic: on the same extracted networks,
+`hagen_poiseuille`, `valvatne_blunt`, and `auto` all increase the Bentheimer
+permeability relative to the primary `generic_poiseuille` baseline. For this ROI,
+the PREGO overestimate is therefore not fixed by switching to the generated
+PoreSpy/OpenPNM-style size factors; the reduced geometry and conduit assumptions
+remain the dominant modeling uncertainty.
 
 This is a reduced-network comparison against a laboratory-scale experimental
 reference. The numbers depend on the selected ROI, segmentation convention,

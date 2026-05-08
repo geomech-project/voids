@@ -45,7 +45,7 @@ Berea Sister Gray,22_mwe_drp317_bereasistergray_raw_porosity_perm,native_maximal
 Berea Sister Gray,22_mwe_drp317_bereasistergray_raw_porosity_perm,native_maximal_ball,Native maximal-ball,y,6.02063036053871e-14,61.00403507079739,1717.0,3058.0,generic_poiseuille,2.518192891301805e-20,0.0008893800376331
 Berea Sister Gray,22_mwe_drp317_bereasistergray_raw_porosity_perm,native_maximal_ball,Native maximal-ball,z,6.711473826305262e-14,68.00400625160295,1717.0,3058.0,generic_poiseuille,2.1758201539440095e-20,0.0008893800376331
 Berea Upper Gray,23_mwe_drp317_bereauppergray_raw_porosity_perm,porespy,PoreSpy snow2,x,7.745472134267069e-14,78.48099375368956,2904.0,4673.0,generic_poiseuille,4.10159013918471e-20,0.0008893800376331
-Berea Upper Gray,23_mwe_drp317_bereauppergray_raw_porosity_perm,porespy,PoreSpy snow2,y,1.4791121366020996e-13,149.87103218680718,2904.0,4673.0,generic_poiseuille,5.2977906999573273e-20,0.0008893800376331
+Berea Upper Gray,23_mwe_drp317_bereauppergray_raw_porosity_perm,porespy,PoreSpy snow2,y,1.4791121366020996e-13,149.87103218680718,2904.0,4673.0,generic_poiseuille,5.297790699957327e-20,0.0008893800376331
 Berea Upper Gray,23_mwe_drp317_bereauppergray_raw_porosity_perm,porespy,PoreSpy snow2,z,1.0037615454563993e-13,101.70613516333025,2904.0,4673.0,generic_poiseuille,3.9054010810512464e-20,0.0008893800376331
 Berea Upper Gray,23_mwe_drp317_bereauppergray_raw_porosity_perm,prego,PREGO,x,1.2985814902060506e-13,131.57876505763423,1704.0,3602.0,generic_poiseuille,5.3391624856292217e-20,0.0008893800376331
 Berea Upper Gray,23_mwe_drp317_bereauppergray_raw_porosity_perm,prego,PREGO,y,2.496623744277314e-13,252.9703923574723,1704.0,3602.0,generic_poiseuille,4.1548121110128503e-20,0.0008893800376331
@@ -65,23 +65,23 @@ Berea,18_mwe_drp317_berea_raw_porosity_perm,native_maximal_ball,Native maximal-b
 Castlegate,25_mwe_drp317_castlegate_raw_porosity_perm,porespy,PoreSpy snow2,x,2.8976665500886626e-13,293.60605328586956,2831.0,4770.0,generic_poiseuille,6.27524360769873e-20,0.0008893800376331
 Castlegate,25_mwe_drp317_castlegate_raw_porosity_perm,porespy,PoreSpy snow2,y,2.308735090512333e-13,233.932575156786,2831.0,4770.0,generic_poiseuille,5.798863787474519e-20,0.0008893800376331
 Castlegate,25_mwe_drp317_castlegate_raw_porosity_perm,porespy,PoreSpy snow2,z,3.468729094609215e-13,351.4689636579879,2831.0,4770.0,generic_poiseuille,2.5734873621480495e-19,0.0008893800376331
-Castlegate,25_mwe_drp317_castlegate_raw_porosity_perm,prego,PREGO,x,4.983213160697956e-13,504.9240564791563,1644.0,3801.0,generic_poiseuille,5.3391346135267845e-20,0.0008893800376331
+Castlegate,25_mwe_drp317_castlegate_raw_porosity_perm,prego,PREGO,x,4.983213160697957e-13,504.9240564791563,1644.0,3801.0,generic_poiseuille,5.3391346135267845e-20,0.0008893800376331
 Castlegate,25_mwe_drp317_castlegate_raw_porosity_perm,prego,PREGO,y,4.016896765607327e-13,407.01205104868086,1644.0,3801.0,generic_poiseuille,5.526835088552538e-20,0.0008893800376331
 Castlegate,25_mwe_drp317_castlegate_raw_porosity_perm,prego,PREGO,z,6.050091994049393e-13,613.025550622768,1644.0,3801.0,generic_poiseuille,6.589457029220832e-20,0.0008893800376331
 Castlegate,25_mwe_drp317_castlegate_raw_porosity_perm,native_maximal_ball,Native maximal-ball,x,1.672208903473846e-13,169.4365614302394,1318.0,2377.0,generic_poiseuille,2.2070817868601767e-20,0.0008893800376331
 Castlegate,25_mwe_drp317_castlegate_raw_porosity_perm,native_maximal_ball,Native maximal-ball,y,1.3751002915389396e-13,139.3320323412103,1318.0,2377.0,generic_poiseuille,1.8043890564741884e-20,0.0008893800376331
-Castlegate,25_mwe_drp317_castlegate_raw_porosity_perm,native_maximal_ball,Native maximal-ball,z,2.1790348755858894e-13,220.79070132257377,1318.0,2377.0,generic_poiseuille,1.7580273667637956e-20,0.0008893800376331
+Castlegate,25_mwe_drp317_castlegate_raw_porosity_perm,native_maximal_ball,Native maximal-ball,z,2.1790348755858897e-13,220.79070132257377,1318.0,2377.0,generic_poiseuille,1.7580273667637956e-20,0.0008893800376331
 Buff Berea,24_mwe_drp317_buffberea_raw_porosity_perm,porespy,PoreSpy snow2,x,3.8551828059023443e-13,390.62638463418017,2359.0,4143.0,generic_poiseuille,1.7536679419496063e-19,0.0008893800376331
 Buff Berea,24_mwe_drp317_buffberea_raw_porosity_perm,porespy,PoreSpy snow2,y,3.10553318708309e-13,314.668139569011,2359.0,4143.0,generic_poiseuille,1.6950519368862246e-19,0.0008893800376331
 Buff Berea,24_mwe_drp317_buffberea_raw_porosity_perm,porespy,PoreSpy snow2,z,2.0401301969248517e-13,206.7161852319072,2359.0,4143.0,generic_poiseuille,1.531515985015512e-19,0.0008893800376331
-Buff Berea,24_mwe_drp317_buffberea_raw_porosity_perm,prego,PREGO,x,7.611317410179598e-13,771.2167105771639,1373.0,3235.0,generic_poiseuille,1.5303856935385405e-19,0.0008893800376331
+Buff Berea,24_mwe_drp317_buffberea_raw_porosity_perm,prego,PREGO,x,7.611317410179599e-13,771.2167105771639,1373.0,3235.0,generic_poiseuille,1.5303856935385405e-19,0.0008893800376331
 Buff Berea,24_mwe_drp317_buffberea_raw_porosity_perm,prego,PREGO,y,5.361301450233416e-13,543.2338511243393,1373.0,3235.0,generic_poiseuille,1.6234830149727692e-19,0.0008893800376331
 Buff Berea,24_mwe_drp317_buffberea_raw_porosity_perm,prego,PREGO,z,4.089364648886124e-13,414.35485907426886,1373.0,3235.0,generic_poiseuille,1.6284501739608794e-19,0.0008893800376331
 Buff Berea,24_mwe_drp317_buffberea_raw_porosity_perm,native_maximal_ball,Native maximal-ball,x,1.98188108273582e-13,200.81409393575163,998.0,1773.0,generic_poiseuille,6.621877931324196e-20,0.0008893800376331
 Buff Berea,24_mwe_drp317_buffberea_raw_porosity_perm,native_maximal_ball,Native maximal-ball,y,2.9473179023957677e-13,298.6369763887191,998.0,1773.0,generic_poiseuille,5.189918808924674e-20,0.0008893800376331
 Buff Berea,24_mwe_drp317_buffberea_raw_porosity_perm,native_maximal_ball,Native maximal-ball,z,1.0911009810678589e-13,110.55580317820632,998.0,1773.0,generic_poiseuille,5.2267719300284455e-20,0.0008893800376331
 Leopard,27_mwe_drp317_leopard_raw_porosity_perm,porespy,PoreSpy snow2,x,4.688674205245824e-13,475.0798978244635,1929.0,3158.0,generic_poiseuille,3.880217574938874e-19,0.0008893800376331
-Leopard,27_mwe_drp317_leopard_raw_porosity_perm,porespy,PoreSpy snow2,y,2.5621436124430946e-13,259.6091927754765,1929.0,3158.0,generic_poiseuille,5.194928787829545e-19,0.0008893800376331
+Leopard,27_mwe_drp317_leopard_raw_porosity_perm,porespy,PoreSpy snow2,y,2.5621436124430946e-13,259.6091927754765,1929.0,3158.0,generic_poiseuille,5.194928787829546e-19,0.0008893800376331
 Leopard,27_mwe_drp317_leopard_raw_porosity_perm,porespy,PoreSpy snow2,z,1.2982646888193492e-13,131.5466651582093,1929.0,3158.0,generic_poiseuille,7.359618638751421e-19,0.0008893800376331
 Leopard,27_mwe_drp317_leopard_raw_porosity_perm,prego,PREGO,x,7.480687909249414e-13,757.9806768417985,1049.0,2350.0,generic_poiseuille,2.1646944227285756e-19,0.0008893800376331
 Leopard,27_mwe_drp317_leopard_raw_porosity_perm,prego,PREGO,y,5.483556862650056e-13,555.6213803696859,1049.0,2350.0,generic_poiseuille,2.1219209532833784e-19,0.0008893800376331
@@ -89,12 +89,12 @@ Leopard,27_mwe_drp317_leopard_raw_porosity_perm,prego,PREGO,z,3.512277281269942e
 Leopard,27_mwe_drp317_leopard_raw_porosity_perm,native_maximal_ball,Native maximal-ball,x,3.270507111492003e-13,331.38412189599757,820.0,1390.0,generic_poiseuille,1.008204693622433e-19,0.0008893800376331
 Leopard,27_mwe_drp317_leopard_raw_porosity_perm,native_maximal_ball,Native maximal-ball,y,1.717643528502182e-13,174.040224655977,820.0,1390.0,generic_poiseuille,1.2412695182335725e-19,0.0008893800376331
 Leopard,27_mwe_drp317_leopard_raw_porosity_perm,native_maximal_ball,Native maximal-ball,z,7.380131470332787e-14,74.77917960121913,820.0,1390.0,generic_poiseuille,5.760662274641268e-20,0.0008893800376331
-Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,porespy,PoreSpy snow2,x,4.2123595277842305e-13,426.8173147583232,2625.0,4639.0,generic_poiseuille,1.513522954673665e-19,0.0008893800376331
-Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,porespy,PoreSpy snow2,y,5.293754415385574e-13,536.3896480492024,2625.0,4639.0,generic_poiseuille,1.9543680250740936e-19,0.0008893800376331
-Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,porespy,PoreSpy snow2,z,5.367378690648896e-13,543.8496274886706,2625.0,4639.0,generic_poiseuille,1.1702691880170958e-19,0.0008893800376331
-Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,prego,PREGO,x,8.089560122408309e-13,819.674651759494,1816.0,4623.0,generic_poiseuille,1.141461181505615e-19,0.0008893800376331
-Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,prego,PREGO,y,9.583667786369365e-13,971.0651057047052,1816.0,4623.0,generic_poiseuille,1.0674314642250384e-19,0.0008893800376331
-Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,prego,PREGO,z,9.508106274040528e-13,963.4088357261936,1816.0,4623.0,generic_poiseuille,1.1204490913056888e-19,0.0008893800376331
+Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,porespy,PoreSpy snow2,x,4.0419400370506743e-13,409.5495604421006,3179.0,5193.0,generic_poiseuille,1.1329533880018189e-19,0.0008893800376331
+Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,porespy,PoreSpy snow2,y,4.888628882562249e-13,495.3403048202681,3194.0,5208.0,generic_poiseuille,1.2908000262255538e-19,0.0008893800376331
+Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,porespy,PoreSpy snow2,z,4.793190411405547e-13,485.6700020564462,3129.0,5143.0,generic_poiseuille,1.544170469407995e-19,0.0008893800376331
+Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,prego,PREGO,x,7.692249911381522e-13,779.4171959848876,2119.0,4926.0,generic_poiseuille,1.6688480963557988e-19,0.0008893800376331
+Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,prego,PREGO,y,9.140436881774869e-13,926.15473581127,2088.0,4895.0,generic_poiseuille,1.4564053179328206e-19,0.0008893800376331
+Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,prego,PREGO,z,9.080645842713373e-13,920.0964089826808,2062.0,4869.0,generic_poiseuille,1.8262877146307858e-19,0.0008893800376331
 Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,native_maximal_ball,Native maximal-ball,x,2.1537114297220157e-13,218.22480325695173,1126.0,2130.0,generic_poiseuille,4.467248695799757e-20,0.0008893800376331
 Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,native_maximal_ball,Native maximal-ball,y,3.1130392234614306e-13,315.4286886793969,1126.0,2130.0,generic_poiseuille,3.353007104307655e-20,0.0008893800376331
 Bentheimer,19_mwe_drp317_bentheimer_raw_porosity_perm,native_maximal_ball,Native maximal-ball,z,3.263386799029735e-13,330.6626562600897,1126.0,2130.0,generic_poiseuille,3.447647603659437e-20,0.0008893800376331

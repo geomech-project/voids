@@ -315,16 +315,15 @@ result = construct_spanning_network(
 ```
 
 The default `peak_footprint="sphere"` uses PoreSpy's SNOW-style spherical peak
-search for closer compatibility with the paper. Set `peak_footprint="cube"` for
-a faster cubic local-maximum filter when runtime is more important than strict
-seed-search fidelity.
+search. Set `peak_footprint="cube"` for a faster cubic local-maximum filter
+when runtime is more important than seed-search fidelity.
 
 The default `growth_mode="level_queue"` uses delayed seed activation and
-level-by-level FIFO growth closer to the PREGO paper's flow chart and
-pseudocode. Set `growth_mode="fast"` to use the faster approximation that
-stamps non-overlapping seed spheres in descending radius order before the final
-FIFO fill. The paper-like mode is more faithful, but it is not claimed to be a
-bitwise reproduction of the authors' implementation.
+level-by-level FIFO growth. Set `growth_mode="fast"` to use the faster
+approximation that stamps non-overlapping seed spheres in descending radius order
+before the final FIFO fill. The level-queue mode is the more direct algorithmic
+path, but it is not claimed to be a bitwise reproduction of any external
+implementation.
 
 The internal PREGO region-label and FIFO queue arrays use the smallest signed
 integer type that is safe for the image dimensions and number of seeds; for the
@@ -528,8 +527,8 @@ selection. The canonical Cartesian labels are:
 For PoreSpy-style networks, `ensure_cartesian_boundary_labels` mirrors common
 aliases and geometric boundary labels to this convention.
 
-For native maximal-ball extraction, `flow_boundary_mode` controls how the flow
-axis is represented:
+For native maximal-ball, PoreSpy `snow2`, and PREGO extraction,
+`flow_boundary_mode` controls how the flow axis is represented:
 
 | Mode | Meaning |
 |---|---|
@@ -537,7 +536,47 @@ axis is represented:
 | `external_reservoir` | add zero-volume helper pores outside/at the boundary and connect them with boundary throats |
 
 `external_reservoir` is often preferable for permeability benchmarks because it
-avoids imposing pressure directly at internal pore centers.
+avoids imposing pressure directly at internal pore centers. For PoreSpy-style
+backends this is a post-import network augmentation: `voids` adds zero-volume
+helper pores at the selected Cartesian boundary and connects them to the
+boundary-touching physical pores. This mode requires geometric conductance
+models; it intentionally refuses networks that already contain a precomputed
+`throat.hydraulic_conductance`, since a new boundary throat cannot be assigned a
+consistent precomputed value without re-solving the reference model.
+
+### Pyramids-And-Cuboids Transport Geometry
+
+PoreSpy-style extraction backends also accept
+`transport_geometry="pyramids_and_cuboids"`. This does not alter the
+segmentation or the region-growing labels. It attaches OpenPNM-style hydraulic
+size factors to the imported `Network` using truncated-pyramid pore segments and
+cuboid throat segments.
+
+The generated size factors are stored in `net.throat["hydraulic_size_factors"]`
+so they serialize with the rest of the throat geometry. The
+`conductance_model="auto"` single-phase solve will use them ahead of local
+fallbacks such as `hagen_poiseuille` or `valvatne_blunt`. The option depends on
+the imported pore1-core-pore2 conduit lengths and on pore/throat size
+surrogates; it is therefore still a reduced hydraulic model, not a direct
+voxel-scale Stokes solve.
+
+A PREGO extraction with external-reservoir boundaries and pyramids-and-cuboids
+transport geometry looks like:
+
+```python
+result = extract_spanning_pore_network(
+    phases,
+    voxel_size=2.25e-6,
+    backend="prego",
+    flow_axis="x",
+    extraction_kwargs={
+        "flow_boundary_mode": "external_reservoir",
+        "transport_geometry": "pyramids_and_cuboids",
+        "settings": {"r_max": 4, "sigma": 0.4},
+        "regions_to_network_kwargs": {"accuracy": "standard"},
+    },
+)
+```
 
 ---
 
@@ -599,7 +638,7 @@ the full network, while effective transport should use the spanning network.
 | `r_max` | `4` | local-maximum filter radius for seed detection |
 | `sigma` | `0.4` | Gaussian smoothing applied before seed detection |
 | `peak_footprint` | `sphere` | local-maximum filter shape for seed detection; use `cube` for a faster local approximation |
-| `growth_mode` | `level_queue` | delayed seed activation closer to the PREGO paper; use `fast` for stamped spheres plus FIFO fill |
+| `growth_mode` | `level_queue` | delayed seed activation with level-by-level FIFO growth; use `fast` for stamped spheres plus FIFO fill |
 | `distance_map_backend` | `auto` | distance-transform implementation |
 | `edt_parallel_threads` | `None` | optional worker count for the `edt` backend |
 | `cleanup_unassigned` | `True` | leave unfilled foreground voxels as background labels |
@@ -740,10 +779,10 @@ result = construct_spanning_network(
 - Basic threshold segmentation is available, but advanced grayscale/ML/manual
   segmentation remains an upstream scientific preprocessing task.
 - The native maximal-ball backend is not yet exact external-reference parity.
-- PREGO's default seed search and growth path now favor paper-like behavior
-  over the older fast approximation, but the backend still relies on PoreSpy's
-  `regions_to_network` geometry reduction and `voids` conduit-length derivation
-  downstream.
+- PREGO's default seed search and growth path now favor the level-queue
+  algorithm over the older fast approximation, but the backend still relies on PoreSpy's
+  `regions_to_network` geometry reduction and `voids` post-import
+  conduit/boundary transport geometry downstream.
 - Pore and throat geometry are model reductions, not direct measurements of all
   voxel-scale surface detail.
 - Boundary labels are inferred from Cartesian assumptions unless supplied by the

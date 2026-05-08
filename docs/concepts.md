@@ -67,7 +67,8 @@ cannot recover the scientific intent automatically.
 For the single-phase conductance models, the most important geometric fields are:
 
 - `throat.hydraulic_conductance`
-- `throat.hydraulic_size_factors` (preserved in `net.extra` on import)
+- `throat.hydraulic_size_factors` (stored as a throat field when generated;
+  imported OpenPNM values may also be preserved in `net.extra`)
 - `throat.length`
 - `throat.area`
 - `throat.perimeter`
@@ -87,7 +88,7 @@ and, for the full pore-throat-pore conduit model,
 The guiding interpretation is:
 
 - `generic_poiseuille` assumes circular throats and is the conservative default
-  and paper-reference baseline in the DRP-317 notebooks
+  and published-reference baseline in the DRP-317 notebooks
 - `auto` uses the richest available conductance information, starting from
   precomputed conductance and OpenPNM-style hydraulic size factors
 - `hagen_poiseuille` treats each connection as circular pore1, throat-core, and

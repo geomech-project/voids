@@ -282,7 +282,8 @@ The corresponding narrative report is documented in
 
 Runs the same validation workflow for the Bentheimer sandstone case from DRP-317,
 including ROI diagnostics, extracted-network porosity, directional permeability,
-and extraction-backend sensitivity.
+extraction-backend sensitivity, and a same-network conductance-model audit for
+the current PoreSpy/PREGO transport options.
 
 The corresponding narrative report is documented in
 [Verification & Validation / Validation / DRP-317 Bentheimer Notebook Report](validation/drp317_bentheimer.md).
@@ -321,7 +322,7 @@ experimental values from the Scientific Reports paper. Each notebook now runs
 `PoreSpy snow2`, PREGO, and native maximal-ball extraction so the validation
 report can separate experimental mismatch from backend sensitivity.
 
-The paper-reference values used by all eleven DRP-317 notebooks are committed in
+The published-reference values used by all eleven DRP-317 notebooks are committed in
 `examples/data/drp-317/drp317_experimental_references.csv`.
 
 ---
@@ -332,13 +333,13 @@ The paper-reference values used by all eleven DRP-317 notebooks are committed in
 **`30_mwe_drp443_dilatedifn_raw_porosity_perm`**
 
 These notebooks benchmark `voids` on two DRP-443 induced-fracture-network
-volumes (`IFN` and `DilatedIFN`) using paper-reference values from SPE
+volumes (`IFN` and `DilatedIFN`) using published-reference values from SPE
 212849 Table 2.
 
 For DRP-443, both workflows are intentionally full-volume only (no ROI
 selection/subvolume analysis), matching your fractured-media requirement.
 
-The extracted paper-reference values used by these notebooks are committed in
+The extracted published-reference values used by these notebooks are committed in
 `examples/data/drp-443/drp443_reference_values.csv`.
 
 The corresponding report is documented in
@@ -366,10 +367,10 @@ The corresponding report is documented in
 
 **`32_mwe_prego_blobs_backend_comparison`**
 
-This notebook reproduces the PREGO paper's synthetic PoreSpy `blobs`
-comparison idea at notebook scale. It generates three spanning `256^3` binary
-blob images, extracts networks from the same images with PoreSpy `snow2`,
-`prego`, and `native_maximal_ball`, and compares:
+This notebook compares extraction backends on synthetic PoreSpy `blobs` volumes
+at notebook scale. It generates three spanning `256^3` binary blob images,
+extracts networks from the same images with PoreSpy `snow2`, `prego`, and
+`native_maximal_ball`, and compares:
 
 - pore and throat counts,
 - absolute and effective porosity,
@@ -378,7 +379,7 @@ blob images, extracts networks from the same images with PoreSpy `snow2`,
 - extraction wall time,
 - and single-phase `Kx` under the same `voids` pressure-boundary solve.
 
-The PREGO branch uses the paper-like spherical seed search and level-queue
+The PREGO branch uses the algorithmic spherical seed search and level-queue
 region-growth mode. The faster cubic seed search and stamped-sphere growth path
 remain available as explicit opt-in settings for runtime-focused comparisons.
 
