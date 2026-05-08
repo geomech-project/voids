@@ -99,6 +99,15 @@ drp317_paper_url = "https://www.nature.com/articles/s41598-021-90090-0#Sec13"
 # - quadratic mean across the three principal axes
 paper_reference_porespy_version = "1.2.0"
 conductance_models: tuple[str, ...] = ("generic_poiseuille",)
+conductance_models_by_backend: dict[str, tuple[str, ...]] = {}
+
+
+def conductance_models_for_backend(backend: str) -> tuple[str, ...]:
+    """Return ordered conductance models to try for one extraction backend."""
+
+    return conductance_models_by_backend.get(str(backend), conductance_models)
+
+
 geometry_repairs: str | None = None
 extraction_backend = "porespy"
 comparison_extraction_backends = ("prego", "native_maximal_ball")
@@ -117,7 +126,8 @@ extraction_backend_configs: dict[str, dict[str, object]] = {
             "settings": {
                 "r_max": 4,
                 "sigma": 0.4,
-                "peak_footprint": "cube",
+                "peak_footprint": "sphere",
+                "growth_mode": "level_queue",
                 "distance_map_backend": "scipy",
             },
             "regions_to_network_kwargs": {"accuracy": "standard"},
@@ -503,7 +513,12 @@ def extract_axis_network(axis: str, *, backend: str | None = None):
             "paper_citation": drp317_paper_citation,
             "paper_url": drp317_paper_url,
             "trim_nonpercolating_paths": trim_nonpercolating_paths,
-            "conductance_models": list(conductance_models),
+            "conductance_models": list(
+                conductance_models_for_backend(selected_backend)
+            ),
+            "conductance_models_by_backend": {
+                key: list(value) for key, value in conductance_models_by_backend.items()
+            },
             "analysis_origin_strategy": analysis_origin_strategy,
             "analysis_origin_porosity_target": analysis_origin_porosity_target,
             "paper_reference_porespy_version": paper_reference_porespy_version,
@@ -518,8 +533,8 @@ def extract_axis_network(axis: str, *, backend: str | None = None):
 
 
 # %%
-def solve_axis_with_fallback(net_axis, axis: str):
-    """Solve one axis using the configured conductance models."""
+def solve_axis_with_fallback(net_axis, axis: str, *, backend: str):
+    """Solve one axis using the backend-specific configured conductance models."""
     delta_p = pressure_gradient_pa_per_m * axis_lengths[axis]
     bc_axis = PressureBC(
         f"inlet_{axis}min",
@@ -528,7 +543,7 @@ def solve_axis_with_fallback(net_axis, axis: str):
         pout=pressure_reference_pa,
     )
     last_exc: Exception | None = None
-    for model in conductance_models:
+    for model in conductance_models_for_backend(backend):
         try:
             res_axis = solve(
                 net_axis,
@@ -546,7 +561,7 @@ def solve_axis_with_fallback(net_axis, axis: str):
         except Exception as exc:
             last_exc = exc
     raise RuntimeError(
-        f"Single-phase solve failed for all conductance models on axis '{axis}'"
+        f"Single-phase solve failed for all conductance models on backend '{backend}' axis '{axis}'"
     ) from last_exc
 
 
@@ -563,7 +578,7 @@ for backend in extraction_backends:
     for ax in axes_available:
         axis_image, extract_ax = extract_axis_network(ax, backend=backend)
         net_ax = extract_ax.net
-        res_ax, model_ax = solve_axis_with_fallback(net_ax, ax)
+        res_ax, model_ax = solve_axis_with_fallback(net_ax, ax, backend=backend)
         k_ax_m2 = float(res_ax.permeability[ax])
         k_ax_mD = k_ax_m2 / M2_PER_MD
         key = (backend, ax)
@@ -662,7 +677,10 @@ print(
     "Paper PNM reference uses PoreSpy "
     f"{paper_reference_porespy_version}; current primary backend is {extract.backend_version}"
 )
-print(f"Conductance models requested: {conductance_models}")
+print("Conductance models requested by backend:")
+for backend in extraction_backends:
+    label = extraction_backend_configs[backend]["label"]
+    print(f"- {label}: {conductance_models_for_backend(backend)}")
 print(f"Trim nonpercolating paths: {trim_nonpercolating_paths}")
 print(
     f"Viscosity model: {viscosity_model.backend_name} at {viscosity_model.temperature:.2f} K"
