@@ -17,7 +17,8 @@
 # 2. Extract pore networks from a configurable analysis subvolume with multiple backends.
 # 3. Solve single-phase flow and estimate absolute permeability.
 # 4. Compare estimated properties against experimental values.
-# 5. Produce an interactive pore-network view and pore-network statistics.
+# 5. Audit conductance-model sensitivity on the same extracted networks.
+# 6. Produce an interactive pore-network view and pore-network statistics.
 #
 # Notes:
 #
@@ -100,6 +101,12 @@ drp317_paper_url = "https://www.nature.com/articles/s41598-021-90090-0#Sec13"
 paper_reference_porespy_version = "1.2.0"
 conductance_models: tuple[str, ...] = ("generic_poiseuille",)
 conductance_models_by_backend: dict[str, tuple[str, ...]] = {}
+conductance_audit_models: tuple[str, ...] = (
+    "generic_poiseuille",
+    "hagen_poiseuille",
+    "valvatne_blunt",
+    "auto",
+)
 
 
 def conductance_models_for_backend(backend: str) -> tuple[str, ...]:
@@ -114,15 +121,20 @@ comparison_extraction_backends = ("prego", "native_maximal_ball")
 extraction_backends = tuple(
     dict.fromkeys((extraction_backend, *comparison_extraction_backends))
 )
+porespy_style_transport_kwargs = {
+    "flow_boundary_mode": "external_reservoir",
+    "transport_geometry": "pyramids_and_cuboids",
+}
 extraction_backend_configs: dict[str, dict[str, object]] = {
     "porespy": {
         "label": "PoreSpy snow2",
-        "extraction_kwargs": {},
+        "extraction_kwargs": dict(porespy_style_transport_kwargs),
         "geometry_repairs": geometry_repairs,
     },
     "prego": {
         "label": "PREGO",
         "extraction_kwargs": {
+            **porespy_style_transport_kwargs,
             "settings": {
                 "r_max": 4,
                 "sigma": 0.4,
@@ -519,6 +531,7 @@ def extract_axis_network(axis: str, *, backend: str | None = None):
             "conductance_models_by_backend": {
                 key: list(value) for key, value in conductance_models_by_backend.items()
             },
+            "conductance_audit_models": list(conductance_audit_models),
             "analysis_origin_strategy": analysis_origin_strategy,
             "analysis_origin_porosity_target": analysis_origin_porosity_target,
             "paper_reference_porespy_version": paper_reference_porespy_version,
@@ -533,30 +546,43 @@ def extract_axis_network(axis: str, *, backend: str | None = None):
 
 
 # %%
-def solve_axis_with_fallback(net_axis, axis: str, *, backend: str):
-    """Solve one axis using the backend-specific configured conductance models."""
+def pressure_bc_for_axis(axis: str) -> PressureBC:
+    """Return the pressure boundary condition for one principal axis."""
+
     delta_p = pressure_gradient_pa_per_m * axis_lengths[axis]
-    bc_axis = PressureBC(
+    return PressureBC(
         f"inlet_{axis}min",
         f"outlet_{axis}max",
         pin=pressure_reference_pa + delta_p,
         pout=pressure_reference_pa,
     )
+
+
+def solve_axis_with_model(net_axis, axis: str, *, model: str):
+    """Solve one axis using a specific hydraulic conductance model."""
+
+    bc_axis = pressure_bc_for_axis(axis)
+    return solve(
+        net_axis,
+        fluid=FluidSinglePhase(viscosity_model=viscosity_model),
+        bc=bc_axis,
+        axis=axis,
+        options=SinglePhaseOptions(
+            conductance_model=model,
+            solver="direct",
+            nonlinear_solver=nonlinear_solver,
+            nonlinear_pressure_tolerance=nonlinear_pressure_tolerance,
+        ),
+    )
+
+
+def solve_axis_with_fallback(net_axis, axis: str, *, backend: str):
+    """Solve one axis using the backend-specific configured conductance models."""
+
     last_exc: Exception | None = None
     for model in conductance_models_for_backend(backend):
         try:
-            res_axis = solve(
-                net_axis,
-                fluid=FluidSinglePhase(viscosity_model=viscosity_model),
-                bc=bc_axis,
-                axis=axis,
-                options=SinglePhaseOptions(
-                    conductance_model=model,
-                    solver="direct",
-                    nonlinear_solver=nonlinear_solver,
-                    nonlinear_pressure_tolerance=nonlinear_pressure_tolerance,
-                ),
-            )
+            res_axis = solve_axis_with_model(net_axis, axis, model=model)
             return res_axis, model
         except Exception as exc:
             last_exc = exc
@@ -601,11 +627,92 @@ for backend in extraction_backends:
             }
         )
 
+conductance_audit_records: list[dict[str, float | str]] = []
+conductance_audit_results_by_backend_axis_model: dict[tuple[str, str, str], object] = {}
+for (backend, ax), extract_ax in extracts_by_backend_axis.items():
+    backend_label = str(extraction_backend_configs[backend]["label"])
+    net_ax = extract_ax.net
+    for model in conductance_audit_models:
+        record: dict[str, float | str] = {
+            "backend": backend,
+            "backend_label": backend_label,
+            "axis": ax,
+            "conductance_model": model,
+        }
+        try:
+            res_model = solve_axis_with_model(net_ax, ax, model=model)
+            k_model_m2 = float(res_model.permeability[ax])
+            conductance_audit_results_by_backend_axis_model[(backend, ax, model)] = (
+                res_model
+            )
+            record.update(
+                {
+                    "status": "ok",
+                    "k_m2": k_model_m2,
+                    "k_mD": k_model_m2 / M2_PER_MD,
+                    "mass_balance_error": float(res_model.mass_balance_error),
+                    "reference_viscosity": float(res_model.reference_viscosity),
+                    "error": "",
+                }
+            )
+        except Exception as exc:
+            record.update(
+                {
+                    "status": "failed",
+                    "k_m2": np.nan,
+                    "k_mD": np.nan,
+                    "mass_balance_error": np.nan,
+                    "reference_viscosity": np.nan,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+        conductance_audit_records.append(record)
+
 kabs_directional_by_backend = (
     pd.DataFrame(directional_records)
     .sort_values(["backend", "axis"])
     .reset_index(drop=True)
 )
+kabs_model_audit_directional = (
+    pd.DataFrame(conductance_audit_records)
+    .sort_values(["backend", "conductance_model", "axis"])
+    .reset_index(drop=True)
+)
+successful_conductance_audit = kabs_model_audit_directional[
+    kabs_model_audit_directional["status"] == "ok"
+]
+kabs_model_audit_summary = pd.DataFrame(
+    [
+        {
+            "backend": str(backend),
+            "backend_label": str(group["backend_label"].iloc[0]),
+            "conductance_model": str(model),
+            "k_mean_mD": float(group["k_mD"].mean()),
+            "k_mean_m2": float(group["k_m2"].mean()),
+            "k_rms_mD": float(
+                np.sqrt(np.mean(np.square(group["k_mD"].to_numpy(dtype=float))))
+            ),
+            "k_rms_m2": float(
+                np.sqrt(np.mean(np.square(group["k_m2"].to_numpy(dtype=float))))
+            ),
+            "axis_count": float(group.shape[0]),
+        }
+        for (backend, model), group in successful_conductance_audit.groupby(
+            ["backend", "conductance_model"],
+            sort=False,
+        )
+    ]
+)
+if permeability_mean_mode == "quadratic" and not kabs_model_audit_summary.empty:
+    kabs_model_audit_summary["aggregate_kabs_mD"] = kabs_model_audit_summary["k_rms_mD"]
+    kabs_model_audit_summary["aggregate_kabs_m2"] = kabs_model_audit_summary["k_rms_m2"]
+elif not kabs_model_audit_summary.empty:
+    kabs_model_audit_summary["aggregate_kabs_mD"] = kabs_model_audit_summary[
+        "k_mean_mD"
+    ]
+    kabs_model_audit_summary["aggregate_kabs_m2"] = kabs_model_audit_summary[
+        "k_mean_m2"
+    ]
 kabs_summary_by_backend = pd.DataFrame(
     [
         {
@@ -681,6 +788,7 @@ print("Conductance models requested by backend:")
 for backend in extraction_backends:
     label = extraction_backend_configs[backend]["label"]
     print(f"- {label}: {conductance_models_for_backend(backend)}")
+print(f"Conductance audit models: {conductance_audit_models}")
 print(f"Trim nonpercolating paths: {trim_nonpercolating_paths}")
 print(
     f"Viscosity model: {viscosity_model.backend_name} at {viscosity_model.temperature:.2f} K"
@@ -711,6 +819,30 @@ print(
         ["backend_label", "k_mean_mD", "k_rms_mD", "aggregate_kabs_mD"]
     ]
 )
+print()
+print("Conductance-model audit aggregate Kabs [mD]:")
+if kabs_model_audit_summary.empty:
+    print("No successful conductance audit solves.")
+else:
+    print(
+        kabs_model_audit_summary[
+            [
+                "backend_label",
+                "conductance_model",
+                "k_mean_mD",
+                "k_rms_mD",
+                "aggregate_kabs_mD",
+                "axis_count",
+            ]
+        ]
+    )
+failed_audit = kabs_model_audit_directional[
+    kabs_model_audit_directional["status"] != "ok"
+]
+if not failed_audit.empty:
+    print()
+    print("Conductance-model audit failures:")
+    print(failed_audit[["backend_label", "axis", "conductance_model", "error"]])
 print(f"Primary arithmetic mean Kabs: {kabs_mean_m2:.6e} m^2 ({kabs_mean_mD:.3f} mD)")
 print(f"Primary quadratic mean Kabs: {kabs_rms_m2:.6e} m^2 ({kabs_rms_mD:.3f} mD)")
 
@@ -915,6 +1047,75 @@ for rect, val in zip(bars, bar_values):
 plt.tight_layout()
 plt.show()
 
+# %% [markdown]
+# ## Conductance-model audit
+
+# %%
+if kabs_model_audit_summary.empty:
+    print("No successful conductance audit solves to plot.")
+else:
+    audit_plot_data = kabs_model_audit_summary.sort_values(
+        ["backend", "conductance_model"]
+    )
+    audit_labels = [
+        f"{row.backend_label}\n{row.conductance_model}"
+        for row in audit_plot_data.itertuples(index=False)
+    ] + ["Experimental\nKabs"]
+    audit_values = list(audit_plot_data["aggregate_kabs_mD"].to_numpy(dtype=float)) + [
+        experimental_kabs_mD
+    ]
+    audit_errors = [0.0] * (len(audit_labels) - 1) + [experimental_kabs_error_mD]
+    audit_colors = [
+        backend_colors.get(str(backend), "tab:purple")
+        for backend in audit_plot_data["backend"]
+    ] + ["tab:gray"]
+
+    fig, ax = plt.subplots(figsize=(15, 5.8))
+    bars = ax.bar(
+        audit_labels,
+        audit_values,
+        yerr=audit_errors,
+        capsize=5,
+        color=audit_colors,
+        edgecolor="black",
+        alpha=0.85,
+    )
+    ax.axhline(
+        experimental_kabs_mD,
+        color="black",
+        linestyle="--",
+        linewidth=1.5,
+        label="Experimental",
+    )
+    ax.fill_between(
+        [-0.6, len(audit_labels) - 0.4],
+        experimental_kabs_mD - experimental_kabs_error_mD,
+        experimental_kabs_mD + experimental_kabs_error_mD,
+        color="gray",
+        alpha=0.15,
+        label="Experimental +/-10%",
+    )
+    ax.set_ylabel("Absolute permeability [mD]")
+    ax.set_title(
+        f"Conductance-model audit on the same extracted networks ({aggregate_label.lower()})"
+    )
+    ax.grid(alpha=0.3, linestyle=":", axis="y")
+    ax.legend()
+    ax.tick_params(axis="x", labelrotation=30)
+
+    for rect, val in zip(bars, audit_values):
+        ax.text(
+            rect.get_x() + rect.get_width() / 2,
+            rect.get_height(),
+            f"{val:.1f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+
+    plt.tight_layout()
+    plt.show()
+
 
 # %% [markdown]
 # ## Pore-network statistics
@@ -1117,6 +1318,12 @@ out_props_csv = out_dir / f"{sample_output_stem}_estimated_properties.csv"
 out_stats_csv = out_dir / f"{sample_output_stem}_network_stats.csv"
 out_kabs_dir_csv = out_dir / f"{sample_output_stem}_kabs_directional.csv"
 out_kabs_summary_csv = out_dir / f"{sample_output_stem}_kabs_summary_by_backend.csv"
+out_kabs_model_audit_dir_csv = (
+    out_dir / f"{sample_output_stem}_kabs_model_audit_directional.csv"
+)
+out_kabs_model_audit_summary_csv = (
+    out_dir / f"{sample_output_stem}_kabs_model_audit_summary.csv"
+)
 out_roi_scan_csv = out_dir / f"{sample_output_stem}_roi_scan.csv"
 
 if save_outputs:
@@ -1128,6 +1335,8 @@ if save_outputs:
     network_stats_by_backend.to_csv(out_stats_csv, index=False)
     kabs_directional_by_backend.to_csv(out_kabs_dir_csv, index=False)
     kabs_summary_by_backend.to_csv(out_kabs_summary_csv, index=False)
+    kabs_model_audit_directional.to_csv(out_kabs_model_audit_dir_csv, index=False)
+    kabs_model_audit_summary.to_csv(out_kabs_model_audit_summary_csv, index=False)
     if roi_scan_summary is not None:
         roi_scan_summary.to_csv(out_roi_scan_csv, index=False)
 
@@ -1138,5 +1347,7 @@ print(f"Saved estimated properties: {out_props_csv}")
 print(f"Saved network stats: {out_stats_csv}")
 print(f"Saved directional Kabs: {out_kabs_dir_csv}")
 print(f"Saved Kabs summary: {out_kabs_summary_csv}")
+print(f"Saved conductance-model audit directional Kabs: {out_kabs_model_audit_dir_csv}")
+print(f"Saved conductance-model audit summary: {out_kabs_model_audit_summary_csv}")
 if roi_scan_summary is not None:
     print(f"Saved ROI scan summary: {out_roi_scan_csv}")
