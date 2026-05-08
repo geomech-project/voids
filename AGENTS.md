@@ -179,6 +179,15 @@ If execution is not possible, state the verification gap explicitly.
 - Keep docs aligned with the actual shipped `voids` surface.
 - Do not describe ignored local references or non-distributed external code as
   if they were part of `voids`.
+- When adding or changing code, notebooks, examples, datasets, benchmarks, or
+  validation workflows based on a scientific reference, add or update the
+  corresponding documentation citation in the same change. Prefer the public
+  paper, dataset DOI, official documentation, or other citable primary source;
+  do not rely on unpublished local files as the only public attribution.
+- If a reference informs implementation details but cannot be shipped or quoted
+  directly, document the scientific method or public source used, and keep any
+  local-only reference material clearly separated from the public repository
+  contract.
 - If you change figures or diagrams, visually inspect them for readability,
   overlap, and scientific consistency.
 - If you change docs navigation or generated docs pages, rebuild with
