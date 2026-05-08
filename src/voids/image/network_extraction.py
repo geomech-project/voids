@@ -268,16 +268,12 @@ def _resolve_transport_geometry(transport_geometry: object) -> str | None:
     aliases = {
         "none": None,
         "direct": None,
-        "prego_paper": "prego_paper",
-        "prego-paper": "prego_paper",
-        "paper": "prego_paper",
-        "pyramids_and_cuboids": "prego_paper",
-        "openpnm_pyramids_and_cuboids": "prego_paper",
+        "pyramids_and_cuboids": "pyramids_and_cuboids",
+        "openpnm_pyramids_and_cuboids": "pyramids_and_cuboids",
+        "truncated_pyramids_and_cuboids": "pyramids_and_cuboids",
     }
     if normalized not in aliases:
-        raise ValueError(
-            "transport_geometry must be None or one of {'prego_paper', 'pyramids_and_cuboids'}"
-        )
+        raise ValueError("transport_geometry must be None or one of {'pyramids_and_cuboids'}")
     return aliases[normalized]
 
 
@@ -592,13 +588,13 @@ def _add_external_reservoirs_to_network(
     return out
 
 
-def _assign_prego_paper_transport_geometry(net: Network, *, voxel_size: float) -> Network:
+def _assign_pyramids_and_cuboids_transport_geometry(net: Network, *, voxel_size: float) -> Network:
     """Attach OpenPNM-style pyramids-and-cuboids hydraulic size factors."""
 
     required_lengths = ("pore1_length", "core_length", "pore2_length")
     if not all(name in net.throat for name in required_lengths):
         raise KeyError(
-            "prego_paper transport geometry requires conduit lengths "
+            "pyramids-and-cuboids transport geometry requires conduit lengths "
             "(pore1_length, core_length, pore2_length)"
         )
     fallback_diameter = max(float(voxel_size), float(np.finfo(float).tiny))
@@ -629,12 +625,14 @@ def _assign_prego_paper_transport_geometry(net: Network, *, voxel_size: float) -
     prefactor = 1.0 / (16.0 * np.pi**2 * moment_factor)
     sf = np.column_stack([prefactor / f1, prefactor / ft, prefactor / f2])
     if not np.all(np.isfinite(sf)) or np.any(sf <= 0.0):
-        raise ValueError("Computed PREGO-paper hydraulic size factors must be positive and finite")
+        raise ValueError(
+            "Computed pyramids-and-cuboids hydraulic size factors must be positive and finite"
+        )
 
     out = net.copy()
     out.throat["hydraulic_size_factors"] = sf
     out.extra["transport_geometry"] = {
-        "mode": "prego_paper",
+        "mode": "pyramids_and_cuboids",
         "size_factor_model": "pyramids_and_cuboids",
         "hydraulic_size_factors_location": "throat.hydraulic_size_factors",
         "throat_diameter_clipped": int(np.count_nonzero(throat_diameter > dt_limit)),
@@ -945,8 +943,8 @@ def extract_spanning_pore_network(
             boundary_length_epsilon=boundary_length_epsilon,
             boundary_radius_scale=boundary_radius_scale,
         )
-    if transport_geometry == "prego_paper":
-        net_full = _assign_prego_paper_transport_geometry(
+    if transport_geometry == "pyramids_and_cuboids":
+        net_full = _assign_pyramids_and_cuboids_transport_geometry(
             net_full,
             voxel_size=float(voxel_size),
         )

@@ -323,8 +323,8 @@ def test_prego_partitioning_accepts_settings_for_seed_generation() -> None:
     assert result.regions[1, 1] == 1
 
 
-def test_prego_partitioning_accepts_paper_like_level_queue_growth(monkeypatch) -> None:
-    """The default paper-like mode should use delayed seed activation."""
+def test_prego_partitioning_accepts_level_queue_growth(monkeypatch) -> None:
+    """The default level-queue mode should use delayed seed activation."""
 
     def fail_fast_stamp(*args, **kwargs):  # pragma: no cover - should not be reached
         raise AssertionError("level_queue mode should not use the fast sphere stamping path")
@@ -354,7 +354,7 @@ def test_prego_partitioning_accepts_paper_like_level_queue_growth(monkeypatch) -
 def test_prego_partitioning_level_queue_growth_compiles_in_three_dimensions(
     monkeypatch,
 ) -> None:
-    """The paper-like queue should be covered for the 3D Numba specialization."""
+    """The level queue should be covered for the 3D Numba specialization."""
 
     def fail_fast_stamp(*args, **kwargs):  # pragma: no cover - should not be reached
         raise AssertionError("level_queue mode should not use the fast sphere stamping path")

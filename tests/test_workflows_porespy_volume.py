@@ -804,11 +804,11 @@ def test_porespy_style_external_reservoir_boundary_mode(
     assert np.all(result.net_full.throat["pore2_length"] > 0.0)
 
 
-def test_prego_paper_transport_geometry_adds_hydraulic_size_factors(
+def test_pyramids_and_cuboids_transport_geometry_adds_hydraulic_size_factors(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    """The PREGO-paper option stores pyramids-and-cuboids conduit size factors."""
+    """The pyramids-and-cuboids option stores conduit size factors."""
 
     monkeypatch.setattr(nex, "_extract_network_dict", lambda *a, **kw: _make_minimal_network_dict())
 
@@ -819,7 +819,7 @@ def test_prego_paper_transport_geometry_adds_hydraulic_size_factors(
         flow_axis="x",
         extraction_kwargs={
             "flow_boundary_mode": "external_reservoir",
-            "transport_geometry": "prego_paper",
+            "transport_geometry": "pyramids_and_cuboids",
         },
         geometry_repairs=None,
     )
@@ -828,13 +828,13 @@ def test_prego_paper_transport_geometry_adds_hydraulic_size_factors(
     assert sf.shape == (result.net_full.Nt, 3)
     assert np.all(np.isfinite(sf))
     assert np.all(sf > 0.0)
-    assert result.net_full.extra["transport_geometry"]["mode"] == "prego_paper"
+    assert result.net_full.extra["transport_geometry"]["mode"] == "pyramids_and_cuboids"
     assert (
         result.net_full.extra["transport_geometry"]["hydraulic_size_factors_location"]
         == "throat.hydraulic_size_factors"
     )
 
-    path = tmp_path / "prego_paper_transport_geometry.h5"
+    path = tmp_path / "pyramids_and_cuboids_transport_geometry.h5"
     save_hdf5(result.net_full, path)
     loaded = load_hdf5(path)
     assert np.allclose(loaded.throat["hydraulic_size_factors"], sf)

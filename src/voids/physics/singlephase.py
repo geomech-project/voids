@@ -893,6 +893,15 @@ def solve(
         raise ValueError(
             "Thermodynamic viscosity models require positive absolute boundary pressures in Pa"
         )
+    if fluid.viscosity_model is not None and "hydraulic_conductance" in active_net.throat:
+        warnings.warn(
+            "Using precomputed throat.hydraulic_conductance with a pressure-dependent "
+            "viscosity model keeps conductance fixed and bypasses local viscosity "
+            "coupling. Use hydraulic size factors or geometric conductance models "
+            "when conductance should vary with viscosity.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     reference_viscosity = fluid.reference_viscosity(pin=bc.pin, pout=bc.pout)
     if reference_viscosity <= 0.0:

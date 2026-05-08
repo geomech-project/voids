@@ -367,6 +367,22 @@ def test_fluid_singlephase_validates_and_reports_reference_viscosity() -> None:
         variable.reference_viscosity()
 
 
+def test_solve_warns_when_precomputed_conductance_bypasses_variable_viscosity(
+    line_network: Network,
+) -> None:
+    """Precomputed hydraulic conductance is final conductance, not geometry."""
+
+    with pytest.warns(RuntimeWarning, match="bypasses local viscosity coupling"):
+        result = solve(
+            line_network,
+            fluid=FluidSinglePhase(viscosity_model=_linear_viscosity_model()),
+            bc=PressureBC("inlet_xmin", "outlet_xmax", pin=2.0, pout=1.0),
+            axis="x",
+        )
+
+    assert np.allclose(result.throat_conductance, line_network.throat["hydraulic_conductance"])
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
