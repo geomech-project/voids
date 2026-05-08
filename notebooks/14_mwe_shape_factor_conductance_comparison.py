@@ -1,7 +1,7 @@
 # %% [markdown]
 # # MWE 14 - Shape-factor hydraulic conductance comparison
 #
-# This notebook compares the default circular `generic_poiseuille` conductance with
+# This notebook compares the circular `generic_poiseuille` baseline with
 # the new shape-factor-aware Valvatne-Blunt single-phase models.
 #
 # The experiment has two parts:
