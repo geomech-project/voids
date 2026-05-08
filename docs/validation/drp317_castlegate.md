@@ -12,11 +12,14 @@ Notebook: `25_mwe_drp317_castlegate_raw_porosity_perm`
   *High accuracy capillary network representation in digital rock reveals permeability scaling functions*.
   *Scientific Reports, 11*, 11370. <https://doi.org/10.1038/s41598-021-90090-0>
 
+
 ## Current Setup
 
 - Raw volume: `CastleGate_2d25um_binary.raw`
-- ROI size: `300 x 300 x 300` voxels
+- ROI size: `(300, 300, 300)` voxels
 - Selected ROI origin: `(0, 0, 350)`
+- ROI porosity: `24.56%`
+- Extraction backends: `porespy`, `prego`, `native_maximal_ball`
 - Conductance model: `generic_poiseuille`
 - Viscosity model: tabulated water viscosity from `thermo`, `298.15 K`
 - Boundary pressures: `pout = 5.0 MPa`, `pin = pout + 10 kPa/m * L`
@@ -28,20 +31,34 @@ Notebook: `25_mwe_drp317_castlegate_raw_porosity_perm`
 | Experimental porosity [%] | 26.54 |
 | Full-image porosity [%] | 24.67 |
 | ROI porosity [%] | 24.56 |
-| Network absolute porosity [%] | 25.16 |
 | Experimental permeability [mD] | 269.0 |
-| Kx [mD] | 293.61 |
-| Ky [mD] | 233.93 |
-| Kz [mD] | 351.50 |
-| Arithmetic mean permeability [mD] | 293.01 |
-| Quadratic-mean permeability [mD] | 296.92 |
-| Relative quadratic-mean error [%] | 10.38 |
+
+| Backend | Network phi [%] | Kx [mD] | Ky [mD] | Kz [mD] | RMS K [mD] | Rel. K error [%] | Np | Nt |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| PoreSpy snow2 | 25.16 | 293.61 | 233.93 | 351.47 | 296.91 | 10.37 | 2831 | 4770 |
+| PREGO | 24.29 | 504.92 | 407.01 | 613.03 | 515.24 | 91.54 | 1644 | 3801 |
+| Native maximal-ball | 24.29 | 169.44 | 139.33 | 220.79 | 179.69 | -33.20 | 1318 | 2377 |
 
 ![Castlegate directional permeability](../assets/validation/drp317_castlegate_directional.png)
 
+## Network Statistics Snapshot
+
+| Backend | Mean coordination | Dead-end pore fraction |
+|---|---:|---:|
+| PoreSpy snow2 | 3.37 | 0.305 |
+| PREGO | 4.62 | 0.078 |
+| Native maximal-ball | 3.61 | 0.221 |
+
 ## Interpretation
 
-The current workflow predicts `Castlegate` with a quadratic-mean permeability error of
-`10.38%` relative to the Table 1 experimental reference.
-This case should be interpreted together with the cross-sample summary in
-[DRP-317 sandstone validation overview](drp317.md).
+For `Castlegate`, the closest aggregate permeability in this rerun is
+from `PoreSpy snow2` with a relative permeability error of
+`10.37%`. The spread between the
+largest and smallest backend aggregate permeability is about `2.87`x,
+which makes extraction sensitivity a material part of this sample's validation
+result.
+
+This is a reduced-network comparison against a laboratory-scale experimental
+reference. The numbers depend on the selected ROI, segmentation convention,
+boundary labeling, network reduction, and conductance closure; they should not be
+read as a direct voxel-scale flow simulation.

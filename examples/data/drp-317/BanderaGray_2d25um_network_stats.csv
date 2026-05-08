@@ -1,12 +1,34 @@
-metric,value,units
-Np,27913.0,count
-Nt,48475.0,count
-Mean coordination,3.4732920144735426,-
-Max coordination,38.0,-
-Mean pore size (diameter_equivalent),22.860222834087423,um
-Median pore size (diameter_equivalent),21.439552258167787,um
-Mean throat size (diameter_equivalent),13.53132684423386,um
-Median throat size (diameter_equivalent),12.175911854563521,um
-Connected components,1.0,count
-Giant component fraction,1.0,-
-Dead-end pore fraction,0.23078852147744777,-
+backend,backend_label,metric,value,units
+porespy,PoreSpy snow2,Np,27913.0,count
+porespy,PoreSpy snow2,Nt,48477.0,count
+porespy,PoreSpy snow2,Mean coordination,3.4734353168774406,-
+porespy,PoreSpy snow2,Max coordination,38.0,-
+porespy,PoreSpy snow2,Mean pore size (diameter_equivalent),22.86221019225319,um
+porespy,PoreSpy snow2,Median pore size (diameter_equivalent),21.439552258167787,um
+porespy,PoreSpy snow2,Mean throat size (diameter_equivalent),13.532955676095693,um
+porespy,PoreSpy snow2,Median throat size (diameter_equivalent),12.175911854563521,um
+porespy,PoreSpy snow2,Connected components,1.0,count
+porespy,PoreSpy snow2,Giant component fraction,1.0,-
+porespy,PoreSpy snow2,Dead-end pore fraction,0.23078852147744777,-
+prego,PREGO,Np,17527.0,count
+prego,PREGO,Nt,38704.0,count
+prego,PREGO,Mean coordination,4.416500256746733,-
+prego,PREGO,Max coordination,24.0,-
+prego,PREGO,Mean pore size (diameter_equivalent),29.014088871902235,um
+prego,PREGO,Median pore size (diameter_equivalent),28.03621999339363,um
+prego,PREGO,Mean throat size (diameter_equivalent),14.362068371086226,um
+prego,PREGO,Median throat size (diameter_equivalent),13.192267821378836,um
+prego,PREGO,Connected components,1.0,count
+prego,PREGO,Giant component fraction,1.0,-
+prego,PREGO,Dead-end pore fraction,0.0897472471044674,-
+native_maximal_ball,Native maximal-ball,Np,18541.0,count
+native_maximal_ball,Native maximal-ball,Nt,31886.0,count
+native_maximal_ball,Native maximal-ball,Mean coordination,3.439512431907664,-
+native_maximal_ball,Native maximal-ball,Max coordination,44.0,-
+native_maximal_ball,Native maximal-ball,Mean pore size (diameter_inscribed),15.389306786321995,um
+native_maximal_ball,Native maximal-ball,Median pore size (diameter_inscribed),14.497834500469239,um
+native_maximal_ball,Native maximal-ball,Mean throat size (diameter_inscribed),8.398760624309839,um
+native_maximal_ball,Native maximal-ball,Median throat size (diameter_inscribed),7.812306046485901,um
+native_maximal_ball,Native maximal-ball,Connected components,1.0,count
+native_maximal_ball,Native maximal-ball,Giant component fraction,1.0,-
+native_maximal_ball,Native maximal-ball,Dead-end pore fraction,0.2416805997519012,-

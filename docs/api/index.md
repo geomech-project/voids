@@ -34,6 +34,7 @@ If you already know what you want to do, these are the main entry points:
 | Scale an imported network from voxel units | `voids.io.porespy.scale_porespy_geometry` |
 | Infer Cartesian boundary labels | `voids.io.porespy.ensure_cartesian_boundary_labels` |
 | Import a PoreSpy/OpenPNM-style dictionary | `voids.io.porespy.from_porespy` |
+| Extract a PREGO-style network from a segmented image | `voids.image.extract_prego_network_dict` |
 | Extract a native maximal-ball network from a segmented image | `voids.image.extract_maximal_ball_network_dict` |
 | Compute porosity and connectivity diagnostics | `voids.physics.petrophysics` |
 | Solve single-phase flow | `voids.physics.singlephase.solve` |

@@ -23,6 +23,7 @@ TARGETS = (
     VersionTarget(REPO_ROOT / "pyproject.toml", kind="toml-section", section="project"),
     VersionTarget(REPO_ROOT / "pixi.toml", kind="toml-section", section="workspace"),
     VersionTarget(REPO_ROOT / "src" / "voids" / "version.py", kind="python-version"),
+    VersionTarget(REPO_ROOT / "CITATION.cff", kind="yaml-version"),
 )
 
 
@@ -72,6 +73,17 @@ def _replace_python_version(text: str, *, new_version: str) -> tuple[str, str]:
     return updated, current_version
 
 
+def _replace_yaml_version(text: str, *, new_version: str) -> tuple[str, str]:
+    """Replace the top-level ``version`` field in a YAML-like metadata file."""
+
+    match = re.search(r"(?m)^(version:\s*)(\S+)(.*)$", text)
+    if match is None:
+        raise RuntimeError("Could not find version field in CITATION.cff")
+    current_version = match.group(2).strip("\"'")
+    updated = re.sub(r"(?m)^(version:\s*)(\S+)(.*)$", rf"\g<1>{new_version}\g<3>", text, count=1)
+    return updated, current_version
+
+
 def _update_target(target: VersionTarget, *, new_version: str) -> tuple[str, str]:
     """Apply the appropriate version-replacement strategy for one target."""
 
@@ -82,6 +94,8 @@ def _update_target(target: VersionTarget, *, new_version: str) -> tuple[str, str
         return _replace_toml_section_version(text, section=target.section, new_version=new_version)
     if target.kind == "python-version":
         return _replace_python_version(text, new_version=new_version)
+    if target.kind == "yaml-version":
+        return _replace_yaml_version(text, new_version=new_version)
     raise RuntimeError(f"Unsupported target kind: {target.kind}")
 
 

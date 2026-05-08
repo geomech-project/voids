@@ -49,20 +49,21 @@ In practice:
 | `15_mwe_external_pnflow_benchmark` | Compare `voids` against a committed external reference CNM workflow |
 | `16_mwe_viscosity_model_kabs_benchmark` | Quantify `Kabs` drift under constant vs thermodynamic viscosity |
 | `17_mwe_solver_options_benchmark` | Compare direct, Krylov, nonlinear, and preconditioned solver choices |
-| `18_mwe_drp317_berea_raw_porosity_perm` | Validate the DRP-317 Berea case against experimental porosity and permeability |
-| `19_mwe_drp317_bentheimer_raw_porosity_perm` | Validate the DRP-317 Bentheimer case against experimental porosity and permeability |
-| `20_mwe_drp317_banderagray_raw_porosity_perm` | Validate the DRP-317 Bandera Gray case against experimental porosity and permeability |
-| `21_mwe_drp317_banderabrown_raw_porosity_perm` | Run the DRP-317 Bandera Brown raw-volume workflow against the Table 1 experimental references |
-| `22_mwe_drp317_bereasistergray_raw_porosity_perm` | Run the DRP-317 Berea Sister Gray raw-volume workflow against the Table 1 experimental references |
-| `23_mwe_drp317_bereauppergray_raw_porosity_perm` | Run the DRP-317 Berea Upper Gray raw-volume workflow against the Table 1 experimental references |
-| `24_mwe_drp317_buffberea_raw_porosity_perm` | Run the DRP-317 Buff Berea raw-volume workflow against the Table 1 experimental references |
-| `25_mwe_drp317_castlegate_raw_porosity_perm` | Run the DRP-317 Castlegate raw-volume workflow against the Table 1 experimental references |
-| `26_mwe_drp317_kirby_raw_porosity_perm` | Run the DRP-317 Kirby raw-volume workflow against the Table 1 experimental references |
-| `27_mwe_drp317_leopard_raw_porosity_perm` | Run the DRP-317 Leopard raw-volume workflow against the Table 1 experimental references |
-| `28_mwe_drp317_parker_raw_porosity_perm` | Run the DRP-317 Parker raw-volume workflow against the Table 1 experimental references |
+| `18_mwe_drp317_berea_raw_porosity_perm` | Validate the DRP-317 Berea case and compare `snow2`, PREGO, and native maximal-ball extraction |
+| `19_mwe_drp317_bentheimer_raw_porosity_perm` | Validate the DRP-317 Bentheimer case and compare `snow2`, PREGO, and native maximal-ball extraction |
+| `20_mwe_drp317_banderagray_raw_porosity_perm` | Validate the DRP-317 Bandera Gray case and compare `snow2`, PREGO, and native maximal-ball extraction |
+| `21_mwe_drp317_banderabrown_raw_porosity_perm` | Run the DRP-317 Bandera Brown backend-sensitivity workflow against the Table 1 experimental references |
+| `22_mwe_drp317_bereasistergray_raw_porosity_perm` | Run the DRP-317 Berea Sister Gray backend-sensitivity workflow against the Table 1 experimental references |
+| `23_mwe_drp317_bereauppergray_raw_porosity_perm` | Run the DRP-317 Berea Upper Gray backend-sensitivity workflow against the Table 1 experimental references |
+| `24_mwe_drp317_buffberea_raw_porosity_perm` | Run the DRP-317 Buff Berea backend-sensitivity workflow against the Table 1 experimental references |
+| `25_mwe_drp317_castlegate_raw_porosity_perm` | Run the DRP-317 Castlegate backend-sensitivity workflow against the Table 1 experimental references |
+| `26_mwe_drp317_kirby_raw_porosity_perm` | Run the DRP-317 Kirby backend-sensitivity workflow against the Table 1 experimental references |
+| `27_mwe_drp317_leopard_raw_porosity_perm` | Run the DRP-317 Leopard backend-sensitivity workflow against the Table 1 experimental references |
+| `28_mwe_drp317_parker_raw_porosity_perm` | Run the DRP-317 Parker backend-sensitivity workflow against the Table 1 experimental references |
 | `29_mwe_drp443_ifn_raw_porosity_perm` | Benchmark DRP-443 IFN fractured-media permeability against SPE 212849 Table 2 (LBM reference) |
 | `30_mwe_drp443_dilatedifn_raw_porosity_perm` | Benchmark DRP-443 Dilated IFN fractured-media permeability against SPE 212849 Table 2 (LBM reference) |
 | `31_mwe_drp10_estaillades_raw_porosity_perm` | Benchmark DRP-10 Estaillades v2 carbonate permeability and extraction-backend sensitivity against Muljadi et al. (2016) Table 2 (OpenFOAM reference) |
+| `32_mwe_prego_blobs_backend_comparison` | Compare PoreSpy `snow2`, PREGO, and native maximal-ball extraction on synthetic `256^3` PoreSpy `blobs` images |
 
 ---
 
@@ -267,7 +268,8 @@ nonlinear strategy, and `pyamg` preconditioner is most effective for a given reg
 
 Runs the current image-to-network workflow on the DRP-317 Berea sandstone volume and
 compares porosity and apparent permeability against the experimental values reported
-for the same rock sample.
+for the same rock sample. The notebook now evaluates `PoreSpy snow2`, PREGO, and
+native maximal-ball extraction on the same selected ROI.
 
 The corresponding narrative report is documented in
 [Verification & Validation / Validation / DRP-317 Berea Notebook Report](validation/drp317_berea.md).
@@ -279,7 +281,9 @@ The corresponding narrative report is documented in
 **`19_mwe_drp317_bentheimer_raw_porosity_perm`**
 
 Runs the same validation workflow for the Bentheimer sandstone case from DRP-317,
-including ROI diagnostics, extracted-network porosity, and directional permeability.
+including ROI diagnostics, extracted-network porosity, directional permeability,
+extraction-backend sensitivity, and a same-network conductance-model audit for
+the current PoreSpy/PREGO transport options.
 
 The corresponding narrative report is documented in
 [Verification & Validation / Validation / DRP-317 Bentheimer Notebook Report](validation/drp317_bentheimer.md).
@@ -290,9 +294,9 @@ The corresponding narrative report is documented in
 
 **`20_mwe_drp317_banderagray_raw_porosity_perm`**
 
-Runs the DRP-317 Bandera Gray validation case, which is currently the most demanding
-of the three because the permeability gap to experiment remains much larger than for
-Berea and Bentheimer.
+Runs the DRP-317 Bandera Gray validation case. This low-permeability case remains
+one of the clearest tests of how strongly the reduced-network permeability depends
+on the extraction backend.
 
 The corresponding narrative report is documented in
 [Verification & Validation / Validation / DRP-317 Bandera Gray Notebook Report](validation/drp317_banderagray.md).
@@ -310,13 +314,15 @@ The corresponding narrative report is documented in
 **`27_mwe_drp317_leopard_raw_porosity_perm`**
 **`28_mwe_drp317_parker_raw_porosity_perm`**
 
-These notebooks extend the existing DRP-317 workflow to the remaining raw binary
-volumes under `examples/data/drp-317/`. They keep the same current PNM setup as
-notebooks 18-20: ROI-based extraction from the full `1000^3` volume, pressure-
-dependent water viscosity, and directional `Kabs` comparison against the Table 1
-experimental values from the Scientific Reports paper.
+These notebooks extend the DRP-317 workflow to the remaining raw binary volumes
+under `examples/data/drp-317/`. They keep the same current PNM setup as notebooks
+18-20: ROI-based extraction from the full `1000^3` volume, pressure-dependent
+water viscosity, and directional `Kabs` comparison against the Table 1
+experimental values from the Scientific Reports paper. Each notebook now runs
+`PoreSpy snow2`, PREGO, and native maximal-ball extraction so the validation
+report can separate experimental mismatch from backend sensitivity.
 
-The paper-reference values used by all eleven DRP-317 notebooks are committed in
+The published-reference values used by all eleven DRP-317 notebooks are committed in
 `examples/data/drp-317/drp317_experimental_references.csv`.
 
 ---
@@ -327,13 +333,13 @@ The paper-reference values used by all eleven DRP-317 notebooks are committed in
 **`30_mwe_drp443_dilatedifn_raw_porosity_perm`**
 
 These notebooks benchmark `voids` on two DRP-443 induced-fracture-network
-volumes (`IFN` and `DilatedIFN`) using paper-reference values from SPE
+volumes (`IFN` and `DilatedIFN`) using published-reference values from SPE
 212849 Table 2.
 
 For DRP-443, both workflows are intentionally full-volume only (no ROI
 selection/subvolume analysis), matching your fractured-media requirement.
 
-The extracted paper-reference values used by these notebooks are committed in
+The extracted published-reference values used by these notebooks are committed in
 `examples/data/drp-443/drp443_reference_values.csv`.
 
 The corresponding report is documented in
@@ -354,6 +360,31 @@ exports directional and mean-`Kabs` CSV summaries.
 
 The corresponding report is documented in
 [Verification & Validation / Verification / DRP-10 Estaillades Verification Overview](verification/drp10.md).
+
+---
+
+### 32 - PREGO Synthetic Blob Backend Comparison
+
+**`32_mwe_prego_blobs_backend_comparison`**
+
+This notebook compares extraction backends on synthetic PoreSpy `blobs` volumes
+at notebook scale. It generates three spanning `256^3` binary blob images,
+extracts networks from the same images with PoreSpy `snow2`, `prego`, and
+`native_maximal_ball`, and compares:
+
+- pore and throat counts,
+- absolute and effective porosity,
+- coordination number,
+- pore and throat diameter distributions,
+- extraction wall time,
+- and single-phase `Kx` under the same `voids` pressure-boundary solve.
+
+The PREGO branch uses the algorithmic spherical seed search and level-queue
+region-growth mode. The faster cubic seed search and stamped-sphere growth path
+remain available as explicit opt-in settings for runtime-focused comparisons.
+
+The corresponding rendered notebook report is documented in
+[Examples / Notebook Reports / PREGO Synthetic Blob Backend Comparison](notebook_reports/32_mwe_prego_blobs_backend_comparison.md).
 
 ---
 
@@ -390,3 +421,4 @@ notebook outputs.
 - [15 — External Reference CNM Benchmark](notebook_reports/15_mwe_external_pnflow_benchmark.md)
 - [16 — `Kabs` Benchmark: Constant vs Thermodynamic Viscosity](notebook_reports/16_mwe_viscosity_model_kabs_benchmark.md)
 - [17 — Solver Options Benchmark](notebook_reports/17_mwe_solver_options_benchmark.md)
+- [32 — PREGO Synthetic Blob Backend Comparison](notebook_reports/32_mwe_prego_blobs_backend_comparison.md)

@@ -79,6 +79,10 @@ _LENGTH_KEYS = frozenset(
         "pore.inscribed_diameter",
         "throat.direct_length",
         "throat.total_length",
+        "throat.conduit_lengths",
+        "throat.conduit_lengths.pore1",
+        "throat.conduit_lengths.throat",
+        "throat.conduit_lengths.pore2",
         "throat.equivalent_diameter",
         "throat.inscribed_diameter",
         "throat.shape_factor_radius",
@@ -304,6 +308,142 @@ def _derive_missing_geometry(
             + np.asarray(throat_data["core_length"], dtype=float)
             + np.asarray(throat_data["pore2_length"], dtype=float)
         )
+
+
+def _positive_epsilon_like(length: np.ndarray) -> np.ndarray:
+    """Return a tiny positive scale-aware epsilon for conduit sub-lengths."""
+
+    return np.maximum(1.0e-15 * np.asarray(length, dtype=float), np.finfo(float).tiny)
+
+
+def _enforce_positive_conduit_partition(
+    pore1_length: np.ndarray,
+    core_length: np.ndarray,
+    pore2_length: np.ndarray,
+    total_length: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Clip a conduit partition to positive sub-lengths while preserving totals."""
+
+    p1 = np.asarray(pore1_length, dtype=float).copy()
+    core = np.asarray(core_length, dtype=float).copy()
+    p2 = np.asarray(pore2_length, dtype=float).copy()
+    total = np.asarray(total_length, dtype=float)
+    eps = _positive_epsilon_like(total)
+    adjusted = (p1 <= eps) | (core <= eps) | (p2 <= eps) | ((p1 + core + p2) > total + eps)
+    if not np.any(adjusted):
+        return p1, core, p2, 0
+
+    available = np.maximum(total[adjusted] - eps[adjusted], 2.0 * eps[adjusted])
+    side_sum = p1[adjusted] + p2[adjusted]
+    side_sum = np.where(side_sum > 0.0, side_sum, 1.0)
+    p1_fraction = np.clip(p1[adjusted] / side_sum, 0.0, 1.0)
+    p2_fraction = 1.0 - p1_fraction
+    p1[adjusted] = np.maximum(p1_fraction * available, eps[adjusted])
+    p2[adjusted] = np.maximum(p2_fraction * available, eps[adjusted])
+
+    side_total = p1[adjusted] + p2[adjusted]
+    too_long = side_total >= total[adjusted] - eps[adjusted]
+    if np.any(too_long):
+        scale = (total[adjusted][too_long] - eps[adjusted][too_long]) / side_total[too_long]
+        p1_adjusted = p1[adjusted]
+        p2_adjusted = p2[adjusted]
+        p1_adjusted[too_long] = np.maximum(p1_adjusted[too_long] * scale, eps[adjusted][too_long])
+        p2_adjusted[too_long] = np.maximum(p2_adjusted[too_long] * scale, eps[adjusted][too_long])
+        p1[adjusted] = p1_adjusted
+        p2[adjusted] = p2_adjusted
+
+    core[adjusted] = np.maximum(total[adjusted] - p1[adjusted] - p2[adjusted], eps[adjusted])
+    return p1, core, p2, int(np.count_nonzero(adjusted))
+
+
+def _derive_missing_conduit_lengths(
+    pore_data: dict[str, np.ndarray],
+    throat_data: dict[str, np.ndarray],
+    throat_conns: np.ndarray,
+    pore_coords: np.ndarray,
+) -> dict[str, object] | None:
+    """Derive pore-throat-pore conduit lengths when extraction did not provide them."""
+
+    if "conduit_lengths" in throat_data:
+        conduit = np.asarray(throat_data.pop("conduit_lengths"), dtype=float)
+        if conduit.ndim != 2 or conduit.shape[1] != 3:
+            raise ValueError("throat.conduit_lengths must have shape (Nt, 3)")
+        throat_data.setdefault("pore1_length", conduit[:, 0])
+        throat_data.setdefault("core_length", conduit[:, 1])
+        throat_data.setdefault("pore2_length", conduit[:, 2])
+        return {"mode": "provided_array", "source": "throat.conduit_lengths"}
+
+    conduit_keys = ("pore1_length", "core_length", "pore2_length")
+    if all(key in throat_data for key in conduit_keys):
+        return None
+    if any(key in throat_data for key in conduit_keys):
+        return None
+    if "diameter_inscribed" not in pore_data or "diameter_inscribed" not in throat_data:
+        return None
+
+    length_present = "length" in throat_data
+    if "direct_length" in throat_data:
+        total_length = np.asarray(throat_data["direct_length"], dtype=float)
+        source_length = "direct_length"
+    elif "length" in throat_data:
+        total_length = np.asarray(throat_data["length"], dtype=float)
+        source_length = "length"
+    else:
+        coords = np.asarray(pore_coords, dtype=float)
+        conns = np.asarray(throat_conns, dtype=int)
+        total_length = np.linalg.norm(coords[conns[:, 1]] - coords[conns[:, 0]], axis=1)
+        source_length = "pore_coords"
+
+    conns = np.asarray(throat_conns, dtype=int)
+    total = np.asarray(total_length, dtype=float)
+    pore_diameter = np.asarray(pore_data["diameter_inscribed"], dtype=float)
+    throat_diameter = np.asarray(throat_data["diameter_inscribed"], dtype=float)
+    if not (
+        np.all(np.isfinite(total))
+        and np.all(np.isfinite(pore_diameter))
+        and np.all(np.isfinite(throat_diameter))
+        and np.all(total > 0.0)
+        and np.all(pore_diameter > 0.0)
+        and np.all(throat_diameter > 0.0)
+    ):
+        return None
+
+    d1 = pore_diameter[conns[:, 0]]
+    d2 = pore_diameter[conns[:, 1]]
+    dt_max = np.minimum(d1, d2) * (1.0 - 1.0e-12)
+    clipped = throat_diameter > dt_max
+    dt = np.minimum(throat_diameter, dt_max)
+
+    p1 = 0.5 * np.sqrt(np.maximum(d1 * d1 - dt * dt, 0.0))
+    p2 = 0.5 * np.sqrt(np.maximum(d2 * d2 - dt * dt, 0.0))
+    core = total - p1 - p2
+
+    overlap = core <= 0.0
+    if np.any(overlap):
+        d = total[overlap]
+        r1 = 0.5 * d1[overlap]
+        r2 = 0.5 * d2[overlap]
+        l1_int = (d * d - r2 * r2 + r1 * r1) / (2.0 * d)
+        valid_intersection = (l1_int > 0.0) & (l1_int < d)
+        if np.any(valid_intersection):
+            idx = np.flatnonzero(overlap)[valid_intersection]
+            p1[idx] = l1_int[valid_intersection]
+            p2[idx] = d[valid_intersection] - l1_int[valid_intersection]
+            core[idx] = _positive_epsilon_like(total[idx])
+
+    p1, core, p2, positive_repairs = _enforce_positive_conduit_partition(p1, core, p2, total)
+    throat_data["pore1_length"] = p1
+    throat_data["core_length"] = core
+    throat_data["pore2_length"] = p2
+    if not length_present:
+        throat_data["length"] = p1 + core + p2
+    return {
+        "mode": "spheres_and_cylinders",
+        "source_length": source_length,
+        "throat_diameter_clipped": int(np.count_nonzero(clipped)),
+        "overlap_repairs": int(np.count_nonzero(overlap)),
+        "positive_partition_repairs": positive_repairs,
+    }
 
 
 def _ensure_inscribed_size_aliases(data: dict[str, np.ndarray]) -> None:
@@ -577,8 +717,9 @@ def from_porespy(
     - Common boundary aliases such as ``left`` and ``right`` are mirrored to
       ``inlet_xmin`` and ``outlet_xmax``.
 
-    Unsupported nested arrays such as ``throat.hydraulic_size_factors`` are
-    preserved in ``net.extra`` so that information is not silently lost.
+    OpenPNM-style arrays that are not part of the formal schema, such as
+    ``throat.hydraulic_size_factors``, are preserved in ``net.extra`` so that
+    information is not silently lost.
     """
 
     if "throat.conns" not in network_dict or "pore.coords" not in network_dict:
@@ -658,12 +799,21 @@ def from_porespy(
             random_seed=repair_seed,
         )
 
+    conduit_summary = _derive_missing_conduit_lengths(
+        pore_data,
+        throat_data,
+        np.asarray(throat_conns, dtype=int),
+        np.asarray(pore_coords, dtype=float),
+    )
+    if conduit_summary is not None:
+        extra["conduit_lengths"] = conduit_summary
+
     _derive_missing_geometry(pore_data, throat_data)
 
     if "hydraulic_size_factors" in throat_data:
         extra["throat.hydraulic_size_factors"] = throat_data.pop("hydraulic_size_factors")
         warnings.warn(
-            "Stored throat.hydraulic_size_factors in net.extra (no v0.1 solver integration yet)",
+            "Stored throat.hydraulic_size_factors in net.extra; the auto conductance model can use it",
             RuntimeWarning,
             stacklevel=2,
         )

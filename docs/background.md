@@ -8,7 +8,9 @@ The main scientific boundary is simple:
 
 - `voids` is currently a single-phase pore-network code
 - hydraulic conductance can be constant-viscosity or pressure-dependent
-- geometry can be circular, shape-aware throat-only, or shape-aware pore-throat-pore
+- conductance can be selected explicitly or through the data-adaptive `auto` model
+- geometry can be circular, size-factor based, shape-aware throat-only, or
+  shape-aware pore-throat-pore
 - thermodynamic viscosity is available through tabulated `thermo` and `CoolProp` backends
 
 If a study needs corner films, capillary entry, wettability hysteresis, or dynamic
@@ -80,6 +82,79 @@ It is the correct law for creeping flow in a circular tube, but it is only an
 equivalent-duct approximation for image-extracted throats with irregular shape.
 That simplification is often acceptable for controlled baselines and regression tests,
 but it is not a faithful geometric closure for angular or highly non-circular ducts.
+
+### Hagen-Poiseuille Conduit Model
+
+The Hagen-Poiseuille conduit model applies the circular segment law to a
+pore-throat-pore conduit when conduit sub-lengths are available:
+
+\[
+\frac{1}{g_{ij}} =
+\frac{1}{g_{p,1}} + \frac{1}{g_t} + \frac{1}{g_{p,2}},
+\qquad
+g_s = \frac{A_s^2}{8 \pi \mu_s L_s}.
+\]
+
+Here \(A_s\), \(L_s\), and \(\mu_s\) are the area, length, and dynamic viscosity
+for each segment \(s\). For a circular segment, \(A_s=\pi r_s^2\), so this
+reduces to the usual \(\pi r_s^4/(8\mu_s L_s)\).
+
+This is exposed in `voids` as `hagen_poiseuille`. If conduit lengths are absent,
+the model falls back to the one-throat `generic_poiseuille` calculation because
+that is the same segment law without pore-end resistances.
+
+For PoreSpy-style imports, `voids` preserves explicit OpenPNM conduit lengths
+when present. If they are absent but pore diameters, throat diameters, and a
+center-to-center throat length are available, the importer derives a
+sphere-cylinder pore1-core-pore2 split and records the derivation summary in
+`net.extra["conduit_lengths"]`. This keeps the extraction path usable with
+PoreSpy/PREGO region networks that expose `throat.direct_length` but not
+`throat.conduit_lengths.*` directly.
+
+### Hydraulic Size-Factor Model
+
+OpenPNM-style networks may already contain hydraulic size factors, and `voids`
+can also generate them for PoreSpy/PREGO image-extracted networks through
+`transport_geometry="pyramids_and_cuboids"`. In that representation, the
+geometry-dependent part of the conductance is reduced to size factors \(S\), and
+viscosity is applied afterward:
+
+\[
+g_t = \frac{S_t}{\mu_t}
+\]
+
+for a throat-only size factor, or
+
+\[
+\frac{1}{g_{ij}} =
+\frac{\mu_{p,i}}{S_{p,1}} +
+\frac{\mu_t}{S_t} +
+\frac{\mu_{p,j}}{S_{p,2}}
+\]
+
+for a three-segment pore-throat-pore conduit. This is the same algebra as
+combining the three segment conductances \(S/\mu\) in series.
+
+`voids` preserves imported `throat.hydraulic_size_factors` in
+`net.extra["throat.hydraulic_size_factors"]` and stores generated
+pyramids-and-cuboids factors in `net.throat["hydraulic_size_factors"]` so they
+round-trip through HDF5 with the rest of the network arrays. The `auto`
+conductance model uses either location before applying any local geometry
+fallback, because size factors are already a completed geometric conductance
+reduction.
+
+For the generated pyramids-and-cuboids transport geometry, pores are represented
+as truncated pyramids and throats as cuboids. The stored factors follow the
+OpenPNM convention
+
+\[
+S_s = \frac{1}{16\pi^2 I_s F_s},
+\]
+
+where \(F_s\) is the segment integral of \(1/A(x)^2\) and \(I_s=1/6\) for the
+square cross-section used by the pyramids-and-cuboids model. This is a transport
+post-processing model on top of the extracted network geometry; it is not a
+change to the segmentation.
 
 ### Shape Factor and Equivalent Ducts
 
@@ -190,17 +265,46 @@ This closure is exposed as `valvatne_blunt`. The older name
 `valvatne_blunt_baseline` remains as a backward-compatible alias, not as a separate
 physical model.
 
-### Fallback Hierarchy
+### Auto Conductance Hierarchy
 
-The model-selection logic used by `voids` is:
+The default conductance model in `voids` is the conservative
+`generic_poiseuille` baseline. The `auto` model is available when the goal is to
+use the richest conductance information present in a network. Its selection logic is:
 
-1. If `throat.hydraulic_conductance` is already present, trust it.
-2. Else, if conduit lengths and shape data are available, use `valvatne_blunt`.
-3. Else, if throat-only shape data are available, use `valvatne_blunt_throat`.
-4. Else, fall back to `generic_poiseuille`.
+1. If `throat.hydraulic_conductance` is already present, trust it directly; no
+   viscosity is required because the constitutive reduction has already been
+   performed.
+2. Else, if `throat.hydraulic_size_factors` are available, use the
+   OpenPNM-style size-factor model.
+3. Else, if conduit lengths and explicit pore/throat shape data are available, use
+   `valvatne_blunt`.
+4. Else, if conduit lengths and pore/throat areas are available, use
+   `hagen_poiseuille`.
+5. Else, if explicit throat-only shape data are available, use
+   `valvatne_blunt_throat`.
+6. Else, fall back to `generic_poiseuille`.
 
 That hierarchy is scientifically deliberate. It preserves richer geometric
 information when available, while keeping the solver usable on incomplete networks.
+The word "explicit" matters here: `auto` does not classify an area-plus-diameter
+network as shape-aware unless a shape factor or perimeter was actually provided.
+That avoids silently treating circular-equivalent metadata as a resolved angular
+duct model.
+
+Richer does not always mean closer to an experimental permeability target. Image
+extractors may report geometric areas, shape factors, or conduit sub-lengths that
+are useful descriptors but are not independently calibrated hydraulic conductance
+factors. For literature-reference or regression comparisons, select the intended
+model explicitly rather than relying on `auto`.
+
+Precomputed `throat.hydraulic_conductance` is a final hydraulic conductance, not
+a geometric size factor. It is therefore viscosity-inclusive and pressure
+independent inside `voids`: pressure-dependent viscosity models will report local
+viscosity fields, but they will not rescale those precomputed conductances. Use
+`throat.hydraulic_size_factors` or a geometric model when the conductance should
+remain coupled to local viscosity. For constant-viscosity permeability reporting,
+the fluid viscosity passed to the solve should match the reference viscosity
+implicit in the precomputed conductance.
 
 ---
 
@@ -551,5 +655,8 @@ to be tightened before the resulting permeability should be interpreted quantita
   two-phase flow in mixed wet media. *Water Resources Research*, 40(7).
 - Blunt, M. J., et al. (2013). Pore-scale imaging and modelling. *Advances in Water
   Resources*, 51, 197-216.
+- Khan, Z. A., and J. T. Gostick (2024). Enhancing pore network extraction
+  performance via seed-based pore region growing segmentation. *Advances in Water
+  Resources*, 183, 104591. <https://doi.org/10.1016/j.advwatres.2023.104591>
 - `thermo` project documentation: <https://thermo.readthedocs.io/>
 - CoolProp documentation: <https://coolprop.org/>

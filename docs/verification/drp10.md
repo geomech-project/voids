@@ -14,7 +14,7 @@ The reproducible artifact for this report is notebook
 The benchmark answers the following question:
 
 Given the same DRP-10 Estaillades binary image, how closely does the current
-`voids` extraction-plus-PNM workflow reproduce the paper-reference porosity and
+`voids` extraction-plus-PNM workflow reproduce the published-reference porosity and
 absolute permeability?
 
 In this documentation split, DRP-10 is classified as verification because the

@@ -40,6 +40,10 @@ The experimental-validation studies live under [Validation](../validation/index.
 - [DRP-317 Bentheimer notebook report](../validation/drp317_bentheimer.md)
 - [DRP-317 Bandera Gray notebook report](../validation/drp317_banderagray.md)
 
+The DRP-317 pages now report `PoreSpy snow2`, PREGO, and native maximal-ball
+extraction on the same segmented images and transport setup, so they should be
+read as workflow validation plus extraction-backend sensitivity.
+
 ## What Each Side Answers
 
 | Category | Typical reference | Main question | Expected agreement |
@@ -68,3 +72,6 @@ The reproducible software-verification notebook artifacts are:
 - `notebooks/30_mwe_drp443_dilatedifn_raw_porosity_perm.ipynb`
 - `notebooks/31_mwe_drp10_estaillades_raw_porosity_perm.ipynb`, including
   native maximal-ball and `snow2` extraction-backend comparisons
+- `notebooks/32_mwe_prego_blobs_backend_comparison.ipynb`, comparing PoreSpy
+  `snow2`, PREGO, and native maximal-ball extraction on synthetic PoreSpy
+  `blobs` images

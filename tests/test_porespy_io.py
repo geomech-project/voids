@@ -6,6 +6,7 @@ import pytest
 from voids.core.sample import SampleGeometry
 from voids.io.porespy import (
     _apply_imperial_export_geometry_repairs,
+    _derive_missing_conduit_lengths,
     _derive_missing_geometry,
     _ensure_inscribed_size_aliases,
     _imperial_export_random_shape_factors,
@@ -90,6 +91,107 @@ def test_from_porespy_maps_openpnm_aliases_and_derives_fields() -> None:
     assert net.pore_labels["outlet_xmax"].sum() == 1
 
 
+def test_from_porespy_splits_openpnm_conduit_lengths_array() -> None:
+    """A compact OpenPNM-style conduit-length array is split into canonical fields."""
+
+    d = {
+        "pore.coords": np.array([[0, 0, 0], [1, 0, 0]], dtype=float),
+        "throat.conns": np.array([[0, 1]], dtype=int),
+        "pore.radius_inscribed": np.array([1.0, 1.0]),
+        "throat.radius_inscribed": np.array([0.25]),
+        "throat.conduit_lengths": np.array([[0.2, 0.6, 0.2]], dtype=float),
+    }
+
+    net = from_porespy(d, sample=SampleGeometry(bulk_volume=10.0))
+
+    assert np.allclose(net.throat["pore1_length"], [0.2])
+    assert np.allclose(net.throat["core_length"], [0.6])
+    assert np.allclose(net.throat["pore2_length"], [0.2])
+    assert np.allclose(net.throat["length"], [1.0])
+    assert net.extra["conduit_lengths"]["mode"] == "provided_array"
+
+
+def test_from_porespy_rejects_invalid_compact_conduit_lengths_array() -> None:
+    """Compact conduit arrays must be Nt by 3."""
+
+    d = {
+        "pore.coords": np.array([[0, 0, 0], [1, 0, 0]], dtype=float),
+        "throat.conns": np.array([[0, 1]], dtype=int),
+        "pore.radius_inscribed": np.array([1.0, 1.0]),
+        "throat.radius_inscribed": np.array([0.25]),
+        "throat.conduit_lengths": np.array([0.2, 0.6, 0.2], dtype=float),
+    }
+
+    with pytest.raises(ValueError, match="throat.conduit_lengths must have shape"):
+        from_porespy(d, sample=SampleGeometry(bulk_volume=10.0))
+
+
+def test_from_porespy_derives_missing_conduit_lengths_from_sphere_cylinder_geometry() -> None:
+    """PoreSpy region networks get conduit lengths when enough geometry is available."""
+
+    d = {
+        "pore.coords": np.array([[0, 0, 0], [10, 0, 0]], dtype=float),
+        "throat.conns": np.array([[0, 1]], dtype=int),
+        "pore.inscribed_diameter": np.array([4.0, 4.0]),
+        "throat.inscribed_diameter": np.array([2.0]),
+        "throat.total_length": np.array([10.0]),
+        "throat.direct_length": np.array([9.0]),
+        "throat.cross_sectional_area": np.array([np.pi]),
+    }
+
+    net = from_porespy(d, sample=SampleGeometry(bulk_volume=10.0))
+
+    expected_pore_length = np.sqrt(4.0**2 - 2.0**2) / 2.0
+    expected_core_length = 9.0 - 2.0 * expected_pore_length
+    assert np.allclose(net.throat["pore1_length"], [expected_pore_length])
+    assert np.allclose(net.throat["core_length"], [expected_core_length])
+    assert np.allclose(net.throat["pore2_length"], [expected_pore_length])
+    assert np.allclose(net.throat["length"], [10.0])
+    assert net.extra["conduit_lengths"]["mode"] == "spheres_and_cylinders"
+    assert net.extra["conduit_lengths"]["source_length"] == "direct_length"
+
+
+def test_derive_missing_conduit_lengths_uses_coordinate_distance_when_no_length_exists() -> None:
+    """Coordinate distance is the last-resort conduit length source."""
+
+    pore = {"diameter_inscribed": np.array([4.0, 4.0])}
+    throat = {"diameter_inscribed": np.array([2.0])}
+    conns = np.array([[0, 1]], dtype=int)
+    coords = np.array([[0, 0, 0], [8, 0, 0]], dtype=float)
+
+    summary = _derive_missing_conduit_lengths(pore, throat, conns, coords)
+
+    assert summary is not None
+    assert summary["source_length"] == "pore_coords"
+    assert np.allclose(throat["length"], [8.0])
+    assert np.allclose(
+        throat["pore1_length"] + throat["core_length"] + throat["pore2_length"],
+        throat["length"],
+    )
+
+
+def test_derive_missing_conduit_lengths_skips_partial_or_invalid_inputs() -> None:
+    """Partial user data and invalid derived inputs are left untouched."""
+
+    pore = {"diameter_inscribed": np.array([4.0, 4.0])}
+    partial = {
+        "diameter_inscribed": np.array([2.0]),
+        "length": np.array([8.0]),
+        "pore1_length": np.array([1.0]),
+    }
+    invalid = {
+        "diameter_inscribed": np.array([2.0]),
+        "length": np.array([0.0]),
+    }
+    conns = np.array([[0, 1]], dtype=int)
+    coords = np.array([[0, 0, 0], [8, 0, 0]], dtype=float)
+
+    assert _derive_missing_conduit_lengths(pore, partial, conns, coords) is None
+    assert "core_length" not in partial
+    assert _derive_missing_conduit_lengths(pore, invalid, conns, coords) is None
+    assert "core_length" not in invalid
+
+
 def test_scale_porespy_geometry_and_infer_boundaries() -> None:
     """Test voxel-to-physical scaling and simple Cartesian boundary inference."""
 
@@ -99,6 +201,8 @@ def test_scale_porespy_geometry_and_infer_boundaries() -> None:
         "pore.region_volume": np.array([10.0, 12.0]),
         "throat.cross_sectional_area": np.array([3.0]),
         "throat.total_length": np.array([2.0]),
+        "throat.conduit_lengths": np.array([[0.1, 0.8, 0.1]]),
+        "throat.conduit_lengths.pore1": np.array([0.1]),
     }
     scaled = scale_porespy_geometry(d, voxel_size=2.0)
     labeled = ensure_cartesian_boundary_labels(scaled, axes=("x",))
@@ -106,6 +210,8 @@ def test_scale_porespy_geometry_and_infer_boundaries() -> None:
     assert np.allclose(scaled["pore.coords"], [[0.0, 0.0, 0.0], [8.0, 0.0, 0.0]])
     assert np.allclose(scaled["pore.volume"], [80.0, 96.0])
     assert np.allclose(scaled["throat.volume"], [48.0])
+    assert np.allclose(scaled["throat.conduit_lengths"], [[0.2, 1.6, 0.2]])
+    assert np.allclose(scaled["throat.conduit_lengths.pore1"], [0.2])
     assert labeled["pore.inlet_xmin"].tolist() == [True, False]
     assert labeled["pore.outlet_xmax"].tolist() == [False, True]
     assert labeled["pore.boundary"].tolist() == [True, True]

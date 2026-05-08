@@ -12,6 +12,20 @@ from voids.core.provenance import Provenance
 from voids.core.sample import SampleGeometry
 
 
+def _json_default(value: Any) -> Any:
+    """Convert NumPy values that commonly appear in metadata to JSON values."""
+
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
+    raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+
+
 def _write_json_attr(obj: h5py.Group, name: str, value: Any) -> None:
     """Write a JSON-serializable value into an HDF5 attribute.
 
@@ -25,7 +39,7 @@ def _write_json_attr(obj: h5py.Group, name: str, value: Any) -> None:
         JSON-serializable payload.
     """
 
-    obj.attrs[name] = json.dumps(value)
+    obj.attrs[name] = json.dumps(value, default=_json_default)
 
 
 def _read_json_attr(obj: h5py.Group, name: str, default: Any = None) -> Any:

@@ -38,13 +38,17 @@ The current `v0.1.x` implementation includes:
 
 - canonical `Network`, `SampleGeometry`, and `Provenance` data structures
 - import of PoreSpy/OpenPNM-style dictionaries into the canonical model
-- geometry normalization helpers for extracted networks
+- geometry normalization helpers for extracted networks, including optional
+  external-reservoir boundary augmentation for image-extracted flow benchmarks
 - static petrophysics:
   - absolute porosity
   - effective porosity
   - connectivity metrics
 - single-phase incompressible flow with directional permeability estimation
-- shape-aware `valvatne_blunt_throat` and `valvatne_blunt` conductance closures
+- data-adaptive `auto`, OpenPNM size-factor, circular `hagen_poiseuille`, and
+  shape-aware `valvatne_blunt_throat` / `valvatne_blunt` conductance closures
+- optional PoreSpy/PREGO hydraulic size factors for
+  pyramids-and-cuboids conduit transport
 - pressure-dependent water viscosity via `thermo` and `CoolProp`
 - Picard and damped-Newton nonlinear solves for variable-viscosity problems
 - Krylov linear solvers with optional `pyamg` preconditioning
@@ -176,7 +180,7 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
 - `13_mwe_synthetic_volume_xlb_benchmark`
   - synthetic segmented volumes, direct-image XLB solves, extracted-network `voids` solves, and `Kabs` comparison between voxel-scale LBM and PNM
 - `14_mwe_shape_factor_conductance_comparison`
-  - synthetic and extracted-network comparison of conductance closures (`generic_poiseuille`, `valvatne_blunt_throat`, and `valvatne_blunt`) and permeability sensitivity to shape factors
+  - synthetic and extracted-network comparison of circular and shape-aware conductance closures, and permeability sensitivity to shape factors
 - `15_mwe_external_pnflow_benchmark`
   - committed external `pnextract`/`pnflow` reference cases, including explicit same-network parity on the saved CNM and a separate `snow2` workflow comparison on the original images
 - `16_mwe_viscosity_model_kabs_benchmark`
@@ -184,27 +188,35 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
 - `17_mwe_solver_options_benchmark`
   - benchmark of the available linear and nonlinear solver options, including `pyamg`-preconditioned Krylov solves
 - `18_mwe_drp317_berea_raw_porosity_perm`
-  - DRP-317 Berea validation notebook against experimental porosity and permeability
+  - DRP-317 Berea validation notebook with `snow2`, PREGO, and native maximal-ball extraction comparisons
 - `19_mwe_drp317_bentheimer_raw_porosity_perm`
-  - DRP-317 Bentheimer validation notebook against experimental porosity and permeability
+  - DRP-317 Bentheimer validation notebook with `snow2`, PREGO, and native maximal-ball extraction comparisons
 - `20_mwe_drp317_banderagray_raw_porosity_perm`
-  - DRP-317 Bandera Gray validation notebook against experimental porosity and permeability
+  - DRP-317 Bandera Gray validation notebook with `snow2`, PREGO, and native maximal-ball extraction comparisons
 - `21_mwe_drp317_banderabrown_raw_porosity_perm`
-  - DRP-317 Bandera Brown notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Bandera Brown backend-sensitivity notebook against the Table 1 experimental values
 - `22_mwe_drp317_bereasistergray_raw_porosity_perm`
-  - DRP-317 Berea Sister Gray notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Berea Sister Gray backend-sensitivity notebook against the Table 1 experimental values
 - `23_mwe_drp317_bereauppergray_raw_porosity_perm`
-  - DRP-317 Berea Upper Gray notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Berea Upper Gray backend-sensitivity notebook against the Table 1 experimental values
 - `24_mwe_drp317_buffberea_raw_porosity_perm`
-  - DRP-317 Buff Berea notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Buff Berea backend-sensitivity notebook against the Table 1 experimental values
 - `25_mwe_drp317_castlegate_raw_porosity_perm`
-  - DRP-317 Castlegate notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Castlegate backend-sensitivity notebook against the Table 1 experimental values
 - `26_mwe_drp317_kirby_raw_porosity_perm`
-  - DRP-317 Kirby notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Kirby backend-sensitivity notebook against the Table 1 experimental values
 - `27_mwe_drp317_leopard_raw_porosity_perm`
-  - DRP-317 Leopard notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Leopard backend-sensitivity notebook against the Table 1 experimental values
 - `28_mwe_drp317_parker_raw_porosity_perm`
-  - DRP-317 Parker notebook against the Table 1 experimental porosity and permeability values
+  - DRP-317 Parker backend-sensitivity notebook against the Table 1 experimental values
+- `29_mwe_drp443_ifn_raw_porosity_perm`
+  - DRP-443 IFN fractured-media permeability benchmark against SPE 212849 Table 2
+- `30_mwe_drp443_dilatedifn_raw_porosity_perm`
+  - DRP-443 Dilated IFN fractured-media permeability benchmark against SPE 212849 Table 2
+- `31_mwe_drp10_estaillades_raw_porosity_perm`
+  - DRP-10 Estaillades v2 carbonate benchmark with native maximal-ball and `snow2` extraction-backend comparisons
+- `32_mwe_prego_blobs_backend_comparison`
+  - synthetic `256^3` PoreSpy `blobs` comparison of PoreSpy `snow2`, PREGO, and native maximal-ball extraction
 
 Example data under `examples/data/` includes a deterministic manufactured void image and
 generated artifacts from the extraction/mesh notebooks.

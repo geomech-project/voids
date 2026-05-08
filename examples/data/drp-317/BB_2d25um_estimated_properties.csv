@@ -1,9 +1,23 @@
-property,estimated,units,experimental,abs_error,rel_error_pct
-Porosity (image full volume),22.7061513,%,24.02,-1.3138487000000012,-5.469811407160704
-Porosity (network absolute),23.40394074074074,%,24.02,-0.6160592592592593,-2.5647762666913376
-Porosity (network effective),23.40394074074074,%,,,
-Absolute permeability Kx,390.4408172766292,mD,275.0,115.44081727662922,41.978479009683355
-Absolute permeability Ky,314.58186485718255,mD,275.0,39.58186485718255,14.393405402611839
-Absolute permeability Kz,206.55421598823105,mD,275.0,-68.44578401176895,-24.889376004279615
-"Absolute permeability arithmetic mean(Kx,Ky,Kz)",303.8589660406809,mD,275.0,28.85896604068091,10.494169469338514
-Absolute permeability quadratic mean(sqrt(mean(K^2))),313.0870090114342,mD,275.0,38.08700901143419,13.849821458703342
+backend,backend_label,property,estimated,units,experimental,abs_error,rel_error_pct
+image,Binary image,Porosity (image full volume),22.7061513,%,24.02,-1.3138487000000012,-5.469811407160704
+porespy,PoreSpy snow2,Porosity (network absolute),23.40394074074074,%,24.02,-0.6160592592592593,-2.5647762666913376
+porespy,PoreSpy snow2,Porosity (network effective),23.40394074074074,%,,,
+porespy,PoreSpy snow2,Absolute permeability Kx,390.62638463418017,mD,275.0,115.62638463418017,42.04595804879279
+porespy,PoreSpy snow2,Absolute permeability Ky,314.668139569011,mD,275.0,39.668139569010975,14.424778025094898
+porespy,PoreSpy snow2,Absolute permeability Kz,206.71618523190722,mD,275.0,-68.28381476809278,-24.83047809748828
+porespy,PoreSpy snow2,"Absolute permeability arithmetic mean(Kx,Ky,Kz)",304.00356981169944,mD,275.0,29.003569811699435,10.546752658799795
+porespy,PoreSpy snow2,Absolute permeability quadratic mean(sqrt(mean(K^2))),313.22866603011994,mD,275.0,38.22866603011994,13.901333101861796
+prego,PREGO,Porosity (network absolute),22.56084074074074,%,24.02,-1.459159259259259,-6.074767940296666
+prego,PREGO,Porosity (network effective),22.56084074074074,%,,,
+prego,PREGO,Absolute permeability Kx,771.2167105771639,mD,275.0,496.2167105771639,180.4424402098778
+prego,PREGO,Absolute permeability Ky,543.2338511243393,mD,275.0,268.23385112433925,97.53958222703247
+prego,PREGO,Absolute permeability Kz,414.35485907426886,mD,275.0,139.35485907426886,50.67449420882504
+prego,PREGO,"Absolute permeability arithmetic mean(Kx,Ky,Kz)",576.268473591924,mD,275.0,301.268473591924,109.5521722152451
+prego,PREGO,Absolute permeability quadratic mean(sqrt(mean(K^2))),594.8580169304546,mD,275.0,319.8580169304546,116.31200615652895
+native_maximal_ball,Native maximal-ball,Porosity (network absolute),22.560840740740733,%,24.02,-1.4591592592592662,-6.074767940296695
+native_maximal_ball,Native maximal-ball,Porosity (network effective),22.560840740740733,%,,,
+native_maximal_ball,Native maximal-ball,Absolute permeability Kx,200.81409393575163,mD,275.0,-74.18590606424837,-26.976693114272138
+native_maximal_ball,Native maximal-ball,Absolute permeability Ky,298.6369763887191,mD,275.0,23.63697638871912,8.595264141352407
+native_maximal_ball,Native maximal-ball,Absolute permeability Kz,110.55580317820632,mD,275.0,-164.4441968217937,-59.79788975337953
+native_maximal_ball,Native maximal-ball,"Absolute permeability arithmetic mean(Kx,Ky,Kz)",203.33562450089235,mD,275.0,-71.66437549910765,-26.059772908766416
+native_maximal_ball,Native maximal-ball,Absolute permeability quadratic mean(sqrt(mean(K^2))),217.35756225339202,mD,275.0,-57.64243774660798,-20.960886453311993

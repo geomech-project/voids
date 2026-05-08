@@ -217,6 +217,7 @@ refs/
 notebooks/**/*.png
 tmp/
 outputs/
+*.prt
 
 # DRP RAW images (keep local, do not track)
 examples/data/drp-317/*.raw

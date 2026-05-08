@@ -11,6 +11,12 @@ connectivity analysis, and pore network extraction used in vug sensitivity studi
 
 ---
 
+## PREGO Extraction
+
+::: voids.image.prego
+
+---
+
 ## Network Extraction
 
 ::: voids.image.network_extraction

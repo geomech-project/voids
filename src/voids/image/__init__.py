@@ -39,6 +39,14 @@ from voids.image.network_extraction import (
     extract_spanning_pore_network,
     infer_sample_axes,
 )
+from voids.image.prego import (
+    PregoNetworkDictResult,
+    PregoSegmentationResult,
+    PregoSettings,
+    extract_prego_network_dict,
+    prego_partitioning,
+    snow_seed_points,
+)
 from voids.image.segmentation import (
     GrayscaleSegmentationResult,
     VolumeCropResult,
@@ -85,9 +93,15 @@ __all__ = [
     "extract_maximal_ball_candidates",
     "NetworkConstructionResult",
     "NetworkExtractionResult",
+    "PregoNetworkDictResult",
+    "PregoSegmentationResult",
+    "PregoSettings",
     "construct_spanning_network",
+    "extract_prego_network_dict",
     "extract_spanning_pore_network",
     "infer_sample_axes",
+    "prego_partitioning",
+    "snow_seed_points",
     "VolumeCropResult",
     "GrayscaleSegmentationResult",
     "largest_true_rectangle",
