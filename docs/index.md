@@ -9,7 +9,7 @@
 [![Supported OS](https://img.shields.io/badge/OS-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/geomech-project/voids/actions/workflows/tests.yml)
 [![PyPI version](https://img.shields.io/pypi/v/voids)](https://pypi.org/project/voids/)
 [![pip install voids](https://img.shields.io/badge/pip%20install-voids-3775A9?logo=pypi&logoColor=white)](https://pypi.org/project/voids/)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18937647.svg)](https://doi.org/10.5281/zenodo.18937647)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18937646.svg)](https://doi.org/10.5281/zenodo.18937646)
 
 **`voids`** is a scientific Python package for pore network modeling (PNM) aimed at
 research workflows where reproducibility, explicit assumptions, and validation matter.
@@ -101,8 +101,8 @@ Some parts of `voids` were already implemented but easier to miss in the previou
 docs structure because they mostly appeared under the API reference. The most
 important ones are:
 
-- [I/O](api/io.md): HDF5 persistence and import/export helpers for canonical
-  and external network formats
+- [I/O](api/io.md): HDF5 persistence, external network interoperability,
+  image-volume I/O, and surface-mesh export
 - [Image Processing](api/image.md): segmentation helpers, spanning-cluster
   checks, and the native maximal-ball extraction backend
 - [Generators](api/generators.md) and [Examples API](api/examples.md): synthetic

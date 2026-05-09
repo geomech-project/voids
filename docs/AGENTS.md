@@ -19,6 +19,13 @@ guidance when there is a conflict.
 ## Documentation Style
 
 - Prefer precise, scientific wording over marketing language.
+- Avoid overly explicit reference-specific framing in headings and section
+  titles. Prefer method, model, or domain language such as "Micro-CT Grayscale
+  Calibration In The Literature" instead of titles like "Relation To The
+  Petrobras Paper", "Comparison With Paper X", or labels based on local
+  reference folders. Cite the source in the prose and reference list, not in a
+  way that makes the section read like a named-company or local-reference note,
+  unless the page is explicitly a benchmark or validation page for that source.
 - Make assumptions visible:
   - phase convention,
   - geometry convention,
@@ -33,6 +40,11 @@ guidance when there is a conflict.
 ## References And Citations
 
 - Prefer published papers, public datasets, and public package documentation.
+- Do not leave vague source phrases such as "the paper", "this reference",
+  "the sub-resolution porosity paper", or "those papers" in public docs unless
+  the exact source is named in the same sentence or immediately adjacent
+  sentence. Prefer author-year phrasing, with DOI or full bibliographic details
+  in the references section.
 - Do not use ignored local files as citations in tracked docs.
 - Do not rely on local non-distributed source trees to justify public
   scientific claims.
@@ -41,6 +53,14 @@ guidance when there is a conflict.
 
 ## Figures And Schematics
 
+- When public docs explain a procedure, workflow, algorithm, or calculation,
+  try to add a figure, schematic, diagram, or plotted example near the
+  corresponding text. This is especially important for image-to-field
+  workflows, porosity/permeability calculations, generator logic, geometry
+  transformations, and solver input preparation.
+- Use captions or adjacent prose to state the phase convention, geometry
+  convention, and any equations represented by the visual. Do not leave the
+  figure to carry scientific meaning that is not also stated in text.
 - If you create or modify figures, verify them visually.
 - Reject figures that have:
   - overlapping text,

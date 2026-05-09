@@ -188,6 +188,12 @@ If execution is not possible, state the verification gap explicitly.
   directly, document the scientific method or public source used, and keep any
   local-only reference material clearly separated from the public repository
   contract.
+- When documenting a procedure, workflow, algorithm, or calculation, actively
+  consider adding an image, schematic, diagram, or plotted example near the
+  corresponding explanation. Prefer visual aids when they clarify phase
+  conventions, geometry transformations, averaging operations, boundary
+  conditions, or equations. If a visual aid would be misleading, too expensive,
+  or out of scope, keep the prose explicit about the reason.
 - If you change figures or diagrams, visually inspect them for readability,
   overlap, and scientific consistency.
 - If you change docs navigation or generated docs pages, rebuild with

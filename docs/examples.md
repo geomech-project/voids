@@ -64,6 +64,7 @@ In practice:
 | `30_mwe_drp443_dilatedifn_raw_porosity_perm` | Benchmark DRP-443 Dilated IFN fractured-media permeability against SPE 212849 Table 2 (LBM reference) |
 | `31_mwe_drp10_estaillades_raw_porosity_perm` | Benchmark DRP-10 Estaillades v2 carbonate permeability and extraction-backend sensitivity against Muljadi et al. (2016) Table 2 (OpenFOAM reference) |
 | `32_mwe_prego_blobs_backend_comparison` | Compare PoreSpy `snow2`, PREGO, and native maximal-ball extraction on synthetic `256^3` PoreSpy `blobs` images |
+| `33_mwe_synthetic_porosity_maps` | Build local porosity and Kozeny-Carman permeability maps from synthetic `300^3` PoreSpy `blobs` images |
 
 ---
 
@@ -385,6 +386,28 @@ remain available as explicit opt-in settings for runtime-focused comparisons.
 
 The corresponding rendered notebook report is documented in
 [Examples / Notebook Reports / PREGO Synthetic Blob Backend Comparison](notebook_reports/32_mwe_prego_blobs_backend_comparison.md).
+
+---
+
+### 33 - Synthetic Porosity Maps
+
+**`33_mwe_synthetic_porosity_maps`**
+
+This notebook demonstrates the continuum-field porosity-map workflow on a
+synthetic `300^3` PoreSpy `blobs` volume. It computes:
+
+- a binary-image porosity map by block-averaging segmented void fraction,
+- a grayscale-image porosity map using two-point calibration and background
+  porosity,
+- associated Kozeny-Carman permeability maps,
+- HDF5 exports for downstream solver-specific conversion,
+- and a comparison figure for the input slices and local porosity fields.
+
+The grayscale image is a toy partial-volume field derived from the same binary
+image, so the notebook validates workflow mechanics rather than scanner
+calibration for a real micro-CT dataset.
+The full calculation and verification logic is documented in
+[Concepts and Background / Porosity Maps](porosity_maps.md).
 
 ---
 
