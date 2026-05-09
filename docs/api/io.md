@@ -6,6 +6,134 @@ cases.
 
 ---
 
+## Network I/O And Interoperability
+
+`voids` supports network import/export through the canonical `Network` data
+model. The native disk format is an HDF5 schema written by `save_hdf5` and read
+by `load_hdf5`. External network interoperability is handled by adapters that
+normalize topology, geometry aliases, labels, sample metadata, and provenance
+before numerical use.
+
+![Network IO and interoperability workflow](../assets/io/network_io_workflow.png)
+
+### Supported Network Paths
+
+| Path | Direction | Primary API | Notes |
+|---|---|---|---|
+| Canonical HDF5 | read/write | `save_hdf5`, `load_hdf5` | Native `voids` round trip for `Network`, `SampleGeometry`, `Provenance`, labels, properties, and JSON-compatible `extra` metadata |
+| PoreSpy/OpenPNM-style dictionary | import | `from_porespy` | Imports flat mappings with keys such as `pore.coords` and `throat.conns`; common geometry aliases are normalized |
+| PoreSpy voxel-unit geometry | preprocessing | `scale_porespy_geometry` | Converts common length, area, volume, and perimeter fields from voxel units to physical units for isotropic voxels |
+| Cartesian boundary labels | preprocessing | `ensure_cartesian_boundary_labels` | Infers labels such as `pore.inlet_xmin` and `pore.outlet_xmax` from pore coordinates |
+| OpenPNM-style dictionary | export | `to_openpnm_dict` | Exports a `Network` to a flat dictionary suitable for OpenPNM/PoreSpy-style workflows |
+| OpenPNM network object | export | `to_openpnm_network` | Requires optional `openpnm`; constructor handling is version tolerant |
+| Imperial CNM text files | import | `load_pnflow_cnm` | Imports `*_node1.dat`, `*_node2.dat`, `*_link1.dat`, and `*_link2.dat` files into a canonical `Network` |
+
+### Canonical HDF5 Round Trip
+
+Use HDF5 when the goal is a native round trip for later `voids`
+calculations:
+
+```python
+from voids.io import load_hdf5, save_hdf5
+
+save_hdf5(net, "network.h5")
+reloaded = load_hdf5("network.h5")
+```
+
+The HDF5 layout stores the schema version, sample geometry, provenance, pore and
+throat arrays, boolean labels, and JSON-compatible `net.extra` metadata.
+
+### Importing PoreSpy/OpenPNM-Style Networks
+
+PoreSpy and OpenPNM commonly represent networks as flat mappings. The minimal
+required topology keys are `pore.coords` and `throat.conns`:
+
+```python
+from voids.io import (
+    ensure_cartesian_boundary_labels,
+    from_porespy,
+    scale_porespy_geometry,
+)
+
+scaled = scale_porespy_geometry(network_dict, voxel_size=2.5e-6)
+labeled = ensure_cartesian_boundary_labels(scaled, axes=("x",))
+net = from_porespy(labeled, sample=sample, provenance=provenance)
+```
+
+The importer maps common aliases such as `throat.cross_sectional_area`,
+`throat.total_length`, `pore.inscribed_diameter`, and
+`throat.conduit_lengths.*` to canonical `voids` fields. Two-dimensional
+coordinate arrays are embedded in 3-D as `(x, y, 0)`.
+
+### Exporting To OpenPNM-Style Objects
+
+Use `to_openpnm_dict` when a flat mapping is enough:
+
+```python
+from voids.io import to_openpnm_dict
+
+op_dict = to_openpnm_dict(net)
+```
+
+Use `to_openpnm_network` when an actual OpenPNM object is needed:
+
+```python
+from voids.io import to_openpnm_network
+
+op_net = to_openpnm_network(net)
+```
+
+`to_openpnm_network` depends on the optional `openpnm` package. If OpenPNM is
+not installed, use the dictionary export or install the optional stack required
+for the target workflow.
+
+### Importing CNM Text Networks
+
+`load_pnflow_cnm` imports the four-file CNM text layout used by
+`pnextract`/`pnflow` workflows:
+
+```python
+from voids.io import load_pnflow_cnm
+
+imported = load_pnflow_cnm("case_dir/case_name")
+net = imported.net
+```
+
+The `prefix` should omit the `_node1.dat`, `_node2.dat`, `_link1.dat`, and
+`_link2.dat` suffixes. The importer attaches sample lengths, pore/throat
+geometry, boundary labels, and import metadata. It currently supports the
+x-directed boundary convention used by the committed CNM benchmark files.
+
+`voids` does not currently provide a general CNM exporter. For external network
+export, use either canonical HDF5 or the OpenPNM-style dictionary/object
+adapters, depending on the downstream solver.
+
+### Network API Reference
+
+#### HDF5
+
+::: voids.io.hdf5
+
+---
+
+#### PoreSpy Import
+
+::: voids.io.porespy
+
+---
+
+#### OpenPNM Export
+
+::: voids.io.openpnm
+
+---
+
+#### CNM Import
+
+::: voids.io.pnflow_cnm
+
+---
+
 ## Image Volume And Surface Mesh I/O
 
 `voids.io.volume` provides the image-volume import/export surface used by the
@@ -112,21 +240,3 @@ Surface files are geometric interchange files. They do not replace the voxel
 field when voxel-wise phase information is needed.
 
 ::: voids.io.volume
-
----
-
-## HDF5
-
-::: voids.io.hdf5
-
----
-
-## PoreSpy Import
-
-::: voids.io.porespy
-
----
-
-## OpenPNM Interoperability
-
-::: voids.io.openpnm
