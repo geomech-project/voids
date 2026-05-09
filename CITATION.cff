@@ -4,7 +4,6 @@ title: voids
 abstract: "Scientific Python package for pore network modeling (PNM) aimed at research workflows where reproducibility, explicit assumptions, and validation matter."
 version: 0.1.8
 doi: 10.5281/zenodo.18937647
-date-released: "2025-01-01"
 license: LGPL-2.1-only
 url: "https://geomech-project.github.io/voids/"
 repository-code: "https://github.com/geomech-project/voids"
