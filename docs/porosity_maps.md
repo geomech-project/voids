@@ -188,6 +188,32 @@ porosities:
 \phi^{\mathrm{vox}}_{ijk}.
 \]
 
+### Micro-CT Grayscale Calibration In The Literature
+
+Ferreira et al. (2020) used resampled micro-CT images of carbonate plugs to
+construct porosity fields for a two-scale continuum reactive-flow solver.
+The image-to-porosity calculation assigns a pore grayscale threshold to 100%
+porosity, a solid grayscale threshold to a background porosity \(BP\), and
+linearly maps each micro-CT voxel between those endpoints.
+In fractional notation, the same calculation is:
+
+\[
+\epsilon_{\mathrm{voxel}}
+=
+BP
++
+(1-BP)
+\frac{GS_{\mathrm{voxel}}-GS_{\mathrm{solid}}}
+{GS_{\mathrm{pore}}-GS_{\mathrm{solid}}}.
+\]
+
+This is the same two-endpoint linear calibration implemented by
+`calibrated_porosity_from_grayscale`, with `background_porosity` playing the
+role of \(BP\). The additional `block_shape` averaging in `voids` is a separate
+coarsening step: use `block_shape=(1, 1, 1)` when each image voxel is intended
+to become one continuum cell, or use larger blocks when the target solver uses a
+coarser regular grid.
+
 ### Dark-Pore And Bright-Pore Images
 
 The formula does not require pores to be darker than solid.
@@ -267,11 +293,89 @@ This relation is used by `PorosityMap.bulk_volume`,
 
 ---
 
+## Kozeny-Carman Permeability Field
+
+`voids` can also generate an associated permeability field from a porosity map
+using the Kozeny-Carman closure.
+For cell porosity \(\phi\), characteristic length \(d\), and Kozeny constant
+\(C\), the implemented permeability form is:
+
+\[
+k(\phi)
+=
+\frac{d^2 \phi^3}{C(1-\phi)^2},
+\quad 0 < \phi < 1.
+\]
+
+The equivalent inverse-permeability, or Darcy resistance, form is:
+
+\[
+k^{-1}(\phi)
+=
+\frac{C(1-\phi)^2}{d^2\phi^3},
+\quad 0 < \phi < 1.
+\]
+
+The default \(C=180\) is the common packed-sphere Kozeny-Carman value associated
+with the classical Kozeny and Carman packed-bed relation.
+The length \(d\) is a model parameter, not inferred automatically.
+In a sub-resolution porosity interpretation, \(d\) is often tied to the voxel or
+control-volume length scale when no better grain-scale or micropore-scale
+calibration is available, but that choice is empirical and should be tested.
+
+The endpoint limits are:
+
+\[
+\phi=0 \Rightarrow k=0,\quad k^{-1}=\infty,
+\]
+
+\[
+\phi=1 \Rightarrow k=\infty,\quad k^{-1}=0.
+\]
+
+These are mathematical limits. Many external solvers require finite values, so
+`voids` exposes explicit caps and endpoint parameters:
+
+```python
+from voids.image.porosity import permeability_map_from_porosity
+
+permeability = permeability_map_from_porosity(
+    porosity,
+    characteristic_length=4.0e-4,
+    kozeny_constant=180.0,
+    max_permeability=1.0e-8,
+)
+```
+
+The resulting object is a `PermeabilityMap` on the same grid as the input
+porosity map:
+
+```python
+permeability.values          # k field
+permeability.inverse_values  # k^{-1} field for Darcy-Brinkman resistance terms
+permeability.cell_size       # inherited from the porosity map
+```
+
+!!! warning "Closure calibration"
+    The Kozeny-Carman field is a closure model, not a direct measurement.
+    The same porosity map can produce very different permeability fields if
+    \(d\), \(C\), endpoint handling, or caps are changed. For real data, these
+    parameters should be calibrated or at least sensitivity-tested against
+    laboratory permeability, direct numerical simulation, or another reference.
+
+---
+
 ## Exported HDF5 Files
 
 `save_porosity_map_hdf5` writes:
 
 - `/porosity`: the cell-average porosity array,
+- root attribute `schema_version`,
+- root attribute `metadata`, encoded as JSON.
+
+`save_permeability_map_hdf5` writes:
+
+- `/permeability`: the cell-wise permeability array,
 - root attribute `schema_version`,
 - root attribute `metadata`, encoded as JSON.
 
@@ -412,7 +516,37 @@ unchanged.
 
 This verifies the interchange format, not the physical calibration.
 
-### 7. PoreSpy Blob Sanity Check
+### 7. Kozeny-Carman Closure Checks
+
+For the permeability closure, verify the exact interior formula:
+
+\[
+k(\phi)
+=
+\frac{d^2 \phi^3}{C(1-\phi)^2},
+\quad 0<\phi<1,
+\]
+
+and the reciprocal relation:
+
+\[
+k(\phi)k^{-1}(\phi)=1.
+\]
+
+Also verify endpoint behavior:
+
+\[
+\phi=0 \Rightarrow k=0,
+\]
+
+\[
+\phi=1 \Rightarrow k^{-1}=0.
+\]
+
+If finite caps are supplied, verify that the cap is the only reason the output
+differs from the mathematical closure.
+
+### 8. PoreSpy Blob Sanity Check
 
 For a PoreSpy `blobs` realization with target porosity \(\phi_t\), check:
 
@@ -458,20 +592,12 @@ For real datasets, a defensible validation sequence should include:
 
 ---
 
-## Relation To Soulaine Micro-Continuum Papers
+## Relation To Published Micro-Continuum Models
 
 The `voids` porosity-map representation is compatible with the micro-continuum
-porosity fields used by Soulaine and co-workers, but it is not yet a full
-implementation of their Darcy-Brinkman or Darcy-Brinkman-Stokes model.
-
-Two references in `refs/soulaine/` are especially relevant:
-
-- Soulaine et al. (2016), *The Impact of Sub-Resolution Porosity of X-ray
-  Microtomography Images on the Permeability*, DOI:
-  <https://doi.org/10.1007/s11242-016-0690-2>
-- Soulaine and Tchelepi (2016), *Micro-continuum Approach for Pore-Scale
-  Simulation of Subsurface Processes*, DOI:
-  <https://doi.org/10.1007/s11242-016-0701-3>
+porosity fields described by Soulaine and Tchelepi (2016) and Soulaine et al.
+(2016), but it is not yet a full implementation of their Darcy-Brinkman or
+Darcy-Brinkman-Stokes model.
 
 In those papers, the central image-derived field is a local void fraction:
 
@@ -504,13 +630,13 @@ axis order, and physical units are aligned with that solver.
 
 The important difference is what `voids` currently does with the field.
 
-| Aspect | `voids` porosity map | Soulaine micro-continuum model |
+| Aspect | `voids` porosity map | Published micro-continuum model |
 |---|---|---|
 | Main field | Cell-average porosity \(\phi\) | Void fraction \(\epsilon_f\) or microporosity \(\epsilon_{\mathrm{micro}}\) |
 | Binary image route | Block-average of a resolved void indicator | Compatible with a filtered control-volume porosity |
 | Grayscale route | Linear grayscale-to-porosity calibration, then block average | Compatible only if calibration matches the image-processing assumptions |
 | Flow equations | Not solved by this feature | Darcy-Brinkman or Darcy-Brinkman-Stokes single-domain solve |
-| Permeability closure | Not yet included | Required, often \(k=k(\epsilon)\), for example Kozeny-Carman-style |
+| Permeability closure | Optional Kozeny-Carman \(k(\phi)\) and \(k^{-1}(\phi)\) field generation | Required, commonly specified as a porosity-dependent \(k=k(\epsilon)\) relation |
 | Free-flow handling | Stored only as \(\phi=1\) cells | Solver switches toward Stokes/Navier-Stokes behavior |
 | Porous/no-flow handling | Stored only as \(\phi=0\) or \(0<\phi<1\) cells | Solver gives high resistance or no flow depending on closure |
 
@@ -556,23 +682,46 @@ However, the physical interpretation changes:
 - so the permeability closure should be chosen for the chosen filter scale, not
   blindly copied from a voxel-scale model.
 
-### What Would Be Needed For Full Soulaine-Style Compatibility
+### What Would Be Needed For Full Model Compatibility
 
-To move from a compatible porosity field to a Soulaine-style solver input, the
-next pieces are:
+To move from compatible porosity and permeability fields to a solver input for
+the published micro-continuum formulations, the next pieces are:
 
-1. a documented \(\phi \mapsto k\) or \(\phi \mapsto k^{-1}\) closure,
-2. optional lower/upper clamps for \(\phi=0\) and \(\phi=1\) depending on the
+1. optional lower/upper clamps for \(\phi=0\) and \(\phi=1\) depending on the
    external solver formulation,
-3. explicit cell ordering and axis convention for the target solver,
-4. solver-specific export, for example OpenFOAM scalar fields for porosity and
+2. explicit cell ordering and axis convention for the target solver,
+3. solver-specific export, for example OpenFOAM scalar fields for porosity and
    permeability,
-5. validation against known synthetic cases before real micro-CT data.
+4. validation against known synthetic cases before real micro-CT data.
 
 So the safest statement is:
 
 !!! summary
     `voids` now computes a porosity field that is mathematically compatible with
-    the \(\epsilon_f\) field used in Soulaine-style micro-continuum models.
+    the \(\epsilon_f\) field used in published micro-continuum models, and
+    it can derive an associated Kozeny-Carman permeability or inverse-permeability
+    field.
     It does not yet implement the associated Darcy-Brinkman-Stokes equations or
-    the required porosity-permeability closure.
+    a solver-specific field export.
+
+## References
+
+- Ferreira, L. P., Surmas, R., Tonietto, S. N., Silva, M. A. P., Peçanha,
+  R. P. (2020). *Modeling reactive flow on carbonates with realistic porosity
+  and permeability fields*. Advances in Water Resources, 139, 103564.
+  <https://doi.org/10.1016/j.advwatres.2020.103564>
+- Kozeny, J. (1927). *Uber kapillare Leitung des Wassers im Boden*.
+  Sitzungsberichte der Akademie der Wissenschaften in Wien,
+  Mathematisch-Naturwissenschaftliche Klasse, 136(2a), 271-306.
+  <https://www.zobodat.at/publikation_articles.php?id=185297>
+- Carman, P. C. (1937). *Fluid flow through granular beds*.
+  Transactions of the Institution of Chemical Engineers, 15, 150-166.
+  Reprinted in Chemical Engineering Research and Design, 75, S32-S48.
+  <https://doi.org/10.1016/S0263-8762(97)80003-2>
+- Soulaine, C., Tchelepi, H. A. (2016). *Micro-continuum Approach for
+  Pore-Scale Simulation of Subsurface Processes*. Transport in Porous Media.
+  <https://doi.org/10.1007/s11242-016-0701-3>
+- Soulaine, C., Gjetvaj, F., Garing, C., Roman, S., Russian, A., Gouze, P.,
+  Tchelepi, H. A. (2016). *The Impact of Sub-Resolution Porosity of X-ray
+  Microtomography Images on the Permeability*. Transport in Porous Media,
+  113(1). <https://doi.org/10.1007/s11242-016-0690-2>

@@ -18,7 +18,9 @@
 # - local porosity cells are rectangular block averages on the image grid
 # - the grayscale calibration assumes a linear relation between intensity and
 #   porosity between `solid_gray` and `pore_gray`
-# - exported HDF5 files contain porosity fields and metadata, not a full FEM mesh
+# - the Kozeny-Carman permeability field is an illustrative closure, not a
+#   calibrated rock property
+# - exported HDF5 files contain fields and metadata, not a full FEM mesh
 #
 # See `docs/porosity_maps.md` for the full `block_shape` definition, formulas,
 # and synthetic verification plan.
@@ -40,9 +42,12 @@ except ImportError:  # pragma: no cover - notebook convenience fallback
     display = print
 
 from voids.image.porosity import (
+    load_permeability_map_hdf5,
     load_porosity_map_hdf5,
+    permeability_map_from_porosity,
     porosity_map_from_binary,
     porosity_map_from_grayscale,
+    save_permeability_map_hdf5,
     save_porosity_map_hdf5,
 )
 
@@ -81,6 +86,8 @@ pore_gray = 35.0
 background_porosity = 0.05
 noise_sigma = 6.0
 blur_sigma = 1.0
+kozeny_constant = 180.0
+max_permeability_m2 = 1.0e-8
 
 output_dir
 
@@ -192,6 +199,142 @@ summary = pd.DataFrame(
 display(summary)
 
 # %% [markdown]
+# ## Generate associated Kozeny-Carman permeability maps
+#
+# A Darcy-Brinkman or micro-continuum solver usually needs both porosity and a
+# permeability or resistance field. Here we use the Kozeny-Carman closure
+#
+# \[
+# k(\phi) = \frac{d^2\phi^3}{C(1-\phi)^2}
+# \]
+#
+# with \(C=180\). For this notebook, \(d\) is chosen as the porosity-map cell
+# size. This is a transparent demonstration choice, not a calibrated rock
+# parameter.
+
+# %%
+kc_characteristic_length_m = min(binary_porosity.cell_size)
+
+binary_permeability = permeability_map_from_porosity(
+    binary_porosity,
+    characteristic_length=kc_characteristic_length_m,
+    kozeny_constant=kozeny_constant,
+    max_permeability=max_permeability_m2,
+    metadata={"closure_note": "synthetic demonstration"},
+)
+grayscale_permeability = permeability_map_from_porosity(
+    grayscale_porosity,
+    characteristic_length=kc_characteristic_length_m,
+    kozeny_constant=kozeny_constant,
+    max_permeability=max_permeability_m2,
+    metadata={"closure_note": "synthetic demonstration"},
+)
+
+permeability_summary = pd.DataFrame(
+    [
+        {
+            "map": "binary_KC",
+            "characteristic_length_m": kc_characteristic_length_m,
+            "finite_mean_k_m2": binary_permeability.finite_mean_permeability,
+            "min_k_m2": float(np.nanmin(binary_permeability.values)),
+            "max_k_m2": float(np.nanmax(binary_permeability.values)),
+        },
+        {
+            "map": "grayscale_KC",
+            "characteristic_length_m": kc_characteristic_length_m,
+            "finite_mean_k_m2": grayscale_permeability.finite_mean_permeability,
+            "min_k_m2": float(np.nanmin(grayscale_permeability.values)),
+            "max_k_m2": float(np.nanmax(grayscale_permeability.values)),
+        },
+    ]
+)
+display(permeability_summary)
+
+# %% [markdown]
+# ## Permeability-field plots
+#
+# Permeability fields often span several orders of magnitude, and the binary
+# closure contains exact zero-permeability solid cells. The slice plots below
+# therefore show `log10(k)` only where `k > 0`; black pixels correspond to
+# zero, infinite, or non-finite values that should be handled explicitly before
+# exporting to a solver that requires finite coefficients.
+
+# %%
+
+
+def _log10_positive(values: np.ndarray) -> np.ndarray:
+    log_values = np.full(values.shape, np.nan, dtype=float)
+    positive = np.isfinite(values) & (values > 0.0)
+    log_values[positive] = np.log10(values[positive])
+    return log_values
+
+
+binary_log_k = _log10_positive(binary_permeability.values)
+grayscale_log_k = _log10_positive(grayscale_permeability.values)
+mid_cell = binary_porosity.shape[0] // 2
+finite_log_k = np.concatenate(
+    [
+        binary_log_k[np.isfinite(binary_log_k)],
+        grayscale_log_k[np.isfinite(grayscale_log_k)],
+    ]
+)
+log_k_min, log_k_max = np.percentile(finite_log_k, [1.0, 99.0])
+
+k_cmap = plt.get_cmap("viridis").copy()
+k_cmap.set_bad(color="black")
+
+fig_k, axes = plt.subplots(2, 2, figsize=(10, 8), constrained_layout=True)
+
+im = axes[0, 0].imshow(
+    binary_log_k[mid_cell],
+    vmin=log_k_min,
+    vmax=log_k_max,
+    cmap=k_cmap,
+    origin="lower",
+)
+axes[0, 0].set_title("Binary log10(k)")
+axes[0, 0].set_axis_off()
+fig_k.colorbar(im, ax=axes[0, 0], fraction=0.046, pad=0.04)
+
+im = axes[0, 1].imshow(
+    grayscale_log_k[mid_cell],
+    vmin=log_k_min,
+    vmax=log_k_max,
+    cmap=k_cmap,
+    origin="lower",
+)
+axes[0, 1].set_title("Grayscale log10(k)")
+axes[0, 1].set_axis_off()
+fig_k.colorbar(im, ax=axes[0, 1], fraction=0.046, pad=0.04)
+
+log_k_delta = grayscale_log_k - binary_log_k
+delta_abs = np.nanpercentile(np.abs(log_k_delta), 99.0)
+im = axes[1, 0].imshow(
+    log_k_delta[mid_cell],
+    vmin=-delta_abs,
+    vmax=delta_abs,
+    cmap="coolwarm",
+    origin="lower",
+)
+axes[1, 0].set_title("Grayscale - binary log10(k)")
+axes[1, 0].set_axis_off()
+fig_k.colorbar(im, ax=axes[1, 0], fraction=0.046, pad=0.04)
+
+axes[1, 1].hist(binary_log_k[np.isfinite(binary_log_k)], alpha=0.6, label="binary")
+axes[1, 1].hist(
+    grayscale_log_k[np.isfinite(grayscale_log_k)],
+    alpha=0.6,
+    label="grayscale",
+)
+axes[1, 1].set_xlabel("log10(k / m^2)")
+axes[1, 1].set_ylabel("cell count")
+axes[1, 1].legend()
+
+permeability_figure_path = output_dir / "synthetic_kozeny_carman_permeability_maps.png"
+fig_k.savefig(permeability_figure_path, dpi=180)
+permeability_figure_path
+
+# %% [markdown]
 # ## Visual comparison
 #
 # The maps have `300^3` input voxels and `30^3` porosity cells. The middle
@@ -249,24 +392,34 @@ figure_path
 # ## Export for downstream continuum workflows
 #
 # The current export is a compact HDF5 file with the cell-average porosity array
-# and metadata. This is not yet a solver-specific FEM export, but it gives a
-# stable field file that can be converted to OpenFOAM, XDMF, VTK, or another
+# and metadata. This is not yet a solver-specific FEM export, but it gives
+# stable field files that can be converted to OpenFOAM, XDMF, VTK, or another
 # mesh/cell ordering once that target is chosen.
 
 # %%
 binary_h5 = output_dir / "binary_porosity_map.h5"
 grayscale_h5 = output_dir / "grayscale_porosity_map.h5"
+binary_k_h5 = output_dir / "binary_kozeny_carman_permeability_map.h5"
+grayscale_k_h5 = output_dir / "grayscale_kozeny_carman_permeability_map.h5"
 
 save_porosity_map_hdf5(binary_porosity, binary_h5)
 save_porosity_map_hdf5(grayscale_porosity, grayscale_h5)
+save_permeability_map_hdf5(binary_permeability, binary_k_h5)
+save_permeability_map_hdf5(grayscale_permeability, grayscale_k_h5)
 
 binary_loaded = load_porosity_map_hdf5(binary_h5)
 grayscale_loaded = load_porosity_map_hdf5(grayscale_h5)
+binary_k_loaded = load_permeability_map_hdf5(binary_k_h5)
+grayscale_k_loaded = load_permeability_map_hdf5(grayscale_k_h5)
 
 assert np.allclose(binary_loaded.values, binary_porosity.values)
 assert np.allclose(grayscale_loaded.values, grayscale_porosity.values)
+assert np.allclose(binary_k_loaded.values, binary_permeability.values)
+assert np.allclose(grayscale_k_loaded.values, grayscale_permeability.values)
 assert binary_loaded.cell_size == binary_porosity.cell_size
 assert grayscale_loaded.cell_size == grayscale_porosity.cell_size
+assert binary_k_loaded.cell_size == binary_permeability.cell_size
+assert grayscale_k_loaded.cell_size == grayscale_permeability.cell_size
 
 exports = pd.DataFrame(
     [
@@ -281,8 +434,23 @@ exports = pd.DataFrame(
             "mean_phi": grayscale_loaded.mean_porosity,
         },
         {
+            "artifact": "binary Kozeny-Carman permeability map",
+            "path": str(binary_k_h5.relative_to(project_root)),
+            "mean_phi": np.nan,
+        },
+        {
+            "artifact": "grayscale Kozeny-Carman permeability map",
+            "path": str(grayscale_k_h5.relative_to(project_root)),
+            "mean_phi": np.nan,
+        },
+        {
             "artifact": "comparison figure",
             "path": str(figure_path.relative_to(project_root)),
+            "mean_phi": np.nan,
+        },
+        {
+            "artifact": "permeability comparison figure",
+            "path": str(permeability_figure_path.relative_to(project_root)),
             "mean_phi": np.nan,
         },
     ]
