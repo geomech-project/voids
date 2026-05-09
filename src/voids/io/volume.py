@@ -396,7 +396,8 @@ def save_volume(
         return out
 
     if fmt == "nc":
-        stored = arr.astype(np.int16, copy=False) if arr.dtype in {bool, np.dtype("uint8")} else arr
+        needs_signed_storage = arr.dtype == np.dtype(bool) or arr.dtype == np.dtype("uint8")
+        stored = arr.astype(np.int16, copy=False) if needs_signed_storage else arr
         with netcdf_file(out, "w") as f:
             for axis, size in enumerate(stored.shape):
                 f.createDimension(f"dim_{axis}", int(size))

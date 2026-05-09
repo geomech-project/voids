@@ -157,14 +157,15 @@ def test_volume_bundle_exports_voxels_and_surfaces(tmp_path) -> None:
         volume,
         tmp_path,
         stem="toy",
-        formats=("raw", "npy", "h5", "stl", "obj"),
+        formats=("raw", "npy", "h5", "nc", "stl", "obj"),
         metadata={"kind": "macro_micro_test"},
     )
 
-    assert set(written) == {"raw", "npy", "h5", "stl", "obj"}
+    assert set(written) == {"raw", "npy", "h5", "nc", "stl", "obj"}
     assert all(path.exists() for path in written.values())
     assert (tmp_path / "toy.raw.json").exists()
     assert np.array_equal(load_volume(written["npy"]), volume)
+    assert np.array_equal(load_volume(written["nc"]).astype(bool), volume)
     assert load_surface_mesh(written["obj"]).faces.size > 0
 
 
