@@ -53,6 +53,14 @@ guidance when there is a conflict.
 
 ## Figures And Schematics
 
+- When public docs explain a procedure, workflow, algorithm, or calculation,
+  try to add a figure, schematic, diagram, or plotted example near the
+  corresponding text. This is especially important for image-to-field
+  workflows, porosity/permeability calculations, generator logic, geometry
+  transformations, and solver input preparation.
+- Use captions or adjacent prose to state the phase convention, geometry
+  convention, and any equations represented by the visual. Do not leave the
+  figure to carry scientific meaning that is not also stated in text.
 - If you create or modify figures, verify them visually.
 - Reject figures that have:
   - overlapping text,
