@@ -19,6 +19,13 @@ guidance when there is a conflict.
 ## Documentation Style
 
 - Prefer precise, scientific wording over marketing language.
+- Avoid overly explicit reference-specific framing in headings and section
+  titles. Prefer method, model, or domain language such as "Micro-CT Grayscale
+  Calibration In The Literature" instead of titles like "Relation To The
+  Petrobras Paper", "Comparison With Paper X", or labels based on local
+  reference folders. Cite the paper in the prose and reference list, not in a
+  way that makes the section read like a named-company or local-reference note,
+  unless the page is explicitly a benchmark or validation page for that source.
 - Make assumptions visible:
   - phase convention,
   - geometry convention,
