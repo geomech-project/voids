@@ -299,3 +299,59 @@ assert np.array_equal(reloaded.values.astype(bool), case.void)
 print("Reloaded TIFF shape:", reloaded.shape)
 print("Reloaded voxel size:", reloaded.voxel_size, reloaded.units)
 print("Reloaded porosity:", float(reloaded.values.astype(bool).mean()))
+
+# %% [markdown]
+# ## Compare original and reloaded slices
+#
+# The comparison below plots the original combined void mask, the reloaded TIFF
+# mask, and their mismatch mask for the same representative slices. A fully
+# white mismatch row means the exported/reloaded binary image is identical to
+# the generated image for those slices; the array equality assertion above
+# verifies this for the full 3-D volume.
+
+# %%
+reloaded_void = reloaded.values.astype(bool)
+mismatch = np.logical_xor(case.void, reloaded_void)
+mismatch_count = int(np.count_nonzero(mismatch))
+mismatch_cmap = ListedColormap(["#f5f5f5", "#d62728"])
+
+fig, axes = plt.subplots(
+    3,
+    len(slice_indices),
+    figsize=(12, 9),
+    constrained_layout=True,
+)
+fig.suptitle(
+    f"Original vs reloaded TIFF comparison (mismatch voxels = {mismatch_count})",
+    fontsize=14,
+)
+
+for column, index in enumerate(slice_indices):
+    axes[0, column].imshow(case.void[index], cmap="gray_r", interpolation="nearest")
+    axes[0, column].set_title(f"original\naxis-0 slice {index}")
+    axes[0, column].set_axis_off()
+
+    axes[1, column].imshow(
+        reloaded_void[index],
+        cmap="gray_r",
+        interpolation="nearest",
+    )
+    axes[1, column].set_title(f"reloaded TIFF\naxis-0 slice {index}")
+    axes[1, column].set_axis_off()
+
+    axes[2, column].imshow(
+        mismatch[index],
+        cmap=mismatch_cmap,
+        vmin=0,
+        vmax=1,
+        interpolation="nearest",
+    )
+    axes[2, column].set_title("mismatch mask")
+    axes[2, column].set_axis_off()
+
+comparison_figure = output_dir / "macro_micro_reloaded_comparison.png"
+fig.savefig(comparison_figure, dpi=180, bbox_inches="tight")
+plt.show()
+
+print("Mismatch voxels:", mismatch_count)
+print("Saved reload comparison:", _relative_to_root(comparison_figure, project_root))
