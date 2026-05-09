@@ -6,11 +6,17 @@ import h5py
 
 from voids.image import porosity as pmap
 from voids.image.porosity import (
+    PermeabilityMap,
     PorosityMap,
     calibrated_porosity_from_grayscale,
+    kozeny_carman_inverse_permeability,
+    kozeny_carman_permeability,
+    load_permeability_map_hdf5,
     load_porosity_map_hdf5,
+    permeability_map_from_porosity,
     porosity_map_from_binary,
     porosity_map_from_grayscale,
+    save_permeability_map_hdf5,
     save_porosity_map_hdf5,
 )
 
@@ -285,3 +291,191 @@ def test_private_metadata_and_block_helpers_cover_defensive_branches(tmp_path) -
 
     with pytest.raises(ValueError, match="length"):
         pmap._block_mean(np.ones((2, 2)), block_shape=(1,), strict=True)
+
+
+def test_kozeny_carman_permeability_handles_endpoint_limits() -> None:
+    """The permeability closure preserves the solid and free-flow limits."""
+
+    phi = np.array([[0.0, 0.5, 1.0]])
+
+    permeability = kozeny_carman_permeability(
+        phi,
+        characteristic_length=2.0,
+        kozeny_constant=180.0,
+    )
+
+    assert permeability[0, 0] == 0.0
+    assert np.isclose(permeability[0, 1], 2.0**2 * 0.5**3 / (180.0 * 0.5**2))
+    assert np.isposinf(permeability[0, 2])
+
+
+def test_kozeny_carman_permeability_supports_caps_and_custom_endpoints() -> None:
+    """Solver-facing permeability caps are explicit closure parameters."""
+
+    phi = np.array([[0.0, 0.5, 1.0]])
+
+    permeability = kozeny_carman_permeability(
+        phi,
+        characteristic_length=2.0e-6,
+        solid_permeability=1.0e-18,
+        free_flow_permeability=1.0e-6,
+        max_permeability=1.0e-8,
+    )
+
+    assert permeability[0, 0] == 1.0e-18
+    assert np.isclose(permeability[0, 1], (2.0e-6) ** 2 * 0.5**3 / (180.0 * 0.5**2))
+    assert permeability[0, 2] == 1.0e-8
+
+
+def test_kozeny_carman_inverse_permeability_matches_reciprocal_limits() -> None:
+    """The inverse closure is the Darcy-Brinkman resistance form."""
+
+    phi = np.array([[0.0, 0.5, 1.0]])
+
+    inverse = kozeny_carman_inverse_permeability(
+        phi,
+        characteristic_length=2.0,
+        kozeny_constant=180.0,
+    )
+
+    assert np.isposinf(inverse[0, 0])
+    assert np.isclose(inverse[0, 1], 180.0 * 0.5**2 / (2.0**2 * 0.5**3))
+    assert inverse[0, 2] == 0.0
+
+    capped = kozeny_carman_inverse_permeability(
+        phi,
+        characteristic_length=2.0,
+        kozeny_constant=180.0,
+        max_inverse_permeability=50.0,
+    )
+
+    assert np.allclose(capped, [[50.0, 50.0, 0.0]])
+
+
+def test_kozeny_carman_closure_rejects_invalid_parameters() -> None:
+    """Closure constants and endpoint caps are part of the physical model."""
+
+    phi = np.array([[0.5]])
+
+    with pytest.raises(ValueError, match="characteristic_length"):
+        kozeny_carman_permeability(phi, characteristic_length=0.0)
+    with pytest.raises(ValueError, match="kozeny_constant"):
+        kozeny_carman_permeability(phi, characteristic_length=1.0, kozeny_constant=0.0)
+    with pytest.raises(ValueError, match="solid_permeability"):
+        kozeny_carman_permeability(
+            phi,
+            characteristic_length=1.0,
+            solid_permeability=-1.0,
+        )
+    with pytest.raises(ValueError, match="free_flow_permeability"):
+        kozeny_carman_permeability(
+            phi,
+            characteristic_length=1.0,
+            free_flow_permeability=np.nan,
+        )
+    with pytest.raises(ValueError, match="max_permeability"):
+        kozeny_carman_permeability(
+            phi,
+            characteristic_length=1.0,
+            max_permeability=np.inf,
+        )
+    with pytest.raises(ValueError, match="solid_inverse_permeability"):
+        kozeny_carman_inverse_permeability(
+            phi,
+            characteristic_length=1.0,
+            solid_inverse_permeability=np.nan,
+        )
+    with pytest.raises(ValueError, match="free_flow_inverse_permeability"):
+        kozeny_carman_inverse_permeability(
+            phi,
+            characteristic_length=1.0,
+            free_flow_inverse_permeability=np.inf,
+        )
+    with pytest.raises(ValueError, match="max_inverse_permeability"):
+        kozeny_carman_inverse_permeability(
+            phi,
+            characteristic_length=1.0,
+            max_inverse_permeability=0.0,
+        )
+
+
+def test_permeability_map_from_porosity_preserves_grid_metadata() -> None:
+    """A permeability map is tied to the porosity-map grid metadata."""
+
+    porosity = PorosityMap(
+        values=np.array([[0.25, 0.75]]),
+        cell_size=(2.0e-6, 3.0e-6),
+        origin=(1.0e-6, 2.0e-6),
+        metadata={"case": "toy"},
+    )
+
+    permeability = permeability_map_from_porosity(
+        porosity,
+        characteristic_length=2.0e-6,
+        max_permeability=1.0e-9,
+        metadata={"closure_note": "synthetic"},
+    )
+
+    expected = kozeny_carman_permeability(
+        porosity.values,
+        characteristic_length=2.0e-6,
+        max_permeability=1.0e-9,
+    )
+    assert np.allclose(permeability.values, expected)
+    assert permeability.cell_size == porosity.cell_size
+    assert permeability.origin == porosity.origin
+    assert permeability.units == {"length": "m", "permeability": "m^2"}
+    assert permeability.metadata["source_kind"] == "kozeny_carman_permeability"
+    assert permeability.metadata["porosity_source_metadata"] == {"case": "toy"}
+    assert permeability.metadata["closure_note"] == "synthetic"
+
+
+def test_permeability_map_inverse_values_and_finite_mean() -> None:
+    """The map wrapper exposes reciprocal resistance values for DBS solvers."""
+
+    permeability = PermeabilityMap(values=np.array([[0.0, 2.0], [np.inf, 4.0]]))
+
+    assert np.allclose(permeability.inverse_values, [[np.inf, 0.5], [0.0, 0.25]])
+    assert np.isclose(permeability.finite_mean_permeability, 2.0)
+    assert permeability.shape == (2, 2)
+    assert permeability.ndim == 2
+
+    all_free = PermeabilityMap(values=np.array([[np.inf]]))
+    assert np.isnan(all_free.finite_mean_permeability)
+
+
+def test_permeability_map_hdf5_roundtrip(tmp_path) -> None:
+    """HDF5 export preserves Kozeny-Carman field values and metadata."""
+
+    permeability = PermeabilityMap(
+        values=np.array([[1.0e-15, 2.0e-15]]),
+        cell_size=(4.0e-4, 4.0e-4),
+        origin=(0.0, 1.0),
+        metadata={"source_kind": "kozeny_carman_permeability", "raw": np.array([1])},
+    )
+    path = tmp_path / "toy_permeability.h5"
+
+    save_permeability_map_hdf5(permeability, path)
+    loaded = load_permeability_map_hdf5(path)
+
+    assert np.allclose(loaded.values, permeability.values)
+    assert loaded.cell_size == permeability.cell_size
+    assert loaded.origin == permeability.origin
+    assert loaded.metadata == {"source_kind": "kozeny_carman_permeability", "raw": [1]}
+
+
+def test_permeability_map_validation_and_schema_errors(tmp_path) -> None:
+    """Permeability fields reject negative/NaN values and unknown schemas."""
+
+    with pytest.raises(ValueError, match="nonnegative"):
+        PermeabilityMap(values=np.array([[-1.0]]))
+    with pytest.raises(ValueError, match="NaN"):
+        PermeabilityMap(values=np.array([[np.nan]]))
+
+    path = tmp_path / "bad_permeability_schema.h5"
+    with h5py.File(path, "w") as f:
+        f.attrs["schema_version"] = np.bytes_("unknown")
+        f.create_dataset("permeability", data=np.array([[1.0e-15]]))
+
+    with pytest.raises(ValueError, match="Unsupported"):
+        load_permeability_map_hdf5(path)

@@ -12,6 +12,7 @@ import numpy as np
 from voids.image._utils import normalize_shape
 
 _SCHEMA_VERSION = "voids.porosity_map.v1"
+_PERMEABILITY_SCHEMA_VERSION = "voids.permeability_map.v1"
 
 
 def _json_default(value: Any) -> Any:
@@ -77,6 +78,29 @@ def _normalize_origin(origin: Sequence[float] | None, *, ndim: int) -> tuple[flo
     return result
 
 
+def _normalize_positive_scalar(value: float, *, name: str) -> float:
+    """Normalize a positive scalar physical or closure parameter."""
+
+    result = float(value)
+    if not np.isfinite(result) or result <= 0.0:
+        raise ValueError(f"{name} must be finite and positive")
+    return result
+
+
+def _normalize_nonnegative_scalar(
+    value: float,
+    *,
+    name: str,
+    allow_inf: bool = False,
+) -> float:
+    """Normalize a nonnegative scalar, optionally allowing infinity."""
+
+    result = float(value)
+    if np.isnan(result) or result < 0.0 or (not allow_inf and not np.isfinite(result)):
+        raise ValueError(f"{name} must be nonnegative" + (" or infinity" if allow_inf else ""))
+    return result
+
+
 def _validate_porosity_values(values: np.ndarray) -> np.ndarray:
     """Return a validated 2D or 3D porosity field."""
 
@@ -86,6 +110,18 @@ def _validate_porosity_values(values: np.ndarray) -> np.ndarray:
         raise ValueError("porosity values must be finite")
     if np.any((arr < 0.0) | (arr > 1.0)):
         raise ValueError("porosity values must lie in [0, 1]")
+    return arr
+
+
+def _validate_permeability_values(values: np.ndarray) -> np.ndarray:
+    """Return a validated 2D or 3D permeability field."""
+
+    arr = np.asarray(values, dtype=float)
+    normalize_shape(arr.shape, allowed_ndim=(2, 3))
+    if np.any(np.isnan(arr)):
+        raise ValueError("permeability values must not be NaN")
+    if np.any(arr < 0.0):
+        raise ValueError("permeability values must be nonnegative")
     return arr
 
 
@@ -240,6 +276,98 @@ class PorosityMap:
         )
 
 
+@dataclass(slots=True)
+class PermeabilityMap:
+    """Cell-wise permeability field paired with a continuum porosity map.
+
+    Parameters
+    ----------
+    values :
+        Two- or three-dimensional permeability field. Values are interpreted in
+        the square of the length unit recorded in ``units``.
+    cell_size :
+        Scalar or per-axis cell side length in physical units.
+    origin :
+        Physical coordinate of the lower corner of the first cell.
+    units :
+        Unit metadata for reporting and serialization.
+    metadata :
+        Additional JSON-serializable provenance and closure metadata.
+    """
+
+    values: np.ndarray
+    cell_size: float | Sequence[float] = 1.0
+    origin: Sequence[float] | None = None
+    units: dict[str, str] = field(default_factory=lambda: {"length": "m", "permeability": "m^2"})
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Normalize and validate permeability-map fields."""
+
+        values = _validate_permeability_values(self.values)
+        self.values = values
+        self.cell_size = _normalize_positive_tuple(
+            self.cell_size,
+            ndim=values.ndim,
+            name="cell_size",
+        )
+        self.origin = _normalize_origin(self.origin, ndim=values.ndim)
+        self.units = {str(k): str(v) for k, v in self.units.items()}
+        self.metadata = dict(self.metadata)
+
+    @property
+    def ndim(self) -> int:
+        """Return the spatial dimensionality of the permeability map."""
+
+        return int(self.values.ndim)
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Return the cell-count shape of the permeability map."""
+
+        return tuple(int(v) for v in self.values.shape)
+
+    @property
+    def finite_mean_permeability(self) -> float:
+        """Return the arithmetic mean over finite permeability values."""
+
+        finite = self.values[np.isfinite(self.values)]
+        if finite.size == 0:
+            return float("nan")
+        return float(np.mean(finite))
+
+    @property
+    def inverse_values(self) -> np.ndarray:
+        """Return the inverse permeability field with reciprocal endpoint limits."""
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.asarray(np.reciprocal(self.values), dtype=float)
+
+    def to_metadata(self) -> dict[str, Any]:
+        """Serialize map metadata without the permeability array."""
+
+        return {
+            "schema_version": _PERMEABILITY_SCHEMA_VERSION,
+            "shape": self.shape,
+            "cell_size": self.cell_size,
+            "origin": self.origin,
+            "units": self.units,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_metadata(cls, values: np.ndarray, metadata: dict[str, Any]) -> "PermeabilityMap":
+        """Reconstruct a permeability map from values and serialized metadata."""
+
+        return cls(
+            values=values,
+            cell_size=metadata.get("cell_size", 1.0),
+            origin=metadata.get("origin"),
+            units={str(k): str(v) for k, v in (metadata.get("units") or {}).items()},
+            metadata=dict(metadata.get("metadata") or {}),
+        )
+
+
 def calibrated_porosity_from_grayscale(
     grayscale: np.ndarray,
     *,
@@ -292,6 +420,201 @@ def calibrated_porosity_from_grayscale(
     if clip:
         phi = np.clip(phi, background, 1.0)
     return np.asarray(phi, dtype=float)
+
+
+def kozeny_carman_permeability(
+    porosity: np.ndarray,
+    *,
+    characteristic_length: float,
+    kozeny_constant: float = 180.0,
+    solid_permeability: float = 0.0,
+    free_flow_permeability: float = np.inf,
+    max_permeability: float | None = None,
+) -> np.ndarray:
+    """Estimate permeability from porosity with a Kozeny-Carman closure.
+
+    Parameters
+    ----------
+    porosity :
+        Two- or three-dimensional porosity field with entries in ``[0, 1]``.
+    characteristic_length :
+        Characteristic length ``d`` in the same physical units used by the field.
+        The returned permeability is in ``d**2`` units.
+    kozeny_constant :
+        Denominator constant. The default ``180`` is the common packed-sphere
+        Kozeny-Carman value and should be treated as a calibration parameter for
+        image-derived continuum fields.
+    solid_permeability :
+        Permeability assigned at ``porosity == 0``.
+    free_flow_permeability :
+        Permeability assigned at ``porosity == 1``. The mathematical limit is
+        infinity; use a finite value when a downstream solver requires a cap.
+    max_permeability :
+        Optional finite cap applied after evaluating the closure.
+
+    Returns
+    -------
+    numpy.ndarray
+        Permeability field computed as
+        ``k = d**2 * phi**3 / (C * (1 - phi)**2)`` for ``0 < phi < 1``.
+    """
+
+    phi = _validate_porosity_values(porosity)
+    length = _normalize_positive_scalar(characteristic_length, name="characteristic_length")
+    constant = _normalize_positive_scalar(kozeny_constant, name="kozeny_constant")
+    solid = _normalize_nonnegative_scalar(solid_permeability, name="solid_permeability")
+    free = _normalize_nonnegative_scalar(
+        free_flow_permeability,
+        name="free_flow_permeability",
+        allow_inf=True,
+    )
+    cap = (
+        None
+        if max_permeability is None
+        else _normalize_positive_scalar(max_permeability, name="max_permeability")
+    )
+
+    permeability = np.empty_like(phi, dtype=float)
+    solid_mask = phi <= 0.0
+    free_mask = phi >= 1.0
+    interior = ~(solid_mask | free_mask)
+
+    permeability[solid_mask] = solid
+    permeability[free_mask] = free
+    interior_phi = phi[interior]
+    permeability[interior] = length**2 * interior_phi**3 / (constant * (1.0 - interior_phi) ** 2)
+    if cap is not None:
+        permeability = np.minimum(permeability, cap)
+    return permeability
+
+
+def kozeny_carman_inverse_permeability(
+    porosity: np.ndarray,
+    *,
+    characteristic_length: float,
+    kozeny_constant: float = 180.0,
+    solid_inverse_permeability: float = np.inf,
+    free_flow_inverse_permeability: float = 0.0,
+    max_inverse_permeability: float | None = None,
+) -> np.ndarray:
+    """Estimate inverse permeability from porosity with a Kozeny-Carman closure.
+
+    Parameters
+    ----------
+    porosity :
+        Two- or three-dimensional porosity field with entries in ``[0, 1]``.
+    characteristic_length :
+        Characteristic length ``d`` in the same physical units used by the field.
+    kozeny_constant :
+        Numerator constant. The default ``180`` is the common packed-sphere
+        Kozeny-Carman value and should be treated as a calibration parameter for
+        image-derived continuum fields.
+    solid_inverse_permeability :
+        Inverse permeability assigned at ``porosity == 0``. The mathematical
+        limit is infinity.
+    free_flow_inverse_permeability :
+        Inverse permeability assigned at ``porosity == 1``. The mathematical
+        limit is zero.
+    max_inverse_permeability :
+        Optional finite cap applied after evaluating the closure.
+
+    Returns
+    -------
+    numpy.ndarray
+        Inverse permeability field computed as
+        ``k_inv = C * (1 - phi)**2 / (d**2 * phi**3)`` for ``0 < phi < 1``.
+    """
+
+    phi = _validate_porosity_values(porosity)
+    length = _normalize_positive_scalar(characteristic_length, name="characteristic_length")
+    constant = _normalize_positive_scalar(kozeny_constant, name="kozeny_constant")
+    solid = _normalize_nonnegative_scalar(
+        solid_inverse_permeability,
+        name="solid_inverse_permeability",
+        allow_inf=True,
+    )
+    free = _normalize_nonnegative_scalar(
+        free_flow_inverse_permeability,
+        name="free_flow_inverse_permeability",
+    )
+    cap = (
+        None
+        if max_inverse_permeability is None
+        else _normalize_positive_scalar(max_inverse_permeability, name="max_inverse_permeability")
+    )
+
+    inverse_permeability = np.empty_like(phi, dtype=float)
+    solid_mask = phi <= 0.0
+    free_mask = phi >= 1.0
+    interior = ~(solid_mask | free_mask)
+
+    inverse_permeability[solid_mask] = solid
+    inverse_permeability[free_mask] = free
+    interior_phi = phi[interior]
+    inverse_permeability[interior] = (
+        constant * (1.0 - interior_phi) ** 2 / (length**2 * interior_phi**3)
+    )
+    if cap is not None:
+        inverse_permeability = np.minimum(inverse_permeability, cap)
+    return inverse_permeability
+
+
+def permeability_map_from_porosity(
+    porosity_map: PorosityMap,
+    *,
+    characteristic_length: float,
+    kozeny_constant: float = 180.0,
+    solid_permeability: float = 0.0,
+    free_flow_permeability: float = np.inf,
+    max_permeability: float | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> PermeabilityMap:
+    """Generate a Kozeny-Carman permeability map from a porosity map.
+
+    Parameters
+    ----------
+    porosity_map :
+        Porosity map supplying the cell-wise ``phi`` field and spatial metadata.
+    characteristic_length, kozeny_constant, solid_permeability,
+    free_flow_permeability, max_permeability :
+        Closure parameters passed to :func:`kozeny_carman_permeability`.
+    metadata :
+        Optional extra metadata merged into the generated map metadata.
+
+    Returns
+    -------
+    PermeabilityMap
+        Permeability field paired with the porosity-map grid metadata.
+    """
+
+    permeability = kozeny_carman_permeability(
+        porosity_map.values,
+        characteristic_length=characteristic_length,
+        kozeny_constant=kozeny_constant,
+        solid_permeability=solid_permeability,
+        free_flow_permeability=free_flow_permeability,
+        max_permeability=max_permeability,
+    )
+    length_unit = porosity_map.units.get("length", "m")
+    map_metadata: dict[str, Any] = {
+        "source_kind": "kozeny_carman_permeability",
+        "porosity_source_metadata": porosity_map.metadata,
+        "characteristic_length": float(characteristic_length),
+        "kozeny_constant": float(kozeny_constant),
+        "solid_permeability": float(solid_permeability),
+        "free_flow_permeability": float(free_flow_permeability),
+        "max_permeability": None if max_permeability is None else float(max_permeability),
+    }
+    if metadata:
+        map_metadata.update(metadata)
+
+    return PermeabilityMap(
+        values=permeability,
+        cell_size=porosity_map.cell_size,
+        origin=porosity_map.origin,
+        units={**porosity_map.units, "permeability": f"{length_unit}^2"},
+        metadata=map_metadata,
+    )
 
 
 def porosity_map_from_binary(
@@ -472,11 +795,56 @@ def load_porosity_map_hdf5(path: str | Path) -> PorosityMap:
     return PorosityMap.from_metadata(values, metadata)
 
 
+def save_permeability_map_hdf5(permeability_map: PermeabilityMap, path: str | Path) -> None:
+    """Write a permeability map to a compact HDF5 interchange file.
+
+    Parameters
+    ----------
+    permeability_map :
+        Permeability map to serialize.
+    path :
+        Destination HDF5 file. Parent directories must already exist.
+
+    Notes
+    -----
+    The stored array is named ``/permeability`` and contains cell-wise
+    permeability values. Root attributes store schema and closure metadata as
+    JSON.
+    """
+
+    path = Path(path)
+    with h5py.File(path, "w") as f:
+        f.attrs["schema_version"] = _PERMEABILITY_SCHEMA_VERSION
+        f.create_dataset("permeability", data=permeability_map.values)
+        _write_json_attr(f, "metadata", permeability_map.to_metadata())
+
+
+def load_permeability_map_hdf5(path: str | Path) -> PermeabilityMap:
+    """Load a permeability map written by :func:`save_permeability_map_hdf5`."""
+
+    path = Path(path)
+    with h5py.File(path, "r") as f:
+        schema_version = f.attrs.get("schema_version")
+        if isinstance(schema_version, bytes):
+            schema_version = schema_version.decode("utf-8")
+        if schema_version != _PERMEABILITY_SCHEMA_VERSION:
+            raise ValueError(f"Unsupported permeability-map schema version {schema_version!r}")
+        values = f["permeability"][()]
+        metadata = _read_json_attr(f, "metadata", {})
+    return PermeabilityMap.from_metadata(values, metadata)
+
+
 __all__ = [
+    "PermeabilityMap",
     "PorosityMap",
     "calibrated_porosity_from_grayscale",
+    "kozeny_carman_inverse_permeability",
+    "kozeny_carman_permeability",
+    "load_permeability_map_hdf5",
     "porosity_map_from_binary",
     "porosity_map_from_grayscale",
+    "permeability_map_from_porosity",
+    "save_permeability_map_hdf5",
     "save_porosity_map_hdf5",
     "load_porosity_map_hdf5",
 ]
