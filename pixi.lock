@@ -18967,13 +18967,14 @@ packages:
 - pypi: ./
   name: voids
   version: 0.1.7
-  sha256: 5871b6544e939accb076c7d756da74c754be31cc471b266cafc5ecef3b6f2dac
+  sha256: 4c9094254d848681381c1b25030b13e13257f9e91c29c47383e16f48f8440049
   requires_dist:
   - numpy>=1.26,<2.2
   - scipy>=1.11
   - edt>=3.0
   - numba>=0.60
   - scikit-image>=0.22
+  - tifffile>=2023.8
   - porespy>=2.4
   - openpnm>=3.6,<3.7
   - pyamg>=5.3

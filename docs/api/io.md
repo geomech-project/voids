@@ -19,3 +19,9 @@ The `voids.io` sub-package handles serialization and import/export of networks.
 ## OpenPNM Interoperability
 
 ::: voids.io.openpnm
+
+---
+
+## Image Volume And Surface Mesh I/O
+
+::: voids.io.volume
