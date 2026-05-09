@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import Any
 from typing import cast
 
 import numpy as np
@@ -8,6 +10,91 @@ import porespy as ps
 
 from voids.image.connectivity import has_spanning_cluster
 from voids.image._utils import normalize_shape, validate_axis_index
+
+
+@dataclass(slots=True)
+class MacroMicroPorousImage:
+    """Synthetic image with resolved macropores and matrix-hosted micropores.
+
+    Attributes
+    ----------
+    void :
+        Combined binary void image. ``True`` denotes void.
+    macro_void :
+        Resolved/macropore image generated at the larger feature scale.
+    micropore_void :
+        Small-pore image clipped to the matrix phase of ``macro_void``.
+    metadata :
+        JSON-serializable generation metadata.
+
+    Notes
+    -----
+    ``micropore_void`` is always a subset of ``~macro_void``. This keeps the
+    two porosity scales interpretable: macropores define fully resolved voids,
+    while micropores add small voids inside the matrix region only.
+    """
+
+    void: np.ndarray
+    macro_void: np.ndarray
+    micropore_void: np.ndarray
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Normalize and validate mask relationships."""
+
+        void = np.asarray(self.void, dtype=bool)
+        macro = np.asarray(self.macro_void, dtype=bool)
+        micro = np.asarray(self.micropore_void, dtype=bool)
+        normalize_shape(void.shape, allowed_ndim=(2, 3))
+        if macro.shape != void.shape or micro.shape != void.shape:
+            raise ValueError("void, macro_void, and micropore_void must have the same shape")
+        if np.any(micro & macro):
+            raise ValueError("micropore_void must be confined to the macro matrix phase")
+        if not np.array_equal(void, macro | micro):
+            raise ValueError("void must equal macro_void | micropore_void")
+        self.void = void
+        self.macro_void = macro
+        self.micropore_void = micro
+        self.metadata = dict(self.metadata)
+
+    @property
+    def ndim(self) -> int:
+        """Return image dimensionality."""
+
+        return int(self.void.ndim)
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Return image shape."""
+
+        return tuple(int(v) for v in self.void.shape)
+
+    @property
+    def porosity(self) -> float:
+        """Return total void fraction."""
+
+        return float(np.mean(self.void))
+
+    @property
+    def macro_porosity(self) -> float:
+        """Return resolved/macropore void fraction."""
+
+        return float(np.mean(self.macro_void))
+
+    @property
+    def matrix_microporosity(self) -> float:
+        """Return micropore fraction measured only inside the macro matrix."""
+
+        matrix = ~self.macro_void
+        if not np.any(matrix):
+            return float("nan")
+        return float(np.mean(self.micropore_void[matrix]))
+
+    @property
+    def total_microporosity(self) -> float:
+        """Return micropore fraction measured over the full image support."""
+
+        return float(np.mean(self.micropore_void))
 
 
 def _coerce_blobiness(
@@ -30,6 +117,157 @@ def _coerce_blobiness(
     if min(values) <= 0:
         raise ValueError(f"All entries in {name} must be positive")
     return values
+
+
+def _matrix_quantile_mask(
+    score: np.ndarray,
+    matrix_mask: np.ndarray,
+    *,
+    fraction: float,
+) -> np.ndarray:
+    """Threshold a score field so a target fraction of the matrix is selected."""
+
+    matrix_values = np.asarray(score, dtype=float)[matrix_mask]
+    if matrix_values.size == 0:
+        raise ValueError("macro image leaves no matrix voxels for micropores")
+    threshold = float(np.quantile(matrix_values, float(fraction)))
+    selected = (np.asarray(score, dtype=float) <= threshold) & matrix_mask
+
+    # Quantiles can include ties. Trim deterministically so the matrix fraction
+    # matches the requested microporosity as closely as the voxel count allows.
+    target_count = int(round(float(fraction) * matrix_values.size))
+    current_count = int(np.count_nonzero(selected))
+    if current_count > target_count:
+        selected_indices = np.flatnonzero(selected)
+        selected.flat[selected_indices[target_count:]] = False
+    elif current_count < target_count:
+        candidates = np.flatnonzero(matrix_mask & ~selected)
+        order = np.argsort(np.asarray(score, dtype=float).flat[candidates], kind="mergesort")
+        selected.flat[candidates[order[: target_count - current_count]]] = True
+    return np.asarray(selected, dtype=bool)
+
+
+def generate_macro_micro_blobs_matrix(
+    *,
+    shape: Sequence[int],
+    macro_porosity: float,
+    matrix_microporosity: float,
+    macro_blobiness: float | Sequence[float],
+    micropore_blobiness: float | Sequence[float],
+    seed_start: int,
+    max_tries: int,
+    axis_index: int | None = None,
+    periodic: bool = True,
+) -> MacroMicroPorousImage:
+    """Generate PoreSpy blobs with small micropores inside the matrix phase.
+
+    Parameters
+    ----------
+    shape :
+        Image shape in voxels. Supports 2D and 3D.
+    macro_porosity :
+        Target porosity of the resolved/macropore PoreSpy ``blobs`` image.
+    matrix_microporosity :
+        Fraction of the macro-matrix phase converted to small micropores.
+        The expected total porosity is approximately
+        ``macro_porosity + (1 - macro_porosity) * matrix_microporosity``.
+    macro_blobiness :
+        PoreSpy blobiness control for the resolved/macropore field.
+    micropore_blobiness :
+        PoreSpy blobiness control for the matrix micropore field. Larger values
+        create smaller features in PoreSpy's ``blobs`` generator.
+    seed_start, max_tries :
+        Seed-stream controls. Trial ``i`` uses seeds ``seed_start + 2*i`` and
+        ``seed_start + 2*i + 1`` for macro and micropore fields.
+    axis_index :
+        Optional axis used to require the combined void image to span. If
+        ``None``, no connectivity acceptance is applied.
+    periodic :
+        Forwarded to ``porespy.generators.blobs`` for both fields.
+
+    Returns
+    -------
+    MacroMicroPorousImage
+        Combined void image plus separate macro and micropore masks.
+
+    Scientific interpretation
+    -------------------------
+    This is a synthetic two-porosity construction. The micropore image is not an
+    experimentally calibrated unresolved-porosity model; it is a controlled way
+    to place small pores in the matrix while preserving explicit porosity knobs.
+    """
+
+    dims = normalize_shape(shape, allowed_ndim=(2, 3))
+    ndim = len(dims)
+    if not (0.0 < macro_porosity < 1.0):
+        raise ValueError("macro_porosity must be in (0, 1)")
+    if not (0.0 <= matrix_microporosity <= 1.0):
+        raise ValueError("matrix_microporosity must be in [0, 1]")
+    if max_tries < 1:
+        raise ValueError("max_tries must be >= 1")
+    axis = None if axis_index is None else validate_axis_index(axis_index=axis_index, ndim=ndim)
+    macro_blob = _coerce_blobiness(macro_blobiness, ndim=ndim, name="macro_blobiness")
+    micro_blob = _coerce_blobiness(micropore_blobiness, ndim=ndim, name="micropore_blobiness")
+
+    for i in range(int(max_tries)):
+        macro_seed = int(seed_start + 2 * i)
+        micro_seed = int(macro_seed + 1)
+        macro_void = np.asarray(
+            ps.generators.blobs(
+                shape=dims,
+                porosity=float(macro_porosity),
+                blobiness=macro_blob,
+                seed=macro_seed,
+                periodic=bool(periodic),
+            ),
+            dtype=bool,
+        )
+        matrix_mask = ~macro_void
+        if matrix_microporosity == 0.0:
+            micropore_void = np.zeros(dims, dtype=bool)
+        else:
+            micropore_score = np.asarray(
+                ps.generators.blobs(
+                    shape=dims,
+                    porosity=None,
+                    blobiness=micro_blob,
+                    seed=micro_seed,
+                    periodic=bool(periodic),
+                ),
+                dtype=float,
+            )
+            micropore_void = _matrix_quantile_mask(
+                micropore_score,
+                matrix_mask,
+                fraction=float(matrix_microporosity),
+            )
+
+        combined = macro_void | micropore_void
+        if axis is not None and not has_spanning_cluster(combined, axis_index=axis):
+            continue
+
+        return MacroMicroPorousImage(
+            void=combined,
+            macro_void=macro_void,
+            micropore_void=micropore_void,
+            metadata={
+                "source_kind": "macro_micro_porespy_blobs",
+                "shape": dims,
+                "macro_seed": macro_seed,
+                "micropore_seed": micro_seed,
+                "macro_porosity_target": float(macro_porosity),
+                "matrix_microporosity_target": float(matrix_microporosity),
+                "macro_blobiness": macro_blob,
+                "micropore_blobiness": micro_blob,
+                "periodic": bool(periodic),
+                "axis_index": axis,
+            },
+        )
+
+    raise RuntimeError(
+        "Could not generate accepted macro/micro blobs matrix for "
+        f"seed_start={int(seed_start)} after {int(max_tries)} trials"
+    )
 
 
 def generate_spanning_multiscale_blobs_matrix(
@@ -838,6 +1076,8 @@ def make_synthetic_grayscale_2d(
 
 
 __all__ = [
+    "MacroMicroPorousImage",
+    "generate_macro_micro_blobs_matrix",
     "generate_spanning_multiscale_blobs_matrix",
     "generate_spanning_blobs_matrix",
     "generate_connected_matrix",

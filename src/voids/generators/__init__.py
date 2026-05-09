@@ -7,9 +7,11 @@ from voids.generators.network import (
     update_network_geometry_from_radii,
 )
 from voids.generators.porous_image import (
+    MacroMicroPorousImage,
     estimate_voronoi_ncells_for_porosity_2d,
     generate_connected_matrix,
     generate_connected_matrix_2d,
+    generate_macro_micro_blobs_matrix,
     generate_spanning_blobs_matrix,
     generate_spanning_multiscale_blobs_matrix,
     generate_spanning_matrix_2d,
@@ -34,6 +36,8 @@ from voids.generators.vug_templates import (
 )
 
 __all__ = [
+    "MacroMicroPorousImage",
+    "generate_macro_micro_blobs_matrix",
     "generate_spanning_multiscale_blobs_matrix",
     "generate_spanning_blobs_matrix",
     "generate_connected_matrix",
