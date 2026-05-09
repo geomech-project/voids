@@ -83,6 +83,7 @@ nav:
   - Concepts and Background:
     - Concepts and Conventions: concepts.md
     - Image Segmentation & Network Extraction: image_segmentation_network_extraction.md
+    - Porosity Maps: porosity_maps.md
     - Theoretical Background: background.md
   - Scientific Workflow: workflow.md
   - Examples:
