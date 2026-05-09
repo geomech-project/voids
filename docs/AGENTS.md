@@ -23,7 +23,7 @@ guidance when there is a conflict.
   titles. Prefer method, model, or domain language such as "Micro-CT Grayscale
   Calibration In The Literature" instead of titles like "Relation To The
   Petrobras Paper", "Comparison With Paper X", or labels based on local
-  reference folders. Cite the paper in the prose and reference list, not in a
+  reference folders. Cite the source in the prose and reference list, not in a
   way that makes the section read like a named-company or local-reference note,
   unless the page is explicitly a benchmark or validation page for that source.
 - Make assumptions visible:
@@ -40,6 +40,11 @@ guidance when there is a conflict.
 ## References And Citations
 
 - Prefer published papers, public datasets, and public package documentation.
+- Do not leave vague source phrases such as "the paper", "this reference",
+  "the sub-resolution porosity paper", or "those papers" in public docs unless
+  the exact source is named in the same sentence or immediately adjacent
+  sentence. Prefer author-year phrasing, with DOI or full bibliographic details
+  in the references section.
 - Do not use ignored local files as citations in tracked docs.
 - Do not rely on local non-distributed source trees to justify public
   scientific claims.
