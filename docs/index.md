@@ -101,8 +101,8 @@ Some parts of `voids` were already implemented but easier to miss in the previou
 docs structure because they mostly appeared under the API reference. The most
 important ones are:
 
-- [I/O](api/io.md): HDF5 persistence and import/export helpers for canonical
-  and external network formats
+- [I/O](api/io.md): HDF5 persistence, external network interoperability,
+  image-volume I/O, and surface-mesh export
 - [Image Processing](api/image.md): segmentation helpers, spanning-cluster
   checks, and the native maximal-ball extraction backend
 - [Generators](api/generators.md) and [Examples API](api/examples.md): synthetic

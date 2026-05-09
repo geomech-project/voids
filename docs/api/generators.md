@@ -3,8 +3,9 @@
 The `voids.generators` sub-package provides functions to create synthetic and
 mesh-based pore networks for controlled experiments and validation.
 
-For a workflow-level description of macro/micro PoreSpy `blobs` images and
-voxel/surface exports, see [Synthetic Image Cases](../synthetic_cases.md).
+For a workflow-level description of macro/micro PoreSpy `blobs` images, see
+[Synthetic Image Cases](../synthetic_cases.md). For voxel-volume import/export
+and STL/OBJ surface-mesh export, see [I/O](io.md).
 
 ---
 

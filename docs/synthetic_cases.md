@@ -104,9 +104,16 @@ The operation is a boolean union, so existing pores remain void.
 
 ---
 
-## Export Formats
+## Export And Import
 
-`voids.io.volume` exports both voxel images and surface meshes:
+Synthetic cases are ordinary `voids` image volumes once generated. Export and
+import them through the dedicated
+[Image Volume And Surface Mesh I/O](api/io.md#image-volume-and-surface-mesh-io)
+section, which documents `VolumeData`, supported voxel formats, STL/OBJ surface
+exports, sidecar metadata, and explicit voxel-size handling.
+
+A typical synthetic-case export wraps the generated void mask with physical
+resolution metadata before writing files:
 
 ```python
 from voids.io import VolumeData, save_volume_bundle
@@ -126,68 +133,10 @@ written = save_volume_bundle(
 )
 ```
 
-| Format | Kind | Notes |
-|---|---|---|
-| `.raw` | voxel field | Written with a `.raw.json` sidecar containing shape, dtype, voxel size, units, and provenance metadata |
-| `.npy` | voxel field | NumPy-native array plus `.npy.json` sidecar for voxel size, units, and provenance metadata |
-| `.h5` | voxel field | HDF5 dataset `/volume` plus JSON metadata attributes |
-| `.nc` | voxel field | Basic netCDF variable `volume` plus metadata attributes |
-| `.tif`, `.tiff` | voxel field | TIFF stack plus `.tif.json` or `.tiff.json` sidecar for voxel size, units, and provenance metadata |
-| `.stl` | surface mesh | 3-D binary interface extracted by marching cubes using `voxel_size` as physical spacing |
-| `.obj` | surface mesh | 3-D binary interface extracted by marching cubes using `voxel_size` as physical spacing |
-
-STL and OBJ exports require a 3-D binary volume containing both void and solid
-voxels. They represent the void/solid interface as a triangular surface, not the
-full voxel field.
-
----
-
-## Import Formats
-
-Voxel images can be read back with:
+Read the exported data with `load_volume_data` when physical resolution matters:
 
 ```python
-from voids.io import load_volume, load_volume_data
+from voids.io import load_volume_data
 
-volume = load_volume("outputs/synthetic_case/macro_micro_vug.h5")
 volume_data = load_volume_data("outputs/synthetic_case/macro_micro_vug.tiff")
-```
-
-`load_volume` returns only the image array. Use `load_volume_data` when the
-physical resolution matters for porosity maps, permeability maps, surface
-exports, or external FEM/continuum solvers.
-
-TIFF files may contain some resolution tags in particular software workflows,
-but they should not be treated as a reliable source of 3-D voxel spacing. If the
-TIFF was not written by `voids` with its JSON sidecar, pass the voxel size
-explicitly:
-
-```python
-external_scan = load_volume_data(
-    "micro_ct_stack.tiff",
-    voxel_size=(40.0e-6, 40.0e-6, 40.0e-6),
-    units={"length": "m"},
-)
-```
-
-Surface meshes can be read back with:
-
-```python
-from voids.io import load_surface_mesh
-
-mesh = load_surface_mesh("outputs/synthetic_case/macro_micro_vug.obj")
-```
-
-Raw binary files have no self-describing shape, dtype, or voxel resolution, so
-`voids` writes a sidecar automatically. If that sidecar is absent, provide shape,
-dtype, and voxel size explicitly when those quantities matter:
-
-```python
-volume_data = load_volume_data(
-    "macro_micro_vug.raw",
-    shape=(160, 160, 160),
-    dtype="uint8",
-    voxel_size=(40.0e-6, 40.0e-6, 40.0e-6),
-    units={"length": "m"},
-)
 ```
