@@ -17,6 +17,12 @@ connectivity analysis, and pore network extraction used in vug sensitivity studi
 
 ---
 
+## Porosity Maps
+
+::: voids.image.porosity
+
+---
+
 ## Network Extraction
 
 ::: voids.image.network_extraction

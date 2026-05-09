@@ -47,6 +47,14 @@ from voids.image.prego import (
     prego_partitioning,
     snow_seed_points,
 )
+from voids.image.porosity import (
+    PorosityMap,
+    calibrated_porosity_from_grayscale,
+    load_porosity_map_hdf5,
+    porosity_map_from_binary,
+    porosity_map_from_grayscale,
+    save_porosity_map_hdf5,
+)
 from voids.image.segmentation import (
     GrayscaleSegmentationResult,
     VolumeCropResult,
@@ -96,11 +104,17 @@ __all__ = [
     "PregoNetworkDictResult",
     "PregoSegmentationResult",
     "PregoSettings",
+    "PorosityMap",
     "construct_spanning_network",
     "extract_prego_network_dict",
     "extract_spanning_pore_network",
     "infer_sample_axes",
+    "calibrated_porosity_from_grayscale",
+    "load_porosity_map_hdf5",
+    "porosity_map_from_binary",
+    "porosity_map_from_grayscale",
     "prego_partitioning",
+    "save_porosity_map_hdf5",
     "snow_seed_points",
     "VolumeCropResult",
     "GrayscaleSegmentationResult",
