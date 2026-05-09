@@ -48,6 +48,7 @@ def test_volume_roundtrip_common_array_formats(tmp_path) -> None:
         assert np.array_equal(loaded, volume)
         loaded_data = load_volume_data(path, file_format=fmt)
         assert np.array_equal(loaded_data.values, volume)
+        assert loaded_data.values.dtype == volume.dtype
         assert loaded_data.voxel_size == voxel_size
         assert loaded_data.units == {"length": "m"}
         assert loaded_data.metadata == {"case": fmt}
@@ -59,6 +60,19 @@ def test_volume_roundtrip_common_array_formats(tmp_path) -> None:
     assert raw_metadata["metadata"] == {"case": "raw"}
     assert (tmp_path / "case.npy.json").exists()
     assert (tmp_path / "case.tiff.json").exists()
+
+
+def test_volume_data_restores_bool_dtype_from_integer_storage(tmp_path) -> None:
+    """Boolean phase fields should reload with their semantic dtype."""
+
+    volume = np.zeros((3, 3, 3), dtype=bool)
+    volume[1, 1, 1] = True
+
+    for fmt in ("raw", "npy", "h5", "nc", "tiff"):
+        path = save_volume(volume, tmp_path / f"case.{fmt}", file_format=fmt)
+        loaded = load_volume_data(path, file_format=fmt)
+        assert loaded.values.dtype == np.dtype(bool)
+        assert np.array_equal(loaded.values, volume)
 
 
 def test_volume_data_preserves_and_overrides_voxel_size(tmp_path) -> None:
@@ -136,6 +150,10 @@ def test_surface_mesh_from_binary_volume_and_obj_stl_roundtrip(tmp_path) -> None
     assert mesh.faces.shape[1] == 3
     assert mesh.metadata["source_kind"] == "binary_volume_marching_cubes"
 
+    integer_volume = volume.astype(np.uint8)
+    integer_mesh = surface_mesh_from_binary_volume(integer_volume)
+    assert integer_mesh.faces.shape[1] == 3
+
     obj_path = save_surface_mesh(mesh, tmp_path / "case.obj")
     stl_path = save_surface_mesh(mesh, tmp_path / "case.stl")
     obj_loaded = load_surface_mesh(obj_path)
@@ -174,6 +192,11 @@ def test_surface_mesh_validation() -> None:
 
     with pytest.raises(ValueError, match="both void and solid"):
         surface_mesh_from_binary_volume(np.ones((3, 3, 3), dtype=bool))
+
+    grayscale = np.zeros((3, 3, 3), dtype=np.uint8)
+    grayscale[1, 1, 1] = 128
+    with pytest.raises(ValueError, match="binary volume"):
+        surface_mesh_from_binary_volume(grayscale)
 
     with pytest.raises(ValueError, match="outside vertices"):
         SurfaceMesh(vertices=np.zeros((1, 3)), faces=np.array([[0, 1, 2]]))
@@ -220,6 +243,9 @@ def test_volume_private_validation_branches(tmp_path) -> None:
     with pytest.raises(ValueError, match="positive"):
         vol._normalize_voxel_size((1.0, 0.0, 1.0))
 
+    with pytest.raises(ValueError, match="binary volume"):
+        vol._binary_volume_mask(np.full((3, 3, 3), "void", dtype=object))
+
     assert vol._metadata_from_json(None) == {}
     assert vol._metadata_from_json(b'{"a": 1}') == {"a": 1}
     assert vol._metadata_from_json(np.asarray('{"a": 2}')) == {"a": 2}
@@ -244,6 +270,53 @@ def test_volume_private_validation_branches(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="Use load_surface_mesh"):
         load_volume(tmp_path / "mesh.stl", file_format="stl")
+
+
+def test_volume_metadata_dtype_restore_validation_branches() -> None:
+    """Semantic dtype restoration should fail before lossy or invalid casts."""
+
+    explicit = np.asarray([1], dtype=np.int16)
+    assert (
+        vol._restore_metadata_dtype(
+            explicit,
+            {"dtype": "uint8"},
+            dtype_was_explicit=True,
+        )
+        is explicit
+    )
+
+    float_values = vol._restore_metadata_dtype(
+        np.asarray([1], dtype=np.int16),
+        {"dtype": "float32"},
+        dtype_was_explicit=False,
+    )
+    assert float_values.dtype == np.dtype("float32")
+
+    with pytest.raises(ValueError, match="cannot be restored"):
+        vol._restore_metadata_dtype(
+            np.asarray(["1"]),
+            {"dtype": "uint8"},
+            dtype_was_explicit=False,
+        )
+
+    for invalid in (
+        np.asarray([np.nan], dtype=float),
+        np.asarray([1.5], dtype=float),
+        np.asarray([300], dtype=np.int16),
+    ):
+        with pytest.raises(ValueError, match="cannot be restored"):
+            vol._restore_metadata_dtype(
+                invalid,
+                {"dtype": "uint8"},
+                dtype_was_explicit=False,
+            )
+
+    with pytest.raises(ValueError, match="cannot be restored"):
+        vol._restore_metadata_dtype(
+            np.asarray([1.0 + 0.0j]),
+            {"dtype": "float64"},
+            dtype_was_explicit=False,
+        )
 
 
 def test_surface_mesh_loader_and_writer_edge_branches(tmp_path) -> None:

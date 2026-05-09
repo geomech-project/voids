@@ -177,8 +177,9 @@ written = save_volume_bundle(
 | `.obj` | surface mesh | 3-D binary interface extracted by marching cubes using `voxel_size` as physical spacing |
 
 STL and OBJ exports require a 3-D binary volume containing both void and solid
-voxels. They represent the void/solid interface as a triangular surface, not the
-full voxel field.
+voxels. The binary volume must be a boolean array or a numeric array whose
+values are limited to 0 and 1. These exports represent the void/solid interface
+as a triangular surface, not the full voxel field.
 
 ### Loading Voxel Volumes
 

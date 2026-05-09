@@ -175,6 +175,64 @@ def _normalize_voxel_size(
     return values
 
 
+def _binary_volume_mask(
+    volume: np.ndarray,
+    *,
+    allowed_ndim: tuple[int, ...] = (3,),
+) -> np.ndarray:
+    arr = np.asarray(volume)
+    normalize_shape(arr.shape, allowed_ndim=allowed_ndim)
+    if arr.dtype == np.dtype(bool):
+        return arr
+    if not np.issubdtype(arr.dtype, np.number) or np.issubdtype(arr.dtype, np.complexfloating):
+        raise ValueError("binary volume must have dtype bool or contain only numeric 0/1 values")
+    if not bool(np.all((arr == 0) | (arr == 1))):
+        raise ValueError("binary volume must have dtype bool or contain only numeric 0/1 values")
+    return arr.astype(bool, copy=False)
+
+
+def _ensure_integer_dtype_restore(values: np.ndarray, target_dtype: np.dtype[Any]) -> None:
+    supported_source = (
+        values.dtype == np.dtype(bool)
+        or np.issubdtype(values.dtype, np.integer)
+        or np.issubdtype(values.dtype, np.floating)
+    )
+    if not supported_source:
+        raise ValueError(f"stored volume values cannot be restored as dtype {target_dtype}")
+    if np.issubdtype(values.dtype, np.floating):
+        if not bool(np.all(np.isfinite(values))):
+            raise ValueError(f"stored volume values cannot be restored as dtype {target_dtype}")
+        if not bool(np.all(values == np.trunc(values))):
+            raise ValueError(f"stored volume values cannot be restored as dtype {target_dtype}")
+    info = np.iinfo(target_dtype)
+    if values.size and (bool(np.min(values) < info.min) or bool(np.max(values) > info.max)):
+        raise ValueError(f"stored volume values cannot be restored as dtype {target_dtype}")
+
+
+def _restore_metadata_dtype(
+    values: np.ndarray,
+    stored_metadata: dict[str, Any],
+    *,
+    dtype_was_explicit: bool,
+) -> np.ndarray:
+    if dtype_was_explicit:
+        return values
+    dtype_name = stored_metadata.get("dtype")
+    if dtype_name is None:
+        return values
+    target_dtype = np.dtype(dtype_name)
+    if values.dtype == target_dtype:
+        return values
+    if target_dtype == np.dtype(bool):
+        return _binary_volume_mask(values, allowed_ndim=(2, 3))
+    if np.issubdtype(target_dtype, np.integer):
+        _ensure_integer_dtype_restore(values, target_dtype)
+        return values.astype(target_dtype, copy=False)
+    if np.can_cast(values.dtype, target_dtype, casting="same_kind"):
+        return values.astype(target_dtype, copy=False)
+    raise ValueError(f"stored volume values cannot be restored as dtype {target_dtype}")
+
+
 def _volume_sidecar_path(path: Path) -> Path:
     return path.with_suffix(path.suffix + ".json")
 
@@ -524,6 +582,11 @@ def load_volume_data(
         hdf5_dataset=hdf5_dataset,
         netcdf_variable=netcdf_variable,
     )
+    values = _restore_metadata_dtype(
+        values,
+        stored_metadata,
+        dtype_was_explicit=dtype is not None,
+    )
     resolved_metadata = dict(stored_metadata.get("metadata", {}))
     if metadata:
         resolved_metadata.update(metadata)
@@ -554,8 +617,7 @@ def surface_mesh_from_binary_volume(
     ``voxel_size``.
     """
 
-    mask = np.asarray(volume, dtype=bool)
-    normalize_shape(mask.shape, allowed_ndim=(3,))
+    mask = _binary_volume_mask(volume)
     if not (np.any(mask) and np.any(~mask)):
         raise ValueError("volume must contain both void and solid voxels for surface extraction")
     spacing = _normalize_voxel_size(voxel_size)
