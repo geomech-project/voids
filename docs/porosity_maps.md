@@ -17,17 +17,20 @@ synthetic PoreSpy `blobs` binary image and a derived toy grayscale image.
 `block_shape` defines how many fine image voxels are averaged into one porosity-map
 cell.
 
+![Schematic block averaging from fine voxels to porosity-map cells](assets/porosity_maps/block_shape_coarsening.png)
+
+The 2-D schematic shows the same operation used in 3-D: each highlighted fine
+voxel block becomes one coarse cell whose value is the average porosity over
+that block.
+
 For a 3-D image with shape
 
 \[
 (n_0, n_1, n_2),
 \]
 
-and
-
-\[
-\texttt{block\_shape} = (b_0, b_1, b_2),
-\]
+and coarse-cell block sizes \((b_0, b_1, b_2)\), represented in code by
+`block_shape=(b_0, b_1, b_2)`,
 
 the output porosity map has shape
 
@@ -188,6 +191,12 @@ porosities:
 \phi^{\mathrm{vox}}_{ijk}.
 \]
 
+![Binary and grayscale image-to-porosity-map workflow](assets/porosity_maps/image_to_porosity_maps.png)
+
+The top row corresponds to the binary void-fraction formula. The bottom row
+corresponds to the grayscale calibration formula followed by the same block
+average.
+
 ### Micro-CT Grayscale Calibration In The Literature
 
 Ferreira et al. (2020) used resampled micro-CT images of carbonate plugs to
@@ -315,6 +324,12 @@ k^{-1}(\phi)
 \frac{C(1-\phi)^2}{d^2\phi^3},
 \quad 0 < \phi < 1.
 \]
+
+![Porosity map converted to permeability and inverse-permeability maps](assets/porosity_maps/porosity_to_permeability_maps.png)
+
+The permeability map and inverse-permeability map live on the same regular grid
+as the porosity map. The figure uses a logarithmic color scale for \(k\) and
+\(k^{-1}\), because permeability closures can vary by orders of magnitude.
 
 The default \(C=180\) is the common packed-sphere Kozeny-Carman value associated
 with the classical Kozeny and Carman packed-bed relation.
@@ -599,13 +614,15 @@ porosity fields described by Soulaine and Tchelepi (2016) and Soulaine et al.
 (2016), but it is not yet a full implementation of their Darcy-Brinkman or
 Darcy-Brinkman-Stokes model.
 
-In those papers, the central image-derived field is a local void fraction:
+In Soulaine and Tchelepi (2016) and Soulaine et al. (2016), the central
+image-derived field is a local void fraction:
 
 \[
 \epsilon_f(\mathbf{x}) \in [0, 1],
 \]
 
-or, in the sub-resolution porosity paper,
+and, specifically in the sub-resolution porosity formulation of Soulaine et al.
+(2016),
 
 \[
 \epsilon_{\mathrm{micro}}(\mathbf{x}) \in [0, 1].
@@ -657,8 +674,8 @@ For a binary image, each value is either 0 or 1.
 For a calibrated grayscale image, each value can be intermediate and may be used
 as a sub-resolution porosity estimate.
 
-This is closest to the voxel-wise porosity-field interpretation in the
-sub-resolution porosity paper.
+This is closest to the voxel-wise porosity-field interpretation used in the
+sub-resolution porosity formulation of Soulaine et al. (2016).
 
 ### Filtered Interpretation When `block_shape > 1`
 
@@ -682,10 +699,12 @@ However, the physical interpretation changes:
 - so the permeability closure should be chosen for the chosen filter scale, not
   blindly copied from a voxel-scale model.
 
-### What Would Be Needed For Full Model Compatibility
+### Remaining Solver-Input Requirements
 
-To move from compatible porosity and permeability fields to a solver input for
-the published micro-continuum formulations, the next pieces are:
+To use these compatible porosity and permeability fields as solver inputs for
+the Darcy-Brinkman and Darcy-Brinkman-Stokes micro-continuum formulations
+described by Soulaine and Tchelepi (2016) and Soulaine et al. (2016), the next
+pieces are:
 
 1. optional lower/upper clamps for \(\phi=0\) and \(\phi=1\) depending on the
    external solver formulation,
