@@ -32,6 +32,13 @@ from voids.image.maximal_ball import (
     summarize_maximal_ball_extraction_diagnostics,
     suppress_overlapping_maximal_balls,
 )
+from voids.image.morphometry import (
+    LocalThicknessResult,
+    LocalThicknessSummary,
+    local_thickness_analysis,
+    local_thickness_map,
+    summarize_local_thickness_map,
+)
 from voids.image.network_extraction import (
     NetworkConstructionResult,
     NetworkExtractionResult,
@@ -104,6 +111,11 @@ __all__ = [
     "stamp_retained_ball_centers_to_root_labels",
     "summarize_maximal_ball_extraction_diagnostics",
     "suppress_overlapping_maximal_balls",
+    "LocalThicknessResult",
+    "LocalThicknessSummary",
+    "local_thickness_analysis",
+    "local_thickness_map",
+    "summarize_local_thickness_map",
     "extract_maximal_ball_candidates",
     "NetworkConstructionResult",
     "NetworkExtractionResult",

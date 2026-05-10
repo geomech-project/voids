@@ -177,6 +177,25 @@ If execution is not possible, state the verification gap explicitly.
 ## Documentation Policy
 
 - Keep docs aligned with the actual shipped `voids` surface.
+- Keep API reference pages API-focused: public objects, signatures, parameters,
+  return values, exceptions, units expected by the call, and short usage notes.
+  Do not put long derivations, procedure walkthroughs, algorithm explanations,
+  validation narratives, or schematics in API pages.
+- Put scientific definitions, formulas, calculation steps, algorithms,
+  procedures, schematics, and interpretation guidance in Concepts and
+  Background pages. API pages should link to those pages when the callable
+  surface depends on nontrivial scientific context.
+- For numerical, geometric, image-processing, extraction, transport, or
+  morphometry features, ensure the public docs as a whole cover the scientific
+  definition, inputs and outputs, units, equations or calculation steps,
+  algorithm choices, assumptions, limitations, and validation or tests that
+  support the behavior.
+- When documenting a function that wraps an external scientific library, explain
+  what `voids` adds or changes, such as unit conversions, radius-to-diameter
+  conversions, boundary assumptions, sign conventions, or data-structure
+  normalization in the appropriate Concepts and Background page, with a concise
+  link from the API reference. Do not leave the reader to infer these details
+  from the external tool alone.
 - Do not describe ignored local references or non-distributed external code as
   if they were part of `voids`.
 - When adding or changing code, notebooks, examples, datasets, benchmarks, or
