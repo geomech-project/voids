@@ -177,6 +177,16 @@ If execution is not possible, state the verification gap explicitly.
 ## Documentation Policy
 
 - Keep docs aligned with the actual shipped `voids` surface.
+- Scientific API docs must be more than wrapper-level summaries. For numerical,
+  geometric, image-processing, extraction, transport, or morphometry features,
+  document the scientific definition, inputs and outputs, units, equations or
+  calculation steps, algorithm choices, assumptions, limitations, and the
+  validation or tests that support the behavior.
+- When documenting a function that wraps an external scientific library, explain
+  what `voids` adds or changes, such as unit conversions, radius-to-diameter
+  conversions, boundary assumptions, sign conventions, or data-structure
+  normalization. Do not leave the reader to infer these details from the
+  external tool alone.
 - Do not describe ignored local references or non-distributed external code as
   if they were part of `voids`.
 - When adding or changing code, notebooks, examples, datasets, benchmarks, or

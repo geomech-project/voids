@@ -9,6 +9,15 @@
   `06_mwe_real_porespy_extraction.ipynb`.
 - `syn_vugs/synthetic_vugs.tif`: grayscale synthetic vug image used in
   `07_mwe_synthetic_vug_case.ipynb`.
+- `trabecular-image/Trabecular_300_cubo_0_poro_1_osso_2086nm.raw`: segmented
+  trabecular bone image used in
+  `35_mwe_trabecular_bone_morphometry.ipynb`. The filename indicates
+  `0 = pore/marrow`, `1 = bone`, and an isotropic voxel size of `2086 nm`.
+  The byte count matches a `350 x 350 x 349` uint8 volume. This cropped image
+  is derived from the micro-CT trabecular-bone analysis in Marques et al.
+  (2026), *Aluminum impairs cellular ultrastructure and bone microarchitecture
+  in newborn rats*, Frontiers in Imaging 5:1725794,
+  <https://doi.org/10.3389/fimag.2026.1725794>.
 - `external_pnflow_benchmark/`: committed reference inputs and outputs for
   `15_mwe_external_pnflow_benchmark.ipynb`, including exact binary benchmark
   volumes and saved `pnextract` / `pnflow` outputs so the notebook can run
