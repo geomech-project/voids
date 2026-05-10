@@ -71,36 +71,40 @@ phase-only summary statistics
 
 The explicit steps are:
 
-1. Validate the phase image.
-   The input must be a 2D or 3D boolean/binary image. `True` marks the phase
-   whose local thickness is being measured.
-2. Validate the voxel spacing.
-   `voxel_size` may be a scalar or a sequence with one value per image axis,
-   but all entries must be equal. The current implementation is intentionally
-   isotropic because the fitted objects are disks or spheres in physical space.
-3. Optionally validate a precomputed distance map.
-   If supplied, `distance_map` must have the same shape as the phase mask, be
-   finite and nonnegative, and be expressed in voxel units.
-4. Call PoreSpy's local-thickness filter:
+**Step 1: validate the phase image.**
+The input must be a 2D or 3D boolean/binary image. `True` marks the phase whose
+local thickness is being measured.
 
-   \[
-   R = \mathrm{local\_thickness}
-   (M, D, \mathrm{method}, \mathrm{sizes}, \mathrm{smooth}, \mathrm{approx}),
-   \]
+**Step 2: validate the voxel spacing.**
+`voxel_size` may be a scalar or a sequence with one value per image axis, but
+all entries must be equal. The current implementation is intentionally
+isotropic because the fitted objects are disks or spheres in physical space.
 
-   where \(M\) is the selected binary phase mask and \(D\) is the optional
-   Euclidean distance map.
-5. Convert the returned radius-like field to a physical diameter map:
+**Step 3: optionally validate a precomputed distance map.**
+If supplied, `distance_map` must have the same shape as the phase mask, be
+finite and nonnegative, and be expressed in voxel units.
 
-   \[
-   T_i =
-   \begin{cases}
-   2 h R_i, & M_i = 1, \\
-   0, & M_i = 0,
-   \end{cases}
-   \]
+**Step 4: call PoreSpy's local-thickness filter.**
 
-   where \(h\) is the isotropic voxel edge length in the requested units.
+\[
+R = \operatorname{local\_thickness}
+(M, D, \mathrm{method}, \mathrm{sizes}, \mathrm{smooth}, \mathrm{approx})
+\]
+
+Here \(M\) is the selected binary phase mask and \(D\) is the optional Euclidean
+distance map.
+
+**Step 5: convert the returned radius-like field to a physical diameter map.**
+
+\[
+T_i =
+\begin{cases}
+2 h R_i, & M_i = 1, \\
+0, & M_i = 0,
+\end{cases}
+\]
+
+Here \(h\) is the isotropic voxel edge length in the requested units.
 
 The factor of two is deliberate. If the backend labels a phase voxel with
 \(R_i = 4\) voxels and the voxel edge length is
