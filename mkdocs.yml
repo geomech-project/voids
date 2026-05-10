@@ -84,6 +84,7 @@ nav:
     - Concepts and Conventions: concepts.md
     - Image Segmentation & Network Extraction: image_segmentation_network_extraction.md
     - Porosity Maps: porosity_maps.md
+    - Local Thickness Morphometry: local_thickness_morphometry.md
     - Synthetic Image Cases: synthetic_cases.md
     - Theoretical Background: background.md
   - Scientific Workflow: workflow.md

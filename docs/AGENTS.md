@@ -19,13 +19,17 @@ guidance when there is a conflict.
 ## Documentation Style
 
 - Prefer precise, scientific wording over marketing language.
-- API and method docs should include the calculation, not only the call
-  signature. For scientific routines, describe the mathematical definition,
-  phase convention, units, algorithm steps, external-backend behavior,
-  conversions performed by `voids`, and known limitations.
+- API reference pages should stay focused on the callable surface: purpose,
+  parameters, return values, exceptions, units expected by the call, and concise
+  usage notes. Do not put extended derivations, procedure walkthroughs,
+  algorithm narratives, validation discussions, or schematics in API reference
+  pages.
+- Put scientific definitions, formulas, calculation steps, algorithms,
+  procedures, schematics, interpretation guidance, and validation rationale in
+  Concepts and Background pages, then link to them from the API reference.
 - When a doc page uses `mkdocstrings`, pair the generated API reference with
-  narrative scientific context before the `:::` block whenever the behavior is
-  numerical, geometric, image-based, or physically interpreted.
+  concise API context before the `:::` block. Keep deeper scientific context in
+  a Concepts and Background page.
 - Avoid overly explicit reference-specific framing in headings and section
   titles. Prefer method, model, or domain language such as "Micro-CT Grayscale
   Calibration In The Literature" instead of titles like "Relation To The
