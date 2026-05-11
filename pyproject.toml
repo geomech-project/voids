@@ -39,6 +39,7 @@ dependencies = [
   "thermo>=0.6.0, <0.7",
   "CoolProp>=6.6",
   "h5py>=3.10",
+  "meshio>=5.3",
   "plotly>=5.0",
   "pyvista>=0.43",
   "typing_extensions>=4.10",
