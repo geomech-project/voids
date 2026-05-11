@@ -217,6 +217,14 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
   - DRP-10 Estaillades v2 carbonate benchmark with native maximal-ball and `snow2` extraction-backend comparisons
 - `32_mwe_prego_blobs_backend_comparison`
   - synthetic `256^3` PoreSpy `blobs` comparison of PoreSpy `snow2`, PREGO, and native maximal-ball extraction
+- `33_mwe_synthetic_porosity_maps`
+  - synthetic binary/grayscale porosity maps, Kozeny-Carman permeability maps, and HDF5 field export
+- `34_mwe_macro_micro_synthetic_case`
+  - macro/micro synthetic porous-media case for coupled-scale workflow exploration
+- `35_mwe_trabecular_bone_morphometry`
+  - trabecular-bone RAW segmentation morphometry with bone/marrow phase convention checks
+- `36_mwe_trabecular_bone_slice_porosity_permeability_maps`
+  - trabecular-bone slice porosity/permeability maps with HDF5 and structured mesh exports
 
 Example data under `examples/data/` includes a deterministic manufactured void image and
 generated artifacts from the extraction/mesh notebooks.

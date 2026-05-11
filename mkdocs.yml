@@ -140,6 +140,8 @@ nav:
       - api/generators.md
     - Image Processing:
       - api/image.md
+    - Mesh Export:
+      - api/mesh.md
     - Visualization:
       - api/visualization.md
     - Simulators:

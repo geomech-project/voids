@@ -410,6 +410,56 @@ patches, and field naming explicitly.
 
 ---
 
+## Structured Mesh Export
+
+`voids.mesh` can convert a regular `PorosityMap`, optionally paired with a
+matching `PermeabilityMap`, into a structured quad mesh for 2-D maps or a
+structured hexahedral mesh for 3-D maps.
+The cell data order is explicit:
+
+```python
+cell_data["porosity"][0][n] == porosity.values.ravel(order="C")[n]
+```
+
+This means the mesh is a representation of the coarse map grid, not a
+segmentation-boundary mesh of the original image.
+For a 2-D slice, each coarse porosity cell becomes one quadrilateral. For a
+3-D map, each coarse porosity cell becomes one hexahedron.
+
+```python
+from voids.mesh import write_structured_map_meshes
+
+paths = write_structured_map_meshes(
+    porosity,
+    "outputs/case_a",
+    stem="case_a_porosity_permeability",
+    permeability_map=permeability,
+    formats=("gmsh", "vtk", "vtu", "netgen"),
+)
+```
+
+The Gmsh `.msh`, VTK `.vtk`, and VTU `.vtu` exports are intended to carry the
+floating porosity and permeability arrays as cell data.
+The Netgen `.vol` writer available through `meshio` can write the structured
+geometry, but it should not be treated as the authoritative carrier of
+floating porosity/permeability fields. Keep the HDF5 map files, or a
+cell-data-preserving format such as VTU, as the source of truth for the
+coefficients.
+
+`voids` uses [`meshio`](https://github.com/nschloe/meshio) for mesh-file I/O.
+The meshio project documents support for Gmsh, VTK, VTU, Netgen, and many other
+formats, but format support does not imply that every downstream code preserves
+the same field-data names, physical tags, or boundary-region conventions.
+Check the exported mesh in the target solver before interpreting a simulation.
+
+!!! warning "Gmsh export versus Gmsh meshing"
+    The `.msh` export is a structured map mesh written in Gmsh format. It does
+    not run Gmsh to remesh the bone/marrow interface. If a later workflow needs
+    a boundary-conforming triangular or tetrahedral mesh, the image-to-geometry
+    step and boundary labels should be specified as a separate model.
+
+---
+
 ## Synthetic Verification Plan
 
 Synthetic cases are useful because the expected porosity is known before running

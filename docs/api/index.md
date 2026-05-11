@@ -17,6 +17,7 @@
 | [`voids.generators`](generators.md) | Synthetic and mesh-based network generators |
 | [`voids.examples`](examples.md) | Deterministic synthetic networks and images for testing/demos |
 | [`voids.image`](image.md) | Image processing and connectivity helpers |
+| [`voids.mesh`](mesh.md) | Structured mesh export for porosity/permeability maps |
 | [`voids.visualization`](visualization.md) | Plotly and PyVista network rendering |
 | [`voids.simulators`](simulators.md) | Ready-to-run simulation entry points |
 | [`voids.benchmarks`](benchmarks.md) | Verification and validation benchmark utilities |
@@ -36,6 +37,7 @@ If you already know what you want to do, these are the main entry points:
 | Import a PoreSpy/OpenPNM-style dictionary | `voids.io.porespy.from_porespy` |
 | Export to an OpenPNM-style dictionary or object | `voids.io.openpnm.to_openpnm_dict`, `voids.io.openpnm.to_openpnm_network` |
 | Export or reload an image volume | `voids.io.VolumeData`, `voids.io.save_volume_bundle`, `voids.io.load_volume_data` |
+| Export a porosity/permeability map mesh | `voids.mesh.write_structured_map_meshes` |
 | Extract a PREGO-style network from a segmented image | `voids.image.extract_prego_network_dict` |
 | Extract a native maximal-ball network from a segmented image | `voids.image.extract_maximal_ball_network_dict` |
 | Compute porosity and connectivity diagnostics | `voids.physics.petrophysics` |
