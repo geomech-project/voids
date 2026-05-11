@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="360" viewBox="0 0 920 360" role="img" aria-labelledby="title desc">
+  <title id="title">Structured 2D porosity map converted to a quadrilateral mesh</title>
+  <desc id="desc">A two-dimensional porosity map is converted cell-for-cell into a structured quadrilateral mesh with porosity and permeability stored as cell data.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#234f59"/>
+    </marker>
+    <style>
+      .title { font: 700 20px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1f2933; }
+      .label { font: 600 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #26323a; }
+      .small { font: 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .cell-label { font: 700 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1f2933; text-anchor: middle; dominant-baseline: central; }
+      .panel { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.2; rx: 10; }
+      .value-cell { stroke: #ffffff; stroke-width: 2; }
+      .mesh-line { stroke: #234f59; stroke-width: 2.2; fill: none; }
+      .node { fill: #ffffff; stroke: #234f59; stroke-width: 2; }
+      .highlight { fill: #f59e0b; opacity: 0.30; stroke: #b45309; stroke-width: 2; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="920" height="360" fill="#ffffff"/>
+  <text x="40" y="38" class="title">2-D map grid to structured quad mesh</text>
+  <text x="40" y="63" class="small">Each coarse porosity-map cell becomes one quadrilateral mesh cell. The mesh is the map grid, not an image-interface fit.</text>
+
+  <rect x="40" y="88" width="320" height="234" class="panel"/>
+  <text x="62" y="118" class="label">Porosity map values</text>
+  <text x="62" y="139" class="small">cell averages on a regular grid</text>
+
+  <g transform="translate(88 155)">
+    <rect x="0" y="0" width="55" height="45" class="value-cell" fill="#f7d46b"/>
+    <rect x="55" y="0" width="55" height="45" class="value-cell" fill="#8dd3c7"/>
+    <rect x="110" y="0" width="55" height="45" class="value-cell" fill="#4fb3bf"/>
+    <rect x="165" y="0" width="55" height="45" class="value-cell" fill="#1f7a8c"/>
+    <rect x="0" y="45" width="55" height="45" class="value-cell" fill="#f59e0b"/>
+    <rect x="55" y="45" width="55" height="45" class="value-cell" fill="#f7d46b"/>
+    <rect x="110" y="45" width="55" height="45" class="value-cell" fill="#8dd3c7"/>
+    <rect x="165" y="45" width="55" height="45" class="value-cell" fill="#4fb3bf"/>
+    <rect x="0" y="90" width="55" height="45" class="value-cell" fill="#b45309"/>
+    <rect x="55" y="90" width="55" height="45" class="value-cell" fill="#f59e0b"/>
+    <rect x="110" y="90" width="55" height="45" class="value-cell" fill="#f7d46b"/>
+    <rect x="165" y="90" width="55" height="45" class="value-cell" fill="#8dd3c7"/>
+    <text x="27.5" y="22.5" class="cell-label">0.55</text>
+    <text x="82.5" y="22.5" class="cell-label">0.70</text>
+    <text x="137.5" y="22.5" class="cell-label">0.82</text>
+    <text x="192.5" y="22.5" class="cell-label">0.91</text>
+    <text x="27.5" y="67.5" class="cell-label">0.38</text>
+    <text x="82.5" y="67.5" class="cell-label">0.55</text>
+    <text x="137.5" y="67.5" class="cell-label">0.70</text>
+    <text x="192.5" y="67.5" class="cell-label">0.82</text>
+    <text x="27.5" y="112.5" class="cell-label">0.20</text>
+    <text x="82.5" y="112.5" class="cell-label">0.38</text>
+    <text x="137.5" y="112.5" class="cell-label">0.55</text>
+    <text x="192.5" y="112.5" class="cell-label">0.70</text>
+    <text x="110" y="150" class="small" text-anchor="middle">porosity.values</text>
+  </g>
+
+  <line x1="394" y1="202" x2="508" y2="202" stroke="#234f59" stroke-width="3" marker-end="url(#arrow)"/>
+  <text x="451" y="184" class="small" text-anchor="middle">same cells</text>
+  <text x="451" y="224" class="small" text-anchor="middle">same C-order data</text>
+
+  <rect x="548" y="88" width="332" height="234" class="panel"/>
+  <text x="570" y="118" class="label">Structured quad mesh</text>
+  <text x="570" y="139" class="small">shared points, quad connectivity, cell fields</text>
+
+  <g transform="translate(604 155)">
+    <rect x="55" y="45" width="55" height="45" class="highlight"/>
+    <path d="M0 0 H220 M0 45 H220 M0 90 H220 M0 135 H220" class="mesh-line"/>
+    <path d="M0 0 V135 M55 0 V135 M110 0 V135 M165 0 V135 M220 0 V135" class="mesh-line"/>
+    <circle cx="0" cy="0" r="4.6" class="node"/>
+    <circle cx="55" cy="0" r="4.6" class="node"/>
+    <circle cx="110" cy="0" r="4.6" class="node"/>
+    <circle cx="165" cy="0" r="4.6" class="node"/>
+    <circle cx="220" cy="0" r="4.6" class="node"/>
+    <circle cx="0" cy="45" r="4.6" class="node"/>
+    <circle cx="55" cy="45" r="4.6" class="node"/>
+    <circle cx="110" cy="45" r="4.6" class="node"/>
+    <circle cx="165" cy="45" r="4.6" class="node"/>
+    <circle cx="220" cy="45" r="4.6" class="node"/>
+    <circle cx="0" cy="90" r="4.6" class="node"/>
+    <circle cx="55" cy="90" r="4.6" class="node"/>
+    <circle cx="110" cy="90" r="4.6" class="node"/>
+    <circle cx="165" cy="90" r="4.6" class="node"/>
+    <circle cx="220" cy="90" r="4.6" class="node"/>
+    <circle cx="0" cy="135" r="4.6" class="node"/>
+    <circle cx="55" cy="135" r="4.6" class="node"/>
+    <circle cx="110" cy="135" r="4.6" class="node"/>
+    <circle cx="165" cy="135" r="4.6" class="node"/>
+    <circle cx="220" cy="135" r="4.6" class="node"/>
+    <text x="82.5" y="65" class="cell-label">cell n</text>
+    <text x="82.5" y="82" class="small" text-anchor="middle">phi, k</text>
+    <text x="110" y="150" class="small" text-anchor="middle">mesh.cells + cell_data</text>
+  </g>
+</svg>

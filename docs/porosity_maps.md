@@ -426,6 +426,13 @@ segmentation-boundary mesh of the original image.
 For a 2-D slice, each coarse porosity cell becomes one quadrilateral. For a
 3-D map, each coarse porosity cell becomes one hexahedron.
 
+![Structured 2-D porosity map converted cell-for-cell into a quadrilateral mesh](assets/mesh/structured_map_to_quad_mesh.svg)
+
+The 2-D scheme shows the essential ordering rule. The 3-D case is analogous:
+each coarse map volume cell becomes one hexahedral mesh cell instead of one
+quadrilateral. In both cases, porosity and permeability are cell-wise fields on
+the structured map mesh.
+
 ```python
 from voids.mesh import write_structured_map_meshes
 
@@ -445,6 +452,8 @@ geometry, but it should not be treated as the authoritative carrier of
 floating porosity/permeability fields. Keep the HDF5 map files, or a
 cell-data-preserving format such as VTU, as the source of truth for the
 coefficients.
+
+![Field carriers for HDF5, Gmsh, VTK, VTU, and Netgen exports](assets/mesh/mesh_export_field_carriers.svg)
 
 `voids` uses [`meshio`](https://github.com/nschloe/meshio) for mesh-file I/O.
 The meshio project documents support for Gmsh, VTK, VTU, Netgen, and many other
