@@ -3,11 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
 from voids.image.porosity import PermeabilityMap, PorosityMap
+
+MapMeshElement = Literal["auto", "quad", "triangle", "hexahedron", "tetra", "tetrahedron"]
 
 _FORMAT_EXTENSIONS = {
     "gmsh": ".msh",
@@ -30,8 +32,9 @@ class StructuredMapMesh:
         coordinates so 2-D maps can be written by formats that expect 3-D
         coordinates with ``z=0``.
     cells :
-        A single meshio-compatible cell block. 2-D maps use ``"quad"`` cells;
-        3-D maps use ``"hexahedron"`` cells.
+        A single meshio-compatible cell block. 2-D maps use ``"quad"`` cells by
+        default or ``"triangle"`` cells when requested. 3-D maps use
+        ``"hexahedron"`` cells by default or ``"tetra"`` cells when requested.
     cell_data :
         Cell-wise data arrays whose flattened order follows
         ``numpy.ravel(order="C")`` of the original map arrays.
@@ -94,10 +97,11 @@ def structured_map_mesh(
     *,
     permeability_map: PermeabilityMap | None = None,
     extra_cell_data: Mapping[str, np.ndarray] | None = None,
+    element_type: MapMeshElement = "auto",
     include_cell_index: bool = True,
     require_finite_cell_data: bool = True,
 ) -> StructuredMapMesh:
-    """Generate a structured quad/hex mesh from a regular porosity map.
+    """Generate a structured mesh from a regular porosity map.
 
     Parameters
     ----------
@@ -110,9 +114,17 @@ def structured_map_mesh(
     extra_cell_data :
         Optional additional cell-data arrays. Each array must have the same shape
         as ``porosity_map.values``.
+    element_type :
+        Mesh cell type. ``"auto"`` uses quadrilaterals for 2-D maps and
+        hexahedra for 3-D maps. ``"triangle"`` is valid only for 2-D maps and
+        splits each quadrilateral into two triangles. ``"tetra"`` and
+        ``"tetrahedron"`` are valid only for 3-D maps and split each
+        hexahedron into six tetrahedra.
     include_cell_index :
-        If ``True``, include a zero-based ``"cell_index"`` integer field. This is
-        useful when matching solver-exported cells back to the map arrays.
+        If ``True``, include a zero-based ``"cell_index"`` integer field that
+        maps each mesh cell back to its parent map cell. For simplex exports,
+        the child triangles or tetrahedra from one map cell share the same
+        value.
     require_finite_cell_data :
         If ``True``, reject NaN or infinite cell-data values before export.
 
@@ -133,15 +145,22 @@ def structured_map_mesh(
         shape=porosity_map.shape,
         cell_size=_map_cell_size(porosity_map),
         origin=_map_origin(porosity_map),
+        element_type=element_type,
     )
+    base_cell_count = int(np.prod(porosity_map.shape))
+    mesh_cell_count = int(cells[1].shape[0])
 
     cell_data: dict[str, list[np.ndarray]] = {
         "porosity": [
-            _flatten_cell_data(
-                porosity_map.values,
-                shape=porosity_map.shape,
-                name="porosity",
-                require_finite=require_finite_cell_data,
+            _expand_cell_data_to_mesh_cells(
+                _flatten_cell_data(
+                    porosity_map.values,
+                    shape=porosity_map.shape,
+                    name="porosity",
+                    require_finite=require_finite_cell_data,
+                ),
+                base_cell_count=base_cell_count,
+                mesh_cell_count=mesh_cell_count,
             )
         ]
     }
@@ -149,16 +168,26 @@ def structured_map_mesh(
     if permeability_map is not None:
         _validate_matching_map_grid(porosity_map, permeability_map)
         cell_data["permeability"] = [
-            _flatten_cell_data(
-                permeability_map.values,
-                shape=porosity_map.shape,
-                name="permeability",
-                require_finite=require_finite_cell_data,
+            _expand_cell_data_to_mesh_cells(
+                _flatten_cell_data(
+                    permeability_map.values,
+                    shape=porosity_map.shape,
+                    name="permeability",
+                    require_finite=require_finite_cell_data,
+                ),
+                base_cell_count=base_cell_count,
+                mesh_cell_count=mesh_cell_count,
             )
         ]
 
     if include_cell_index:
-        cell_data["cell_index"] = [np.arange(np.prod(porosity_map.shape), dtype=np.int64)]
+        cell_data["cell_index"] = [
+            _expand_cell_data_to_mesh_cells(
+                np.arange(base_cell_count, dtype=np.int64),
+                base_cell_count=base_cell_count,
+                mesh_cell_count=mesh_cell_count,
+            )
+        ]
 
     if extra_cell_data:
         for raw_name, raw_values in extra_cell_data.items():
@@ -168,11 +197,15 @@ def structured_map_mesh(
             if name in cell_data:
                 raise ValueError(f"Duplicate cell-data name {name!r}")
             cell_data[name] = [
-                _flatten_cell_data(
-                    raw_values,
-                    shape=porosity_map.shape,
-                    name=name,
-                    require_finite=require_finite_cell_data,
+                _expand_cell_data_to_mesh_cells(
+                    _flatten_cell_data(
+                        raw_values,
+                        shape=porosity_map.shape,
+                        name=name,
+                        require_finite=require_finite_cell_data,
+                    ),
+                    base_cell_count=base_cell_count,
+                    mesh_cell_count=mesh_cell_count,
                 )
             ]
 
@@ -185,6 +218,7 @@ def write_structured_map_mesh(
     *,
     permeability_map: PermeabilityMap | None = None,
     extra_cell_data: Mapping[str, np.ndarray] | None = None,
+    element_type: MapMeshElement = "auto",
     file_format: str | None = None,
     require_finite_cell_data: bool = True,
 ) -> Path:
@@ -192,7 +226,8 @@ def write_structured_map_mesh(
 
     Parameters
     ----------
-    porosity_map, permeability_map, extra_cell_data, require_finite_cell_data :
+    porosity_map, permeability_map, extra_cell_data, element_type,
+    require_finite_cell_data :
         Passed to :func:`structured_map_mesh`.
     path :
         Destination mesh path. The file extension normally determines the meshio
@@ -211,6 +246,7 @@ def write_structured_map_mesh(
         porosity_map,
         permeability_map=permeability_map,
         extra_cell_data=extra_cell_data,
+        element_type=element_type,
         require_finite_cell_data=require_finite_cell_data,
     )
     return mesh.write(path, file_format=file_format)
@@ -224,13 +260,15 @@ def write_structured_map_meshes(
     permeability_map: PermeabilityMap | None = None,
     formats: Sequence[str] = ("gmsh", "vtk", "vtu", "netgen"),
     extra_cell_data: Mapping[str, np.ndarray] | None = None,
+    element_type: MapMeshElement = "auto",
     require_finite_cell_data: bool = True,
 ) -> dict[str, Path]:
     """Write the same structured map mesh to several mesh formats.
 
     Parameters
     ----------
-    porosity_map, permeability_map, extra_cell_data, require_finite_cell_data :
+    porosity_map, permeability_map, extra_cell_data, element_type,
+    require_finite_cell_data :
         Passed to :func:`structured_map_mesh`.
     output_dir :
         Directory where mesh files will be written.
@@ -256,6 +294,7 @@ def write_structured_map_meshes(
         porosity_map,
         permeability_map=permeability_map,
         extra_cell_data=extra_cell_data,
+        element_type=element_type,
         require_finite_cell_data=require_finite_cell_data,
     )
 
@@ -333,17 +372,62 @@ def _flatten_cell_data(
     return np.asarray(arr).reshape(-1, order="C")
 
 
+def _expand_cell_data_to_mesh_cells(
+    values: np.ndarray,
+    *,
+    base_cell_count: int,
+    mesh_cell_count: int,
+) -> np.ndarray:
+    if values.shape != (base_cell_count,):
+        raise ValueError("flattened cell data length must match the map cell count")
+    if mesh_cell_count == base_cell_count:
+        return values
+    if mesh_cell_count == 2 * base_cell_count:
+        return np.repeat(values, 2)
+    if mesh_cell_count == 6 * base_cell_count:
+        return np.repeat(values, 6)
+    raise RuntimeError("unsupported structured map mesh cell expansion")
+
+
 def _structured_points_and_cells(
     *,
     shape: tuple[int, ...],
     cell_size: Sequence[float],
     origin: Sequence[float],
+    element_type: MapMeshElement = "auto",
 ) -> tuple[np.ndarray, tuple[str, np.ndarray]]:
+    normalized_element = _normalize_element_type(element_type)
     if len(shape) == 2:
-        return _structured_quad_mesh(shape=shape, cell_size=cell_size, origin=origin)
+        points, quad_cells = _structured_quad_mesh(shape=shape, cell_size=cell_size, origin=origin)
+        if normalized_element == "auto" or normalized_element == "quad":
+            return points, quad_cells
+        if normalized_element == "triangle":
+            return points, ("triangle", _split_quads_to_triangles(quad_cells[1]))
+        raise ValueError("2D structured map meshes support element_type='quad' or 'triangle'")
     if len(shape) == 3:
-        return _structured_hexahedron_mesh(shape=shape, cell_size=cell_size, origin=origin)
+        points, hexahedron_cells = _structured_hexahedron_mesh(
+            shape=shape,
+            cell_size=cell_size,
+            origin=origin,
+        )
+        if normalized_element == "auto" or normalized_element == "hexahedron":
+            return points, hexahedron_cells
+        if normalized_element == "tetra":
+            return points, ("tetra", _split_hexahedra_to_tetrahedra(hexahedron_cells[1]))
+        raise ValueError("3D structured map meshes support element_type='hexahedron' or 'tetra'")
     raise ValueError("structured mesh export supports only 2D or 3D maps")
+
+
+def _normalize_element_type(element_type: str) -> str:
+    normalized = str(element_type).strip().lower()
+    if normalized == "tetrahedron":
+        return "tetra"
+    if normalized not in {"auto", "quad", "triangle", "hexahedron", "tetra"}:
+        raise ValueError(
+            "element_type must be one of 'auto', 'quad', 'triangle', "
+            "'hexahedron', 'tetra', or 'tetrahedron'"
+        )
+    return normalized
 
 
 def _structured_quad_mesh(
@@ -374,6 +458,37 @@ def _structured_quad_mesh(
         ]
 
     return points, ("quad", cells)
+
+
+def _split_quads_to_triangles(quad_cells: np.ndarray) -> np.ndarray:
+    quads = np.asarray(quad_cells, dtype=np.int64)
+    if quads.ndim != 2 or quads.shape[1] != 4:
+        raise ValueError("quad_cells must have shape (n, 4)")
+
+    triangles = np.empty((2 * quads.shape[0], 3), dtype=np.int64)
+    triangles[0::2] = quads[:, [0, 1, 2]]
+    triangles[1::2] = quads[:, [0, 2, 3]]
+    return triangles
+
+
+def _split_hexahedra_to_tetrahedra(hexahedron_cells: np.ndarray) -> np.ndarray:
+    hexahedra = np.asarray(hexahedron_cells, dtype=np.int64)
+    if hexahedra.ndim != 2 or hexahedra.shape[1] != 8:
+        raise ValueError("hexahedron_cells must have shape (n, 8)")
+
+    local_tetrahedra = np.array(
+        [
+            [0, 1, 2, 6],
+            [0, 2, 3, 6],
+            [0, 3, 7, 6],
+            [0, 7, 4, 6],
+            [0, 4, 5, 6],
+            [0, 5, 1, 6],
+        ],
+        dtype=np.int64,
+    )
+    tetrahedra = hexahedra[:, local_tetrahedra].reshape(-1, 4)
+    return tetrahedra
 
 
 def _structured_hexahedron_mesh(

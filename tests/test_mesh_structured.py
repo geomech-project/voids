@@ -62,6 +62,73 @@ def test_structured_map_mesh_3d_uses_hexahedra() -> None:
     assert mesh.cells[0][1].shape == (2, 8)
 
 
+def test_structured_map_mesh_2d_can_split_quads_to_triangles() -> None:
+    """A 2D map can be exported as triangles with duplicated parent data."""
+
+    porosity = PorosityMap(values=np.array([[0.25]]), cell_size=(2.0, 3.0))
+    permeability = PermeabilityMap(
+        values=np.array([[1.0e-15]]),
+        cell_size=porosity.cell_size,
+    )
+
+    mesh = structured_map_mesh(
+        porosity,
+        permeability_map=permeability,
+        element_type="triangle",
+    )
+
+    assert mesh.cell_type == "triangle"
+    assert mesh.cell_count == 2
+    assert mesh.points.shape == (4, 3)
+    assert np.array_equal(mesh.cells[0][1], [[0, 2, 3], [0, 3, 1]])
+    assert np.allclose(mesh.cell_data["porosity"][0], [0.25, 0.25])
+    assert np.allclose(mesh.cell_data["permeability"][0], [1.0e-15, 1.0e-15])
+    assert np.array_equal(mesh.cell_data["cell_index"][0], [0, 0])
+
+
+def test_structured_map_mesh_3d_can_split_hexahedra_to_tetrahedra() -> None:
+    """A 3D map can be exported as tetrahedra with duplicated parent data."""
+
+    porosity = PorosityMap(values=np.array([[[0.5]]]), cell_size=(1.0, 2.0, 3.0))
+
+    mesh = structured_map_mesh(porosity, element_type="tetrahedron")
+
+    assert mesh.cell_type == "tetra"
+    assert mesh.cell_count == 6
+    assert mesh.points.shape == (8, 3)
+    assert np.array_equal(
+        mesh.cells[0][1],
+        [
+            [0, 4, 6, 7],
+            [0, 6, 2, 7],
+            [0, 2, 3, 7],
+            [0, 3, 1, 7],
+            [0, 1, 5, 7],
+            [0, 5, 4, 7],
+        ],
+    )
+    assert np.allclose(mesh.cell_data["porosity"][0], np.full(6, 0.5))
+    assert np.array_equal(mesh.cell_data["cell_index"][0], np.zeros(6, dtype=np.int64))
+
+
+def test_structured_map_mesh_rejects_incompatible_element_types() -> None:
+    """Simplex and tensor-product element choices must match map dimensionality."""
+
+    porosity_2d = PorosityMap(values=np.ones((1, 1)))
+    porosity_3d = PorosityMap(values=np.ones((1, 1, 1)))
+
+    with pytest.raises(ValueError, match="2D.*quad.*triangle"):
+        structured_map_mesh(porosity_2d, element_type="tetra")
+    with pytest.raises(ValueError, match="3D.*hexahedron.*tetra"):
+        structured_map_mesh(porosity_3d, element_type="triangle")
+    with pytest.raises(ValueError, match="element_type must be"):
+        structured_map_mesh(porosity_2d, element_type="polygon")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="quad_cells"):
+        structured_mod._split_quads_to_triangles(np.ones((1, 3), dtype=np.int64))
+    with pytest.raises(ValueError, match="hexahedron_cells"):
+        structured_mod._split_hexahedra_to_tetrahedra(np.ones((1, 7), dtype=np.int64))
+
+
 def test_structured_map_mesh_rejects_mismatched_or_nonfinite_fields() -> None:
     """Grid metadata and finite cell data are part of the export contract."""
 
@@ -143,6 +210,18 @@ def test_private_grid_validation_defensive_branches() -> None:
             cell_size=(1.0,),
             origin=(0.0,),
         )
+    with pytest.raises(ValueError, match="flattened cell data length"):
+        structured_mod._expand_cell_data_to_mesh_cells(
+            np.ones(2),
+            base_cell_count=1,
+            mesh_cell_count=1,
+        )
+    with pytest.raises(RuntimeError, match="unsupported structured map mesh cell expansion"):
+        structured_mod._expand_cell_data_to_mesh_cells(
+            np.ones(1),
+            base_cell_count=1,
+            mesh_cell_count=3,
+        )
 
 
 def test_mesh_format_extension_and_invalid_format(tmp_path) -> None:
@@ -187,6 +266,16 @@ def test_write_structured_map_mesh_roundtrips_vtu_cell_data(tmp_path) -> None:
     assert np.allclose(loaded.cell_data["porosity"][0], [0.25, 0.75])
     assert np.allclose(loaded.cell_data["permeability"][0], [1.0e-15, 2.0e-15])
 
+    triangle_path = write_structured_map_mesh(
+        porosity,
+        tmp_path / "toy-triangle.vtu",
+        permeability_map=permeability,
+        element_type="triangle",
+    )
+    loaded_triangles = meshio.read(triangle_path)
+    assert loaded_triangles.cells[0].type == "triangle"
+    assert np.allclose(loaded_triangles.cell_data["porosity"][0], [0.25, 0.25, 0.75, 0.75])
+
 
 def test_write_structured_map_meshes_writes_requested_formats(tmp_path) -> None:
     """Batch export writes mesh paths for selected format labels."""
@@ -212,3 +301,24 @@ def test_write_structured_map_meshes_writes_requested_formats(tmp_path) -> None:
     assert "porosity" in meshio.read(paths["gmsh"]).cell_data
     assert meshio.read(paths["vtk"]).cells[0].type == "quad"
     assert meshio.read(paths["netgen"]).cells[0].type == "quad"
+
+
+def test_write_structured_tetra_meshes_writes_requested_formats(tmp_path) -> None:
+    """Batch export can write the 3D simplex counterpart of triangle meshes."""
+
+    import meshio
+
+    porosity = PorosityMap(values=np.array([[[0.5]]]), cell_size=(1.0, 1.0, 1.0))
+
+    paths = write_structured_map_meshes(
+        porosity,
+        tmp_path,
+        stem="toy_tetra",
+        formats=("gmsh", "vtk", "vtu", "netgen"),
+        element_type="tetra",
+    )
+
+    for path in paths.values():
+        loaded = meshio.read(path)
+        assert loaded.cells[0].type == "tetra"
+        assert len(loaded.cells[0].data) == 6

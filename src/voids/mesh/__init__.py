@@ -1,4 +1,5 @@
 from voids.mesh.structured import (
+    MapMeshElement,
     StructuredMapMesh,
     mesh_format_extension,
     structured_map_mesh,
@@ -7,6 +8,7 @@ from voids.mesh.structured import (
 )
 
 __all__ = [
+    "MapMeshElement",
     "StructuredMapMesh",
     "mesh_format_extension",
     "structured_map_mesh",
