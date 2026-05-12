@@ -413,8 +413,10 @@ patches, and field naming explicitly.
 ## Structured Mesh Export
 
 `voids.mesh` can convert a regular `PorosityMap`, optionally paired with a
-matching `PermeabilityMap`, into a structured quad mesh for 2-D maps or a
-structured hexahedral mesh for 3-D maps.
+matching `PermeabilityMap`, into a structured mesh. The default cells are
+quadrilaterals for 2-D maps and hexahedra for 3-D maps. If a downstream solver
+expects simplex cells, the same map grid can also be subdivided into triangles
+in 2-D or tetrahedra in 3-D.
 The cell data order is explicit:
 
 ```python
@@ -423,15 +425,20 @@ cell_data["porosity"][0][n] == porosity.values.ravel(order="C")[n]
 
 This means the mesh is a representation of the coarse map grid, not a
 segmentation-boundary mesh of the original image.
-For a 2-D slice, each coarse porosity cell becomes one quadrilateral. For a
-3-D map, each coarse porosity cell becomes one hexahedron.
+For a 2-D slice, each coarse porosity cell becomes one quadrilateral by default,
+or two triangles when `element_type="triangle"`. For a 3-D map, each coarse
+porosity cell becomes one hexahedron by default, or six tetrahedra when
+`element_type="tetra"` or `element_type="tetrahedron"`. In the simplex exports,
+the child cells inherit the same porosity, permeability, and parent
+`cell_index` values as the original coarse map cell.
 
 ![Structured 2-D porosity map converted cell-for-cell into a quadrilateral mesh](assets/mesh/structured_map_to_quad_mesh.svg)
 
-The 2-D scheme shows the essential ordering rule. The 3-D case is analogous:
-each coarse map volume cell becomes one hexahedral mesh cell instead of one
-quadrilateral. In both cases, porosity and permeability are cell-wise fields on
-the structured map mesh.
+The 2-D scheme shows the default cell-for-cell quadrilateral export. The 3-D
+default is analogous: each coarse map volume cell becomes one hexahedral mesh
+cell instead of one quadrilateral. The simplex options subdivide those default
+cells, but porosity and permeability remain cell-wise fields inherited from the
+parent map cell.
 
 ```python
 from voids.mesh import write_structured_map_meshes
@@ -442,6 +449,15 @@ paths = write_structured_map_meshes(
     stem="case_a_porosity_permeability",
     permeability_map=permeability,
     formats=("gmsh", "vtk", "vtu", "netgen"),
+)
+
+triangle_paths = write_structured_map_meshes(
+    porosity,
+    "outputs/case_a",
+    stem="case_a_porosity_permeability_triangles",
+    permeability_map=permeability,
+    formats=("gmsh", "vtk", "vtu"),
+    element_type="triangle",
 )
 ```
 
@@ -463,7 +479,9 @@ Check the exported mesh in the target solver before interpreting a simulation.
 
 !!! warning "Gmsh export versus Gmsh meshing"
     The `.msh` export is a structured map mesh written in Gmsh format. It does
-    not run Gmsh to remesh the bone/marrow interface. If a later workflow needs
+    not run Gmsh to remesh the bone/marrow interface. The triangular and
+    tetrahedral options are structured subdivisions of the porosity-map cells,
+    not boundary-conforming image-to-geometry meshes. If a later workflow needs
     a boundary-conforming triangular or tetrahedral mesh, the image-to-geometry
     step and boundary labels should be specified as a separate model.
 
