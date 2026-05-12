@@ -7,7 +7,7 @@
 # - a marrow-space porosity map, computed as block-averaged local void fraction
 # - a Kozeny-Carman permeability map on the same coarse cells
 # - HDF5 map exports with metadata
-# - structured quad-mesh exports in Gmsh, VTK, VTU, and Netgen-compatible formats
+# - structured quad- and triangle-mesh exports for Gmsh/VTK-style workflows
 #
 # The source image is the same RAW segmentation used in
 # `35_mwe_trabecular_bone_morphometry`.
@@ -22,10 +22,10 @@
 #   sidecar header
 # - a single 2-D slice cannot measure 3-D absolute permeability; the
 #   permeability field below is a closure-based local coefficient
-# - the generated mesh is the regular porosity-map grid, not a
+# - the generated meshes are the regular porosity-map grid, not a
 #   bone/marrow-interface conforming segmentation mesh
 #
-# The Gmsh, VTK, and VTU files carry floating cell data through `meshio`.
+# The Gmsh, VTK, and VTU files carry floating cell data through `meshio`. The
 # Netgen `.vol` export is geometry-oriented in `meshio`, so the HDF5 maps remain
 # the authoritative porosity/permeability field export for Netgen workflows.
 
@@ -83,6 +83,7 @@ free_flow_permeability_m2 = 1.0e-8
 max_permeability_m2 = 1.0e-8
 
 mesh_formats = ("gmsh", "vtk", "vtu", "netgen")
+triangle_mesh_formats = ("gmsh", "vtk", "vtu")
 
 output_dir = (
     project_root()
@@ -328,11 +329,12 @@ map_figure_path
 # ## Export maps and structured meshes
 #
 # The HDF5 files are the solver-neutral map exports. The mesh exports use a
-# structured quad grid where cell data follows `porosity_map.values.ravel("C")`.
-# Gmsh `.msh`, VTK `.vtk`, and VTU `.vtu` preserve the floating cell fields in
-# this workflow. The Netgen `.vol` file is still useful as geometry, but the
-# continuous fields should be taken from HDF5 or a format that preserves cell
-# data.
+# structured quad grid and a triangle subdivision of that grid. In both cases,
+# cell data follows `porosity_map.values.ravel("C")`; each triangle inherits
+# the porosity and permeability of its parent map cell. Gmsh `.msh`, VTK
+# `.vtk`, and VTU `.vtu` preserve the floating cell fields in this workflow.
+# The Netgen `.vol` file is still useful as geometry, but the continuous fields
+# should be taken from HDF5 or a format that preserves cell data.
 
 # %%
 porosity_h5 = output_dir / "trabecular_bone_slice_porosity_map.h5"
@@ -357,6 +359,14 @@ mesh_paths = write_structured_map_meshes(
     permeability_map=permeability_map,
     formats=mesh_formats,
 )
+triangle_mesh_paths = write_structured_map_meshes(
+    porosity_map,
+    output_dir,
+    stem="trabecular_bone_slice_triangle_maps",
+    permeability_map=permeability_map,
+    formats=triangle_mesh_formats,
+    element_type="triangle",
+)
 
 combined_summary = pd.concat(
     [
@@ -368,20 +378,23 @@ combined_summary = pd.concat(
 combined_summary.to_csv(summary_csv, index=False)
 
 mesh_checks: list[dict[str, object]] = []
-for fmt, path in mesh_paths.items():
-    loaded_mesh = meshio.read(path)
-    cell_data_names = sorted(loaded_mesh.cell_data.keys())
-    mesh_checks.append(
-        {
-            "format": fmt,
-            "path": str(path.relative_to(project_root())),
-            "cell_type": loaded_mesh.cells[0].type,
-            "cell_count": int(len(loaded_mesh.cells[0].data)),
-            "has_porosity_cell_data": "porosity" in cell_data_names,
-            "has_permeability_cell_data": "permeability" in cell_data_names,
-            "cell_data_names": ", ".join(cell_data_names),
-        }
-    )
+mesh_path_groups = {"quad": mesh_paths, "triangle": triangle_mesh_paths}
+for mesh_family, paths in mesh_path_groups.items():
+    for fmt, path in paths.items():
+        loaded_mesh = meshio.read(path)
+        cell_data_names = sorted(loaded_mesh.cell_data.keys())
+        mesh_checks.append(
+            {
+                "mesh_family": mesh_family,
+                "format": fmt,
+                "path": str(path.relative_to(project_root())),
+                "cell_type": loaded_mesh.cells[0].type,
+                "cell_count": int(len(loaded_mesh.cells[0].data)),
+                "has_porosity_cell_data": "porosity" in cell_data_names,
+                "has_permeability_cell_data": "permeability" in cell_data_names,
+                "cell_data_names": ", ".join(cell_data_names),
+            }
+        )
 
 exports = pd.DataFrame(
     [
@@ -407,10 +420,11 @@ exports = pd.DataFrame(
         },
         *[
             {
-                "artifact": f"{fmt} structured mesh",
+                "artifact": f"{fmt} structured {mesh_family} mesh",
                 "path": str(path.relative_to(project_root())),
             }
-            for fmt, path in mesh_paths.items()
+            for mesh_family, paths in mesh_path_groups.items()
+            for fmt, path in paths.items()
         ],
     ]
 )
