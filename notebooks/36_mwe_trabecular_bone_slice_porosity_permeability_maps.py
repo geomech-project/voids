@@ -73,7 +73,7 @@ slice_index: int | None = None
 
 voxel_size_nm = 2086.0
 voxel_size_m = voxel_size_nm * 1.0e-9
-block_shape = (10, 10)
+block_shape = (5, 5)
 
 # Kozeny-Carman closure parameters. These are deliberately editable because they
 # are model assumptions, not measurements from a single slice.
