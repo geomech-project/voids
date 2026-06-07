@@ -688,8 +688,8 @@ For real datasets, a defensible validation sequence should include:
 
 The `voids` porosity-map representation is compatible with the micro-continuum
 porosity fields described by Soulaine and Tchelepi (2016) and Soulaine et al.
-(2016), but it is not yet a full implementation of their Darcy-Brinkman or
-Darcy-Brinkman-Stokes model.
+(2016), but it does not implement their Darcy-Brinkman or
+Darcy-Brinkman-Stokes solver.
 
 In Soulaine and Tchelepi (2016) and Soulaine et al. (2016), the central
 image-derived field is a local void fraction:
@@ -797,8 +797,8 @@ So the safest statement is:
     the \(\epsilon_f\) field used in published micro-continuum models, and
     it can derive an associated Kozeny-Carman permeability or inverse-permeability
     field.
-    It does not yet implement the associated Darcy-Brinkman-Stokes equations or
-    a solver-specific field export.
+    It does not implement the associated Darcy-Brinkman-Stokes equations or a
+    solver-specific field export.
 
 ## References
 
