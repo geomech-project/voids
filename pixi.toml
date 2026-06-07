@@ -5,6 +5,9 @@ description = "Scientific Python package for pore network modeling (PNM)"
 channels = ["conda-forge"]
 platforms = ["linux-64", "osx-arm64", "win-64"]
 
+##########################################
+########## Core dependencies #############
+##########################################
 [dependencies]
 python = ">=3.11,<3.13"
 numpy = ">=1.26,<2.2"
@@ -28,11 +31,57 @@ pyvista = ">=0.43"
 kaleido = ">=0.2.1"
 meshio = ">=5.3"
 
+##########################################
+####### Platform dependencies ############
+##########################################
+
 [target.linux-64.dependencies]
 mkl = ">=2023"
 
 [target.linux-64.pypi-dependencies]
 pypardiso = ">=0.4"
+
+##########################################
+####### Features dependencies ############
+##########################################
+
+[feature.dev.dependencies]
+ruff = ">=0.6"
+mypy = ">=1.10"
+pre-commit = ">=3.7"
+ipython = ">=8.0"
+jupyterlab = ">=4.0"
+jupytext = ">=1.19.1,<2"
+pandas = ">=3.0.1,<4"
+zlib = ">=1.3.2,<2"
+
+[feature.notebooks.dependencies]
+ipython = ">=8.0"
+jupyterlab = ">=4.0"
+jupytext = ">=1.19.1,<2"
+
+[feature.viz.dependencies]
+vtk = "9.*"
+trame = "3.*"
+matplotlib-base = "*"
+
+[feature.test.dependencies]
+pytest = ">=8.0"
+pytest-cov = ">=5.0"
+pytest-regressions = ">=2.8"
+networkx = ">=3.2"
+
+[feature.lbm.pypi-dependencies]
+xlb = ">=0.3,<0.4"
+
+[feature.docs.pypi-dependencies]
+mkdocs = ">=1.5,<2.0"
+mkdocs-material = ">=9.5"
+mkdocstrings = {version = ">=0.25", extras = ["python"]}
+
+[feature.thermo.pypi-dependencies]
+coolprop = ">=6.6"
+thermo = ">=0.6.0, <0.7"
 
 [target.unix.activation.env]
 PYTHONPATH = "$PIXI_PROJECT_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
@@ -69,48 +118,10 @@ precommit-sync = "python scripts/sync_notebooks.py && pre-commit run --all-files
 docs-build = "pixi run -e docs mkdocs build"
 docs-serve = "pixi run -e docs mkdocs serve"
 
-[feature.dev.dependencies]
-pytest = ">=8.0"
-pytest-cov = ">=5.0"
-pytest-regressions = ">=2.8"
-ruff = ">=0.6"
-mypy = ">=1.10"
-pre-commit = ">=3.7"
-ipython = ">=8.0"
-jupyterlab = ">=4.0"
-matplotlib = ">=3.8"
-jupytext = ">=1.19.1,<2"
-pandas = ">=3.0.1,<4"
-zlib = ">=1.3.2,<2"
-
-[feature.viz.dependencies]
-vtk = "9.*"
-trame = "3.*"
-
-[feature.test.dependencies]
-networkx = ">=3.2"
-
-[feature.lbm.pypi-dependencies]
-xlb = ">=0.3,<0.4"
-
-[feature.docs.pypi-dependencies]
-mkdocs = ">=1.5,<2.0"
-mkdocs-material = ">=9.5"
-mkdocstrings = {version = ">=0.25", extras = ["python"]}
-
-[feature.docs.dependencies]
-ruff = ">=0.6"
-
-[feature.thermo.pypi-dependencies]
-coolprop = ">=6.6"
-thermo = ">=0.6.0, <0.7"
-
 [feature.docs.activation.env]
 NO_MKDOCS_2_WARNING = "1"
 
 [environments]
-default = { features = ["dev", "viz", "thermo"], solve-group = "default" }
+default = { features = ["dev", "viz", "notebooks", "thermo", "lbm"], solve-group = "default" }
 test = { features = ["dev", "viz", "test"], solve-group = "default" }
-lbm = { features = ["dev", "test", "lbm"], solve-group = "lbm" }
 docs = { features = ["docs"], solve-group = "docs" }
-thermo = { features = ["dev", "viz", "thermo"], solve-group = "default" }
