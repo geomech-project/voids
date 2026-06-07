@@ -74,6 +74,9 @@ networkx = ">=3.2"
 [feature.lbm.pypi-dependencies]
 xlb = ">=0.3,<0.4"
 
+[feature.fvm.dependencies]
+fipy = "*"
+
 [feature.docs.pypi-dependencies]
 mkdocs = ">=1.5,<2.0"
 mkdocs-material = ">=9.5"
@@ -122,6 +125,6 @@ docs-serve = "pixi run -e docs mkdocs serve"
 NO_MKDOCS_2_WARNING = "1"
 
 [environments]
-default = { features = ["dev", "viz", "notebooks", "thermo", "lbm"], solve-group = "default" }
+default = { features = ["dev", "viz", "notebooks", "thermo", "lbm", "fvm"], solve-group = "default" }
 test = { features = ["dev", "viz", "test"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "docs" }
