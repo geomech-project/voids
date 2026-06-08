@@ -17232,19 +17232,16 @@ packages:
   - numba>=0.60
   - scikit-image>=0.22
   - tifffile>=2023.8
+  - h5py>=3.10
+  - typing-extensions>=4.10
+  - plotly>=5.0
   - porespy>=2.4
   - openpnm>=3.6,<3.7
   - pyamg>=5.3
-  - pypardiso>=0.4 ; sys_platform == 'linux'
-  - mkl>=2023 ; sys_platform == 'linux'
-  - h5py>=3.10
-  - meshio>=5.3
-  - plotly>=5.0
   - pyvista>=0.43
-  - typing-extensions>=4.10
-  - pytest>=8.0 ; extra == 'dev'
-  - pytest-cov>=5.0 ; extra == 'dev'
-  - pytest-regressions>=2.8 ; extra == 'dev'
+  - meshio>=5.3
+  - mkl>=2023 ; sys_platform == 'linux'
+  - pypardiso>=0.4 ; sys_platform == 'linux'
   - ruff>=0.6 ; extra == 'dev'
   - mypy>=1.10 ; extra == 'dev'
   - pre-commit>=3.7 ; extra == 'dev'
@@ -17252,11 +17249,9 @@ packages:
   - jupyterlab>=4.0 ; extra == 'dev'
   - jupytext>=1.19.1,<2 ; extra == 'dev'
   - pandas>=3.0.1,<4 ; extra == 'dev'
-  - matplotlib>=3.8 ; extra == 'dev'
   - ipython>=8.0 ; extra == 'notebooks'
   - jupyterlab>=4.0 ; extra == 'notebooks'
   - jupytext>=1.19.1,<2 ; extra == 'notebooks'
-  - pyvista>=0.43 ; extra == 'viz'
   - vtk==9.* ; extra == 'viz'
   - trame==3.* ; extra == 'viz'
   - matplotlib>=3.8 ; extra == 'viz'
@@ -17268,8 +17263,8 @@ packages:
   - mkdocs>=1.5,<2.0 ; extra == 'docs'
   - mkdocs-material>=9.5 ; extra == 'docs'
   - mkdocstrings[python]>=0.25 ; extra == 'docs'
-  - thermo>=0.6.0,<0.7 ; extra == 'thermo'
   - coolprop>=6.6 ; extra == 'thermo'
+  - thermo>=0.6.0,<0.7 ; extra == 'thermo'
   requires_python: '>=3.11'
 - pypi: https://files.pythonhosted.org/packages/00/d5/15c143c91a6c30291dcece5e36437bdd1ffc08e599f6481fd8a6ceae7679/porespy-3.0.3-py3-none-any.whl
   name: porespy
