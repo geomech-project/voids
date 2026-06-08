@@ -74,6 +74,9 @@ networkx = ">=3.2"
 [feature.lbm.pypi-dependencies]
 xlb = ">=0.3,<0.4"
 
+[feature.fem.dependencies]
+fenics-dolfinx = ">=0.9,<0.11"
+
 [feature.docs.pypi-dependencies]
 mkdocs = ">=1.5,<2.0"
 mkdocs-material = ">=9.5"
@@ -97,6 +100,9 @@ VOIDS_NOTEBOOKS_PATH = "%PIXI_PROJECT_ROOT%\\notebooks"
 VOIDS_EXAMPLES_PATH = "%PIXI_PROJECT_ROOT%\\examples"
 VOIDS_DATA_PATH = "%PIXI_PROJECT_ROOT%\\examples\\data"
 
+[target.osx-arm64.activation.env]
+FI_PROVIDER = "tcp"
+
 [tasks]
 lint = "ruff check src tests"
 format-check = "ruff format --check src tests"
@@ -113,6 +119,7 @@ register-kernels = "pixi run -e default python -m ipykernel install --user --nam
 unregister-kernels = "python -m jupyter kernelspec uninstall -f voids-default voids-test"
 bump-version = "python scripts/bump_version.py"
 sync-deps = "python scripts/sync_deps.py"
+sync-deps-check = "python scripts/sync_deps.py --check"
 notebooks-sync = "python scripts/sync_notebooks.py"
 precommit-sync = "python scripts/sync_notebooks.py && pre-commit run --all-files"
 docs-build = "pixi run -e docs mkdocs build"
@@ -122,6 +129,6 @@ docs-serve = "pixi run -e docs mkdocs serve"
 NO_MKDOCS_2_WARNING = "1"
 
 [environments]
-default = { features = ["dev", "viz", "notebooks", "thermo", "lbm"], solve-group = "default" }
+default = { features = ["dev", "viz", "notebooks", "thermo", "lbm", "fem"], solve-group = "default" }
 test = { features = ["dev", "viz", "test"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "docs" }
