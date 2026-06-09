@@ -25,6 +25,10 @@ def test_tpfa_constant_2d_map_recovers_input_permeability() -> None:
     assert result.mass_balance_error < 1.0e-12
     assert result.cell_size == (0.5, 0.25)
     assert result.metadata["case"] == "constant"
+    assert result.matrix_nnz > 0
+    assert result.solve_seconds >= 0.0
+    assert result.solver_info["method"] == "direct"
+    assert result.residual_relative < 1.0e-10
 
 
 def test_tpfa_constant_3d_array_accepts_sequence_cell_size() -> None:
@@ -49,6 +53,20 @@ def test_tpfa_upscaling_solves_requested_axes() -> None:
     assert upscale_principal_permeabilities_tpfa(permeability, axes=("z",)) == {
         "z": pytest.approx(4.2)
     }
+
+
+def test_tpfa_accepts_iterative_solver_controls() -> None:
+    result = solve_tpfa(
+        np.full((4, 4), 3.1),
+        flow_axis="y",
+        solver_method="cg",
+        solver_parameters={"rtol": 1.0e-12, "atol": 0.0, "maxiter": 200},
+    )
+
+    assert result.permeability == pytest.approx(3.1)
+    assert result.solver_method == "cg"
+    assert result.solver_info["info"] == 0
+    assert result.residual_relative < 1.0e-10
 
 
 def test_tpfa_rejects_nonpositive_pressure_drop() -> None:
