@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 import numpy as np
@@ -9,11 +10,16 @@ pytest.importorskip("dolfinx")
 
 from voids.fem.singlephase import (  # noqa: E402
     FEMMapProblem,
+    FEniCSSolverOptions,
     solve_brinkman_taylor_hood,
     solve_brinkman_usfem,
     solve_darcy_taylor_hood,
     upscale_permeability_fem,
     upscale_principal_permeabilities_fem,
+)
+from voids.fem.singlephase._common import (  # noqa: E402
+    _FEM_THREAD_ENV_DEFAULTS,
+    _apply_fem_thread_defaults,
 )
 from voids.image.porosity import PermeabilityMap, PorosityMap  # noqa: E402
 
@@ -24,6 +30,42 @@ def _constant_problem(shape: tuple[int, ...], permeability: float = 2.0) -> FEMM
         porosity_map=PorosityMap(np.ones(shape), cell_size=1.0),
         viscosity=1.0,
     )
+
+
+def test_fem_thread_defaults_preserve_existing_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENBLAS_NUM_THREADS", raising=False)
+    monkeypatch.delenv("VECLIB_MAXIMUM_THREADS", raising=False)
+    monkeypatch.setenv("OMP_NUM_THREADS", "2")
+
+    _apply_fem_thread_defaults()
+
+    assert os.environ["OMP_NUM_THREADS"] == "2"
+    assert os.environ["OPENBLAS_NUM_THREADS"] == _FEM_THREAD_ENV_DEFAULTS["OPENBLAS_NUM_THREADS"]
+    assert (
+        os.environ["VECLIB_MAXIMUM_THREADS"] == _FEM_THREAD_ENV_DEFAULTS["VECLIB_MAXIMUM_THREADS"]
+    )
+
+
+def test_fenics_solver_options_direct_lu_builder() -> None:
+    options = FEniCSSolverOptions.direct_lu("superlu_dist")
+
+    assert options.petsc_options == {
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "superlu_dist",
+        "ksp_error_if_not_converged": True,
+        "pc_factor_shift_type": "nonzero",
+        "pc_factor_shift_amount": 1.0e-12,
+    }
+
+    mumps_options = FEniCSSolverOptions.direct_lu(
+        "mumps",
+        mumps_memory_relaxation_percent=500,
+        mumps_workspace_mb=20000,
+    )
+
+    assert mumps_options.petsc_options["mat_mumps_icntl_14"] == 500
+    assert mumps_options.petsc_options["mat_mumps_icntl_23"] == 20000
 
 
 @pytest.mark.parametrize(
@@ -42,6 +84,7 @@ def test_fem_backends_recover_constant_2d_permeability(
     assert result.permeability == pytest.approx(2.0, rel=5.0e-4)
     assert result.flow_rate > 0.0
     assert result.solve_seconds >= 0.0
+    assert result.metadata["petsc_options"]["pc_factor_mat_solver_type"] == "mumps"
     assert np.all(np.isfinite(result.velocity.x.array))
     assert np.all(np.isfinite(result.pressure.x.array))
 

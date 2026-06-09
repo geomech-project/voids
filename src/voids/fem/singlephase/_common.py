@@ -1,12 +1,31 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Callable, cast
 
-import numpy as np
+_FEM_THREAD_ENV_DEFAULTS = {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "NUMEXPR_NUM_THREADS": "1",
+}
 
-from voids.image.porosity import PermeabilityMap, PorosityMap
+
+def _apply_fem_thread_defaults() -> None:
+    """Keep direct sparse factorizations away from unsafe threaded BLAS defaults."""
+
+    for name, value in _FEM_THREAD_ENV_DEFAULTS.items():
+        os.environ.setdefault(name, value)
+
+
+_apply_fem_thread_defaults()
+
+import numpy as np  # noqa: E402
+
+from voids.image.porosity import PermeabilityMap, PorosityMap  # noqa: E402
 
 
 _AXIS_NAMES = ("x", "y", "z")
@@ -20,7 +39,10 @@ class FEniCSSolverOptions:
 
     Defaults use a direct LU solve with MUMPS, matching the Pixi ``fem``
     feature stack. Override ``petsc_options`` when a different PETSc
-    installation or preconditioned iterative strategy is desired.
+    installation or preconditioned iterative strategy is desired. For
+    high-contrast mixed Darcy-Brinkman systems, prefer a robust external
+    factorization package such as MUMPS over PETSc's built-in LU backend unless
+    independent verification on the same problem class has confirmed the result.
     """
 
     petsc_options: dict[str, Any] = field(
@@ -33,6 +55,49 @@ class FEniCSSolverOptions:
         }
     )
     petsc_options_prefix: str = "voids_fem_"
+
+    @classmethod
+    def direct_lu(
+        cls,
+        backend: str = "mumps",
+        *,
+        petsc_options_prefix: str = "voids_fem_",
+        shift_amount: float | None = 1.0e-12,
+        mumps_memory_relaxation_percent: int | None = None,
+        mumps_workspace_mb: int | None = None,
+    ) -> FEniCSSolverOptions:
+        """Create PETSc options for a direct sparse LU solve.
+
+        Parameters
+        ----------
+        backend :
+            PETSc factorization package, for example ``"mumps"`` or
+            ``"superlu_dist"``.
+        petsc_options_prefix :
+            Prefix used by DOLFINx for PETSc runtime options.
+        shift_amount :
+            Nonzero diagonal shift used during factorization. Pass ``None`` to
+            omit the shift options.
+        mumps_memory_relaxation_percent, mumps_workspace_mb :
+            Optional MUMPS memory controls. They are added only when the backend
+            is ``"mumps"``.
+        """
+
+        options: dict[str, Any] = {
+            "ksp_type": "preonly",
+            "pc_type": "lu",
+            "pc_factor_mat_solver_type": backend,
+            "ksp_error_if_not_converged": True,
+        }
+        if shift_amount is not None:
+            options["pc_factor_shift_type"] = "nonzero"
+            options["pc_factor_shift_amount"] = float(shift_amount)
+        if backend == "mumps":
+            if mumps_memory_relaxation_percent is not None:
+                options["mat_mumps_icntl_14"] = int(mumps_memory_relaxation_percent)
+            if mumps_workspace_mb is not None:
+                options["mat_mumps_icntl_23"] = int(mumps_workspace_mb)
+        return cls(petsc_options=options, petsc_options_prefix=petsc_options_prefix)
 
 
 @dataclass(slots=True)
@@ -529,6 +594,7 @@ def _solve_with_form_builder(
     form_builder: Callable[[_FEMContext, Any, Any, Any, Any], Any],
 ) -> FEMSinglePhaseResult:
     _validate_pressure_drop(pressure_inlet, pressure_outlet)
+    solver_options = options or FEniCSSolverOptions()
     context = _build_context(problem, flow_axis=flow_axis)
     W = _mixed_space(
         context.api,
@@ -553,7 +619,7 @@ def _solve_with_form_builder(
         form=form,
         rhs=rhs,
         bcs=bcs,
-        options=options,
+        options=solver_options,
         prefix_suffix=prefix_suffix,
     )
     return _result_from_solution(
@@ -571,6 +637,8 @@ def _solve_with_form_builder(
             "pressure_family": pressure_family,
             "porosity_floor": problem.porosity_floor,
             "permeability_floor": problem.permeability_floor,
+            "petsc_options": dict(solver_options.petsc_options),
+            "petsc_options_prefix": solver_options.petsc_options_prefix,
         },
     )
 
