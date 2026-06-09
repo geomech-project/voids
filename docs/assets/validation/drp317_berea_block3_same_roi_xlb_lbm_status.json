@@ -1,0 +1,19 @@
+{
+  "requested": true,
+  "status": "ok",
+  "options": {
+    "formulation": "steady_stokes_limit",
+    "backend": "jax",
+    "precision_policy": "FP32FP32",
+    "collision_model": "BGK",
+    "streaming_scheme": "pull",
+    "lattice_viscosity": 0.1,
+    "pressure_drop_lattice": 6.666666666666667e-05,
+    "inlet_outlet_buffer_cells": 12,
+    "max_steps": 8000,
+    "min_steps": 1200,
+    "check_interval": 100,
+    "steady_rtol": 0.0001
+  },
+  "sensitivity_basis": "selected after DRP-317 representative sweep over tolerance, reservoir length, pressure drop, and BGK viscosity"
+}

@@ -1,0 +1,12 @@
+quantity,value,units
+sample,DRP-317 Bentheimer,-
+RAW path,/Users/dtvolpatto/Work/voids/examples/data/drp-317/Bentheimer_2d25um_binary.raw,-
+phase convention,"0=void/pore, 1=solid",-
+ROI origin,"(0, 694, 694)",voxels
+ROI shape,"(75, 75, 75)",voxels
+voxel size,2.25e-06,m
+ROI porosity,26.624237037037034,%
+full-image porosity if void==0,26.718859600000002,%
+experimental porosity,22.64,%
+experimental Kabs,386.0,mD
+map block shape,"(3, 3, 3)",voxels
