@@ -11,26 +11,36 @@
 [![pip install voids](https://img.shields.io/badge/pip%20install-voids-3775A9?logo=pypi&logoColor=white)](https://pypi.org/project/voids/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18937646.svg)](https://doi.org/10.5281/zenodo.18937646)
 
-`voids` is a scientific Python package for pore network modeling (PNM) aimed at
-research workflows where reproducibility, explicit assumptions, and validation matter.
-The current project emphasis is a clean canonical network model, interoperability with
-PoreSpy/OpenPNM-style data, and a validated single-phase workflow that now includes
-shape-aware conductance, pressure-dependent thermodynamic viscosity, and nonlinear
-solve options before expanding to more complex multiphase physics.
+`voids` is a scientific Python package for digital porous media research. Its main
+modeling approach is pore-network modeling (PNM): images, extracted networks,
+geometry, provenance, and transport assumptions are kept explicit so permeability
+studies can be reproduced and compared.
+
+Alongside PNM, `voids` provides complementary single-phase transport backends:
+micro-continuum models with the finite-volume method (FVM) and finite-element
+method (FEM), and direct numerical simulation (DNS) with the lattice Boltzmann
+method (LBM). These backends make it possible to compare pore-network,
+micro-continuum, and voxel-image descriptions of the same digital porous medium.
+Interoperability with PoreSpy/OpenPNM-style data remains part of the package
+contract.
 
 ## Goals
 
 The intended direction of `voids` is:
 
-- provide a rigorous internal representation of pore-throat networks
+- make PNM the main modeling path for digital porous media studies
 - preserve sample geometry and provenance information needed for reproducible studies
 - support import and normalization of extracted networks from external tools
+- provide micro-continuum FVM/FEM and DNS LBM backends for single-phase comparison
+  and upscaling
 - expose well-scoped physics modules with diagnostics and regression tests
-- build confidence on single-phase transport first, then expand toward richer models
+- build confidence from validated single-phase transport before adding richer models
 
 This is a research codebase, not a GUI application or a full image-to-network extraction
 pipeline. Raw segmentation and extraction are intentionally delegated to upstream tools
-such as PoreSpy.
+such as PoreSpy. The FEM, FVM, and LBM backends are provided for documented
+digital-porous-media workflows and should be interpreted through their stated
+governing equations, boundary conditions, map/image assumptions, and solver diagnostics.
 
 ## Current Scope
 
@@ -52,16 +62,23 @@ The current `v0.1.x` implementation includes:
 - pressure-dependent water viscosity via `thermo` and `CoolProp`
 - Picard and damped-Newton nonlinear solves for variable-viscosity problems
 - Krylov linear solvers with optional `pyamg` preconditioning
+- porosity/permeability map generation and structured field export
+- finite-volume TPFA Darcy upscaling on scalar permeability maps
+- FEniCSx finite-element Darcy-Darcy and Darcy-Brinkman micro-continuum upscaling
+- XLB/JAX direct-image LBM DNS in the Stokes-limit permeability setting
 - HDF5 serialization
 - optional Plotly and PyVista network visualization
 - interoperability cross-checks against OpenPNM
-- optional direct-image permeability benchmarking against XLB
+- direct-image XLB/LBM permeability solves and benchmarking
 - synthetic and manufactured examples for regression and tutorials
 
 Important boundaries:
 
 - multiphase flow is not implemented yet
 - production image acquisition and fully automated "push-button" extraction pipelines are out of scope
+- FEM and LBM backends require their external solver stacks to be installed
+- map-based and direct-image solver results depend on map closure, boundary
+  conditions, resolution, and solver diagnostics
 - controlled grayscale preprocessing, segmentation helpers, and `snow2`-based extraction helpers are available in `voids.image`
 - synthetic mesh/manufactured examples are controlled validation cases, not realistic rock reconstructions
 
@@ -83,27 +100,6 @@ pip install voids
 PyPI package page:
 <https://pypi.org/project/voids/>
 
-### Recommended: Pixi
-
-This repository is configured for Pixi and exposes four main environments:
-
-- `default`: core runtime + notebooks + plotting + PyVista + thermodynamic backends
-- `test`: everything in `default` plus test-only dependencies
-- `lbm`: test environment plus the optional XLB stack
-- `docs`: MkDocs, Material for MkDocs, and mkdocstrings
-
-```bash
-pixi install
-pixi run -e default python -c "import voids; print(voids.__version__)"
-```
-
-Pixi activation also provides project path variables used by notebooks:
-
-- `VOIDS_PROJECT_ROOT`
-- `VOIDS_NOTEBOOKS_PATH`
-- `VOIDS_EXAMPLES_PATH`
-- `VOIDS_DATA_PATH`
-
 ### Editable pip install
 
 If you prefer a plain Python environment from the repository checkout:
@@ -118,8 +114,12 @@ Optional extras:
 python -m pip install -e ".[dev,viz,test,lbm,docs]"
 ```
 
-Assumption to keep in mind: the notebooks are exercised primarily through the Pixi
-environments, so the most reliable setup is still Pixi.
+Assumptions to keep in mind:
+
+- FEniCSx is not installed by a PyPI extra; plain pip users must provide a
+  compatible DOLFINx/FEniCSx installation before using `voids.fem`
+- repository development, notebook kernels, and documentation builds are covered
+  in [Development](#development)
 
 ## Quick Start
 
@@ -225,9 +225,25 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
   - trabecular-bone RAW segmentation morphometry with bone/marrow phase convention checks
 - `36_mwe_trabecular_bone_slice_porosity_permeability_maps`
   - trabecular-bone slice porosity/permeability maps with HDF5 and structured mesh exports
+- `37_mwe_trabecular_bone_slice_pore_network`
+  - trabecular-bone 3-D ROI pore-network extraction and directional single-phase permeability
+- `38_mwe_trabecular_bone_map_resistor_upscaling`
+  - trabecular-bone 3-D ROI porosity/permeability map upscaling and continuum/DNS comparison
+- `40_mwe_drp317_berea_roi_pnm_comparison`
+  - DRP-317 Berea 3-D ROI pore-network result consolidation for map-solver comparison
+- `41_mwe_drp317_berea_map_resistor_micro_continuum`
+  - DRP-317 Berea 3-D ROI porosity/permeability map upscaling and micro-continuum comparison
+- `42_mwe_drp317_berea_block3_same_roi_comparison`
+  - DRP-317 Berea same-ROI comparison across pore-network, TPFA, FEniCSx FEM, and XLB/LBM backends
+- `43_mwe_drp317_bentheimer_block3_same_roi_comparison`
+  - DRP-317 Bentheimer same-ROI comparison across pore-network, TPFA, FEniCSx FEM, and XLB/LBM backends
+- `44_mwe_drp317_parker_block3_same_roi_comparison`
+  - DRP-317 Parker same-ROI comparison across pore-network, TPFA, FEniCSx FEM, and XLB/LBM backends
+- `45_mwe_drp317_lbm_sensitivity`
+  - DRP-317 direct-image LBM setup-sensitivity study for the recommended Stokes-limit preset
 
-Example data under `examples/data/` includes a deterministic manufactured void image and
-generated artifacts from the extraction/mesh notebooks.
+Example data under `examples/data/` includes a deterministic manufactured void image
+and generated artifacts from the extraction, map, and mesh notebooks.
 
 ## Verification & Validation
 
@@ -261,6 +277,10 @@ Several assumptions are deliberate and should be stated explicitly:
 
 - extracted-network predictions depend strongly on upstream segmentation and extraction quality
 - imported geometry fields may be incomplete or model-dependent across tools
+- map-based continuum predictions depend on the porosity/permeability map closure,
+  block size, solver boundary conditions, and representative-volume assumptions
+- direct-image LBM predictions depend on voxel resolution, boundary treatment,
+  convergence controls, and low-Mach/low-Reynolds diagnostics
 - single-phase OpenPNM cross-checks compare solver/assembly consistency, not universal physical truth
 - throat visualization may use arithmetic averaging of pore scalars when no throat scalar field is provided; that is a visualization choice, not a constitutive model
 
@@ -269,7 +289,25 @@ be tightened before using results quantitatively.
 
 ## Development
 
-Useful commands:
+This repository is configured for Pixi and exposes three main environments:
+
+- `default`: core runtime + notebooks + plotting + PyVista + thermodynamic, FEM, and LBM backends
+- `test`: core runtime plus test-only dependencies
+- `docs`: MkDocs, Material for MkDocs, and mkdocstrings
+
+```bash
+pixi install
+pixi run -e default python -c "import voids; print(voids.__version__)"
+```
+
+Pixi activation also provides project path variables used by notebooks:
+
+- `VOIDS_PROJECT_ROOT`
+- `VOIDS_NOTEBOOKS_PATH`
+- `VOIDS_EXAMPLES_PATH`
+- `VOIDS_DATA_PATH`
+
+Useful development commands:
 
 ```bash
 pixi run test
@@ -278,6 +316,7 @@ pixi run lint
 pixi run typecheck
 pixi run precommit
 pixi run notebooks-smoke
+pixi run docs-build
 ```
 
 Version updates are handled with:
@@ -288,9 +327,10 @@ pixi run bump-version <new-version>
 
 ## Status
 
-`voids` is still pre-alpha. The codebase is already useful for controlled PNM experiments,
-solver validation, and interoperability studies, but it should not be described as a
-complete pore-network simulation platform yet.
+`voids` is still pre-alpha. The codebase is already useful for controlled
+single-phase porous-media transport experiments, solver validation, and
+interoperability studies, but it should not be described as a complete
+porous-media simulation platform yet.
 
 ## AI Usage Statement
 

@@ -5,14 +5,24 @@ build-backend = "hatchling.build"
 [project]
 name = "voids"
 version = "0.1.8"
-description = "Scientific Python package for pore network modeling (PNM)"
+description = "Scientific Python package for digital porous media research"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "LGPL-2.1-only" }
 authors = [
   { name = "Diego Volpatto", email = "volpatto@lncc.br" }
 ]
-keywords = ["pore-network-modeling", "pnm", "porous-media", "scientific-computing"]
+keywords = [
+  "pore-network-modeling",
+  "pnm",
+  "porous-media",
+  "digital-rock",
+  "permeability",
+  "finite-volume",
+  "finite-element",
+  "lattice-boltzmann",
+  "scientific-computing",
+]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Science/Research",
@@ -73,6 +83,7 @@ lbm = [
   "xlb>=0.3,<0.4",
 ]
 docs = [
+  "ruff>=0.6",
   "mkdocs>=1.5,<2.0",
   "mkdocs-material>=9.5",
   "mkdocstrings[python]>=0.25",
@@ -83,6 +94,7 @@ thermo = [
 ]
 [project.urls]
 Homepage = "https://github.com/geomech-project/voids"
+Documentation = "https://geomech-project.github.io/voids/"
 Repository = "https://github.com/geomech-project/voids"
 Issues = "https://github.com/geomech-project/voids/issues"
 

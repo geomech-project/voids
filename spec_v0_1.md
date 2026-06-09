@@ -9,13 +9,17 @@ Draft specification for **v0.1** of the `voids` scientific Python package.
 **`voids`**
 
 ### Mission
-`voids` is a **scientific Python package** for pore network modeling (PNM), designed for:
+`voids` is a **scientific Python package** for digital porous media research,
+designed for:
 
 - **research reproducibility**
-- **PoreSpy interoperability**
-- **validation-first development**
-- **backend portability** (NumPy/SciPy first, optional PyTorch/JAX later)
-- phased expansion from **single-phase** to **quasi-static multiphase**
+- **pore-network modeling** as the main graph-based approach
+- **PoreSpy/OpenPNM interoperability**
+- **validation-oriented development**
+- **backend clarity** across pore-network, micro-continuum map-based, and direct-image
+  single-phase workflows
+- scientifically explicit expansion from **single-phase** toward richer porous-media
+  models
 
 ---
 
@@ -30,6 +34,9 @@ Draft specification for **v0.1** of the `voids` scientific Python package.
   - connectivity descriptors
 - Single-phase incompressible flow in a pore network
 - Absolute permeability estimation (directional; tensor estimate optional helper)
+- Porosity/permeability maps for continuum upscaling
+- Finite-volume, finite-element, and direct-image LBM single-phase comparison
+  backends where their solver dependencies are available
 - Serialization + provenance metadata
 - Validation and regression test suite
 
@@ -38,6 +45,7 @@ Draft specification for **v0.1** of the `voids` scientific Python package.
 - Full multiphase engine (Phase 2+)
 - Full autodiff through discrete invasion events
 - Network extraction implementation from raw images (delegated to PoreSpy)
+- CFD/FEM/LBM workflows outside the documented digital porous media backends
 - End-user workflow manager / project database
 
 ---
