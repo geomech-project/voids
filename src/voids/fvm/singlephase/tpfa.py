@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import Any, cast
 import warnings
 
 import numpy as np
 from scipy import sparse
-from scipy.sparse.linalg import MatrixRankWarning, spsolve
+from scipy.sparse.linalg import MatrixRankWarning
+
+from voids.linalg.solve import SolverParameters, solve_linear_system
 
 from voids.image.porosity import PermeabilityMap
 
@@ -53,6 +56,11 @@ class TPFAResult:
     domain_length: float
     cross_section_area: float
     cell_size: tuple[float, ...]
+    matrix_nnz: int
+    solve_seconds: float
+    solver_method: str
+    solver_info: dict[str, Any] = field(default_factory=dict)
+    residual_relative: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -124,6 +132,8 @@ def solve_tpfa(
     pressure_inlet: float = 1.0,
     pressure_outlet: float = 0.0,
     cell_size: float | Sequence[float] | None = None,
+    solver_method: str = "direct",
+    solver_parameters: SolverParameters | None = None,
 ) -> TPFAResult:
     """Solve Darcy flow on a regular permeability map with TPFA.
 
@@ -149,6 +159,14 @@ def solve_tpfa(
     cell_size :
         Physical cell size used when ``permeability`` is an array rather than a
         :class:`~voids.image.porosity.PermeabilityMap`.
+    solver_method :
+        Sparse linear solver backend passed to
+        :func:`voids.linalg.solve.solve_linear_system`. Supported values include
+        ``"direct"``, ``"pardiso"``, ``"cg"``, and ``"gmres"``.
+    solver_parameters :
+        Optional backend-specific controls. For example,
+        ``{"rtol": 1e-10, "preconditioner": "pyamg"}`` uses a PyAMG
+        preconditioner with SciPy CG, matching the larger notebook comparisons.
     """
 
     values, size, metadata = _as_permeability_array(permeability, cell_size=cell_size)
@@ -207,18 +225,31 @@ def solve_tpfa(
     data.extend(diagonal.tolist())
     matrix = sparse.csr_matrix((data, (rows, cols)), shape=(n_cells, n_cells))
 
+    start = perf_counter()
     with warnings.catch_warnings():
         warnings.simplefilter("error", MatrixRankWarning)
         try:
-            pressure_vector = np.asarray(spsolve(matrix, rhs), dtype=float)
+            pressure_vector, solver_info = solve_linear_system(
+                matrix,
+                rhs,
+                method=solver_method,
+                solver_parameters=solver_parameters,
+            )
         except MatrixRankWarning as exc:
             raise RuntimeError(
                 "TPFA pressure system is singular. Check for disconnected zero-permeability "
                 "regions or apply a physically justified permeability floor."
             ) from exc
+    solve_seconds = perf_counter() - start
+    if int(solver_info.get("info", 0)) != 0:
+        raise RuntimeError(f"TPFA linear solve did not converge: {solver_info}")
 
     if not np.all(np.isfinite(pressure_vector)):
         raise RuntimeError("TPFA solve produced non-finite pressures")
+    residual = np.asarray(matrix @ pressure_vector - rhs, dtype=float)
+    residual_norm = float(np.linalg.norm(residual))
+    rhs_norm = float(np.linalg.norm(rhs))
+    residual_relative = residual_norm / max(rhs_norm, 1.0e-300)
     pressure = pressure_vector.reshape(shape, order="C")
 
     inlet_flow = 0.0
@@ -265,6 +296,11 @@ def solve_tpfa(
         domain_length=length,
         cross_section_area=area,
         cell_size=size,
+        matrix_nnz=int(matrix.nnz),
+        solve_seconds=float(solve_seconds),
+        solver_method=str(solver_info.get("method", solver_method)),
+        solver_info=dict(solver_info),
+        residual_relative=residual_relative,
         metadata=metadata,
     )
 

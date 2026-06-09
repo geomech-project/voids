@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from voids.fvm.singlephase.tpfa import TPFAResult, solve_tpfa
 from voids.image.porosity import PermeabilityMap
+from voids.linalg.solve import SolverParameters
 
 
 @dataclass(slots=True)
@@ -24,6 +25,12 @@ class TPFAUpscalingResult:
 
         return {axis: result.mass_balance_error for axis, result in self.results.items()}
 
+    @property
+    def solve_seconds(self) -> dict[str, float]:
+        """Return TPFA linear solve time by principal axis."""
+
+        return {axis: result.solve_seconds for axis, result in self.results.items()}
+
 
 def _default_axes(ndim: int) -> tuple[str, ...]:
     if ndim == 2:
@@ -40,6 +47,8 @@ def upscale_permeability_tpfa(
     viscosity: float = 1.0,
     pressure_inlet: float = 1.0,
     pressure_outlet: float = 0.0,
+    solver_method: str = "direct",
+    solver_parameters: SolverParameters | None = None,
 ) -> TPFAUpscalingResult:
     """Compute principal-direction TPFA permeability estimates.
 
@@ -52,6 +61,9 @@ def upscale_permeability_tpfa(
         dimensionality are solved.
     viscosity, pressure_inlet, pressure_outlet :
         Physical coefficients passed to :func:`voids.fvm.singlephase.tpfa.solve_tpfa`.
+    solver_method, solver_parameters :
+        Sparse linear solver controls passed through to
+        :func:`voids.fvm.singlephase.tpfa.solve_tpfa`.
     """
 
     solve_axes = axes or _default_axes(permeability_map.ndim)
@@ -63,6 +75,8 @@ def upscale_permeability_tpfa(
                 viscosity=viscosity,
                 pressure_inlet=pressure_inlet,
                 pressure_outlet=pressure_outlet,
+                solver_method=solver_method,
+                solver_parameters=solver_parameters,
             )
             for axis in solve_axes
         }
@@ -76,6 +90,8 @@ def upscale_principal_permeabilities_tpfa(
     viscosity: float = 1.0,
     pressure_inlet: float = 1.0,
     pressure_outlet: float = 0.0,
+    solver_method: str = "direct",
+    solver_parameters: SolverParameters | None = None,
 ) -> dict[str, float]:
     """Return only the principal TPFA permeability values."""
 
@@ -85,6 +101,8 @@ def upscale_principal_permeabilities_tpfa(
         viscosity=viscosity,
         pressure_inlet=pressure_inlet,
         pressure_outlet=pressure_outlet,
+        solver_method=solver_method,
+        solver_parameters=solver_parameters,
     ).permeability
 
 
