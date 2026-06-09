@@ -1,0 +1,10 @@
+quantity,value,units,section
+slice marrow fraction,0.8128081632653061,-,porosity
+porosity-map mean,0.812808163265306,-,porosity
+porosity-map cells,4900.0,cells,porosity
+cell size along first slice axis,1.043e-05,m,porosity
+cell size along second slice axis,1.043e-05,m,porosity
+characteristic length,1.043e-05,m,permeability
+finite mean permeability,5.792729609150646e-09,m^2,permeability
+minimum permeability,1e-20,m^2,permeability
+maximum permeability,1e-08,m^2,permeability

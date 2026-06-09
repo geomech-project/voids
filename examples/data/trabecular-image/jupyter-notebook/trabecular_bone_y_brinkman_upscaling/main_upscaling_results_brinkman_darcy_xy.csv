@@ -1,0 +1,3 @@
+formulation,method,mu_Pa_s,delta_p_Pa,K_eq_x_m2,K_eq_y_m2,K_eq_x_over_K_eq_y,relative_to_brinkman_K_eq_x,relative_to_brinkman_K_eq_y,map_K_arithmetic_mean_m2,map_K_harmonic_mean_m2
+brinkman_usfem_pkpk_k1,Brinkman USFEM CG1 x DG1,0.003,1.0,1.3880678970749027e-11,6.7842677433538046e-12,2.046009900530121,1.0,1.0,5.792729609150645e-09,4.999417262423417e-19
+darcy_taylor_hood_p2p1,Darcy Taylor-Hood CG2 x CG1,0.003,1.0,1.1085647395921979e-09,4.423411911682465e-10,2.5061304751303393,79.8638699107078,65.20102211496373,5.792729609150645e-09,4.999417262423417e-19
