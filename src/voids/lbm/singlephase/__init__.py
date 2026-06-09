@@ -1,6 +1,7 @@
 """Single-phase lattice-Boltzmann direct-image solvers."""
 
 from voids.lbm.singlephase.stokes import (
+    XLBConvergenceWarning,
     XLBDirectSimulationResult,
     XLBOptions,
     solve_binary_volume_stokes,
@@ -9,6 +10,7 @@ from voids.lbm.singlephase.stokes import (
 from voids.lbm.singlephase.xlb import solve_binary_volume_with_xlb
 
 __all__ = [
+    "XLBConvergenceWarning",
     "XLBDirectSimulationResult",
     "XLBOptions",
     "solve_binary_volume_stokes",

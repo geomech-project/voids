@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from voids.benchmarks import (
+    XLBConvergenceWarning,
     XLBOptions,
     benchmark_segmented_volume_with_xlb,
     solve_binary_volume_with_xlb,
@@ -366,11 +367,11 @@ def test_xlb_options_steady_stokes_defaults() -> None:
     )
     assert options.rho_inlet is None
     assert options.rho_outlet is None
-    assert options.inlet_outlet_buffer_cells == 6
-    assert options.max_steps == 4000
-    assert options.min_steps == 800
+    assert options.inlet_outlet_buffer_cells == 12
+    assert options.max_steps == 8000
+    assert options.min_steps == 1200
     assert options.check_interval == 80
-    assert options.steady_rtol == pytest.approx(5.0e-4)
+    assert options.steady_rtol == pytest.approx(1.0e-4)
 
 
 def test_import_xlb_success_with_stub_modules(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -721,7 +722,8 @@ def test_xlb_direct_solver_warns_when_not_converged(
     monkeypatch.setattr(xlb_mod, "_import_xlb", lambda: fake_api)
 
     phases = np.ones((4, 5), dtype=int)
-    with pytest.warns(RuntimeWarning, match="did not satisfy the steady-state tolerance"):
+    steady_rtol = 1.0e-9
+    with pytest.warns(XLBConvergenceWarning, match="did not satisfy the steady-state tolerance"):
         result = solve_binary_volume_with_xlb(
             phases,
             voxel_size=1.0,
@@ -729,13 +731,14 @@ def test_xlb_direct_solver_warns_when_not_converged(
                 max_steps=3,
                 min_steps=1,
                 check_interval=1,
-                steady_rtol=1.0e-9,
+                steady_rtol=steady_rtol,
                 inlet_outlet_buffer_cells=1,
             ),
         )
 
     assert result.converged is False
     assert result.n_steps == 3
+    assert result.convergence_metric > steady_rtol
     assert result.permeability > 0.0
 
 

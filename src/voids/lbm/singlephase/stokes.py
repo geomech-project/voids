@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 
 from voids.lbm.singlephase.xlb import (
+    XLBConvergenceWarning,
     XLBDirectSimulationResult,
     XLBOptions,
     solve_binary_volume_with_xlb,
@@ -41,6 +42,7 @@ def solve_binary_volume_stokes(
 
 
 __all__ = [
+    "XLBConvergenceWarning",
     "XLBDirectSimulationResult",
     "XLBOptions",
     "solve_binary_volume_stokes",

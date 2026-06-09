@@ -15,6 +15,7 @@ from voids.benchmarks.segmented_volume import (
 )
 from voids.benchmarks.xlb import (
     SegmentedVolumeXLBResult,
+    XLBConvergenceWarning,
     XLBDirectSimulationResult,
     XLBOptions,
     benchmark_segmented_volume_with_xlb,
@@ -28,6 +29,7 @@ __all__ = [
     "SinglePhaseCrosscheckSummary",
     "SegmentedVolumeCrosscheckResult",
     "SegmentedVolumeXLBResult",
+    "XLBConvergenceWarning",
     "XLBDirectSimulationResult",
     "XLBOptions",
     "audit_singlephase_conduit_conductance",

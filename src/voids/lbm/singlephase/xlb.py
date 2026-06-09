@@ -18,6 +18,10 @@ DEFAULT_STOKES_PRESSURE_DROP_LATTICE = ISOTHERMAL_LATTICE_CS2 * 2.0e-4
 MAX_RECOMMENDED_DENSITY_DROP_LATTICE = 1.0e-2
 
 
+class XLBConvergenceWarning(RuntimeWarning):
+    """Warn that an XLB solve reached ``max_steps`` before steady convergence."""
+
+
 def _as_binary_volume(phases: np.ndarray) -> np.ndarray:
     """Validate and normalize a binary segmented volume."""
 
@@ -294,7 +298,8 @@ class XLBOptions:
         They are converted internally to lattice pressure using
         ``p_lu = c_s^2 rho``.
     inlet_outlet_buffer_cells :
-        Number of fluid buffer layers inserted ahead of and behind the sample.
+        Number of fluid reservoir layers inserted ahead of and behind the
+        sample.
     max_steps, min_steps, check_interval, steady_rtol :
         Iteration and convergence controls for the steady-state solve.
 
@@ -346,17 +351,22 @@ class XLBOptions:
         incompressible Navier-Stokes LBM operator, but with a smaller lattice
         pressure drop and tighter steady-state controls so the converged solution is
         interpreted in the low-Reynolds, low-Mach limit.
+
+        The buffer and convergence controls are intentionally stricter than the
+        generic :class:`XLBOptions` defaults. They were selected from same-ROI
+        DRP-317 sensitivity runs as a conservative direct-image permeability
+        preset, not as a fit to experimental permeability.
         """
 
         values: dict[str, Any] = {
             "formulation": "steady_stokes_limit",
             "lattice_viscosity": 0.10,
             "pressure_drop_lattice": DEFAULT_STOKES_PRESSURE_DROP_LATTICE,
-            "inlet_outlet_buffer_cells": 6,
-            "max_steps": 4000,
-            "min_steps": 800,
+            "inlet_outlet_buffer_cells": 12,
+            "max_steps": 8000,
+            "min_steps": 1200,
             "check_interval": 100,
-            "steady_rtol": 5.0e-4,
+            "steady_rtol": 1.0e-4,
         }
         values.update(overrides)
         return cls(**values)
@@ -447,6 +457,13 @@ def solve_binary_volume_with_xlb(
         If the input volume, flow axis, or XLB numerical controls are invalid.
     RuntimeError
         If the run completes with a non-physical permeability estimate.
+
+    Warns
+    -----
+    XLBConvergenceWarning
+        If ``max_steps`` is reached before the steady-state velocity criterion
+        is satisfied. The result is still returned with ``converged=False`` and
+        the final ``n_steps`` / ``convergence_metric`` diagnostics.
 
     Notes
     -----
@@ -703,7 +720,7 @@ def solve_binary_volume_with_xlb(
             "XLB direct-image solve did not satisfy the steady-state tolerance "
             f"after {n_steps} steps; the reported permeability may be biased. "
             f"Last relative velocity change: {convergence_metric:.3e}.",
-            RuntimeWarning,
+            XLBConvergenceWarning,
             stacklevel=2,
         )
     if not np.isfinite(permeability) or permeability <= 0.0:
@@ -763,6 +780,7 @@ __all__ = [
     "DEFAULT_STOKES_PRESSURE_DROP_LATTICE",
     "ISOTHERMAL_LATTICE_CS2",
     "MAX_RECOMMENDED_DENSITY_DROP_LATTICE",
+    "XLBConvergenceWarning",
     "XLBDirectSimulationResult",
     "XLBOptions",
     "solve_binary_volume_with_xlb",
