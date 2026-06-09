@@ -1,8 +1,9 @@
 # Examples and Notebooks
 
 The `notebooks/` directory contains paired Jupyter notebooks and `py:percent` scripts
-covering the main `voids` workflows, from the smallest synthetic example to image-
-based sensitivity studies and OpenPNM benchmarks.
+covering the main `voids` workflows, from the smallest synthetic pore-network
+example to image-based sensitivity studies, map-based upscaling, direct-image LBM,
+and OpenPNM benchmarks.
 
 Each notebook is both a tutorial and a regression artifact: if it no longer runs,
 some documented scientific workflow has drifted.
@@ -24,9 +25,9 @@ within a Pixi-managed shell.
 
 In practice:
 
-- use `default` for most notebooks, including OpenPNM and thermodynamic-viscosity workflows
+- use `default` for most notebooks, including OpenPNM, thermodynamic-viscosity,
+  FVM/FEM map-based, and XLB/LBM workflows
 - use `test` when you want the full test-suite dependency set around the notebook workflow
-- use `lbm` when a notebook depends on the optional XLB direct-image benchmark
 - expect the image-based notebooks to be materially heavier than the minimal demos
 
 ---
@@ -65,6 +66,17 @@ In practice:
 | `31_mwe_drp10_estaillades_raw_porosity_perm` | Benchmark DRP-10 Estaillades v2 carbonate permeability and extraction-backend sensitivity against Muljadi et al. (2016) Table 2 (OpenFOAM reference) |
 | `32_mwe_prego_blobs_backend_comparison` | Compare PoreSpy `snow2`, PREGO, and native maximal-ball extraction on synthetic `256^3` PoreSpy `blobs` images |
 | `33_mwe_synthetic_porosity_maps` | Build local porosity and Kozeny-Carman permeability maps from synthetic `300^3` PoreSpy `blobs` images |
+| `34_mwe_macro_micro_synthetic_case` | Explore a controlled macro/micro synthetic porous-media workflow |
+| `35_mwe_trabecular_bone_morphometry` | Compute trabecular-bone segmentation morphometry with explicit phase conventions |
+| `36_mwe_trabecular_bone_slice_porosity_permeability_maps` | Build trabecular-bone slice porosity/permeability maps and structured field exports |
+| `37_mwe_trabecular_bone_slice_pore_network` | Extract a trabecular-bone 3-D ROI pore network and estimate directional permeability |
+| `38_mwe_trabecular_bone_map_resistor_upscaling` | Compare trabecular-bone 3-D ROI map upscaling and direct-image flow references |
+| `40_mwe_drp317_berea_roi_pnm_comparison` | Consolidate DRP-317 Berea 3-D ROI pore-network results for map-solver comparison |
+| `41_mwe_drp317_berea_map_resistor_micro_continuum` | Compare DRP-317 Berea map upscaling and micro-continuum methods on a 3-D ROI |
+| `42_mwe_drp317_berea_block3_same_roi_comparison` | Compare Berea pore-network, TPFA, FEniCSx FEM, and XLB/LBM backends on the same ROI |
+| `43_mwe_drp317_bentheimer_block3_same_roi_comparison` | Compare Bentheimer pore-network, TPFA, FEniCSx FEM, and XLB/LBM backends on the same ROI |
+| `44_mwe_drp317_parker_block3_same_roi_comparison` | Compare Parker pore-network, TPFA, FEniCSx FEM, and XLB/LBM backends on the same ROI |
+| `45_mwe_drp317_lbm_sensitivity` | Document direct-image LBM setup sensitivity and the recommended Stokes-limit preset |
 
 ---
 
@@ -296,7 +308,7 @@ The corresponding narrative report is documented in
 **`20_mwe_drp317_banderagray_raw_porosity_perm`**
 
 Runs the DRP-317 Bandera Gray validation case. This low-permeability case remains
-one of the clearest tests of how strongly the reduced-network permeability depends
+one of the clearest tests of how strongly the pore-network permeability depends
 on the extraction backend.
 
 The corresponding narrative report is documented in

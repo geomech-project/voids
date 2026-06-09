@@ -11,24 +11,34 @@
 [![pip install voids](https://img.shields.io/badge/pip%20install-voids-3775A9?logo=pypi&logoColor=white)](https://pypi.org/project/voids/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18937646.svg)](https://doi.org/10.5281/zenodo.18937646)
 
-**`voids`** is a scientific Python package for pore network modeling (PNM) aimed at
-research workflows where reproducibility, explicit assumptions, and validation matter.
+**`voids`** is a scientific Python package for digital porous media research. Its
+main modeling approach is pore-network modeling (PNM): images, extracted
+networks, geometry, provenance, and transport assumptions are kept explicit so
+permeability studies can be reproduced and compared.
 
-The current project emphasis is a clean canonical network model, interoperability with
-PoreSpy/OpenPNM-style data, and a validated single-phase workflow that now includes
-shape-aware conductance, pressure-dependent thermodynamic viscosity, and nonlinear
-solve options before expanding to more complex multiphase physics.
+Alongside PNM, `voids` provides complementary single-phase transport backends:
+micro-continuum models with the finite-volume method (FVM) and finite-element
+method (FEM), and direct numerical simulation (DNS) with the lattice Boltzmann
+method (LBM). These backends make it possible to compare pore-network,
+micro-continuum, and voxel-image descriptions of the same digital porous medium.
+Interoperability with PoreSpy/OpenPNM-style data remains part of the package
+contract.
 
 ---
 
 ## Why voids?
 
-Pore network modeling research often struggles with reproducibility because the mapping
-from segmented images to simulation results involves many implicit choices:
+Digital porous-media transport research often struggles with reproducibility because
+the mapping from segmented images or coefficient fields to simulation results involves
+many implicit choices:
 
 - Which pore and throat size definitions are used?
 - How is the bulk volume defined relative to the image?
 - What constitutive model is used for hydraulic conductance?
+- What porosity/permeability closure, block size, and boundary conditions define a
+  map-based continuum run?
+- What lattice driving, wall treatment, and convergence diagnostics define a
+  direct-image LBM run?
 
 `voids` addresses these concerns by:
 
@@ -53,15 +63,19 @@ If you are new to the project, the shortest useful path is:
 7. [Verification & Validation](verification/index.md) for benchmark evidence
 8. [API Reference](api/index.md) for callable details
 
+For contributors and local repository work, see [Development](development.md).
+
 ---
 
 ## Goals
 
-- Provide a rigorous internal representation of pore-throat networks
+- Make PNM the main modeling path for digital porous media studies
 - Preserve sample geometry and provenance information needed for reproducible studies
 - Support import and normalization of extracted networks from external tools
+- Provide micro-continuum FVM/FEM and DNS LBM backends for single-phase comparison
+  and upscaling
 - Expose well-scoped physics modules with diagnostics and regression tests
-- Build confidence on single-phase transport first, then expand toward richer models
+- Build confidence from validated single-phase transport before adding richer models
 
 ---
 
@@ -69,7 +83,10 @@ If you are new to the project, the shortest useful path is:
 
 `voids` is designed for explicit, scriptable scientific workflows.
 It is not a GUI application, and it is not intended to replace upstream segmentation
-or extraction tooling such as PoreSpy.
+or extraction tooling such as PoreSpy. The FEM, FVM, and LBM backends are provided
+for documented digital-porous-media workflows and should be interpreted through
+their stated governing equations, boundary conditions, map/image assumptions, and
+solver diagnostics.
 
 That division of responsibility is deliberate: segmentation assumptions and network
 construction assumptions should remain visible in the provenance trail instead of
@@ -111,6 +128,9 @@ important ones are:
   inspection and communication
 - [Benchmarks](api/benchmarks.md): reusable wrappers for OpenPNM, segmented
   volume, and XLB cross-check workflows
+- [Finite Volumes](api/fvm.md), [Finite Elements](api/fem.md), and
+  [Lattice Boltzmann](api/lbm.md): map-based micro-continuum and direct-image
+  single-phase backends
 - [Simulators](api/simulators.md): ready-to-run single-phase workflow entry points
 
 ---
@@ -130,6 +150,10 @@ important ones are:
 | Damped Newton and Picard nonlinear solves | ✅ |
 | Krylov linear solvers with optional `pyamg` preconditioning | ✅ |
 | Directional permeability estimation | ✅ |
+| Porosity/permeability map generation and structured export | ✅ |
+| TPFA finite-volume Darcy map upscaling | ✅ |
+| FEniCSx finite-element Darcy-Darcy and Darcy-Brinkman map upscaling | ✅ Requires FEniCSx |
+| XLB/JAX direct-image LBM Stokes-limit permeability estimates | ✅ Requires XLB/JAX |
 | HDF5 serialization | ✅ |
 | Plotly and PyVista visualization | ✅ |
 | OpenPNM cross-checks | ✅ |
@@ -172,9 +196,10 @@ provenance before solving.
 
 ## Status
 
-`voids` is pre-alpha. The codebase is already useful for controlled PNM experiments,
-solver validation, and interoperability studies, but it should not be described as a
-complete pore-network simulation platform yet.
+`voids` is pre-alpha. The codebase is already useful for controlled single-phase
+porous-media transport experiments, solver validation, and interoperability
+studies, but it should not be described as a complete porous-media simulation
+platform yet.
 
 ---
 

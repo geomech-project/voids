@@ -1,15 +1,18 @@
 # Theoretical Background
 
-This page summarizes the current physical and numerical model implemented in `voids`.
-The emphasis is on what the code actually solves today, not on the full space of pore-
-network models described in the literature.
+This page summarizes the physical and numerical models implemented in `voids`.
+The emphasis is on the equations, assumptions, units, and boundary conventions
+that define the package's digital porous media workflows.
 
 The main scientific boundary is simple:
 
-- `voids` is currently a single-phase pore-network code
-- hydraulic conductance can be constant-viscosity or pressure-dependent
+- `voids` is a scientific Python package for digital porous media research
+- pore-network modeling is the main graph-based modeling approach
+- map-based FVM/FEM and direct-image LBM backends provide complementary
+  single-phase upscaling and comparison methods
+- pore-network hydraulic conductance can be constant-viscosity or pressure-dependent
 - conductance can be selected explicitly or through the data-adaptive `auto` model
-- geometry can be circular, size-factor based, shape-aware throat-only, or
+- pore-network geometry can be circular, size-factor based, shape-aware throat-only, or
   shape-aware pore-throat-pore
 - thermodynamic viscosity is available through tabulated `thermo` and `CoolProp` backends
 

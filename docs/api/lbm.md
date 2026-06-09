@@ -5,7 +5,7 @@ direct-image single-phase flow. The current Stokes-limit implementation wraps
 the optional XLB adapter owned by `voids.lbm.singlephase.xlb`.
 
 For the binary image convention, lattice pressure relation, convergence metric,
-and permeability conversion, see
+permeability conversion, and guidance on tuning LBM runs for a new sample, see
 [Map-Based Single-Phase Solvers](../map_based_singlephase_solvers.md).
 
 ---

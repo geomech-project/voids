@@ -13,6 +13,12 @@ permeability reporting convention, see
 
 ::: voids.fvm.singlephase.tpfa
 
+`solve_tpfa` exposes the same sparse linear solver choices used elsewhere in
+`voids`: direct SciPy sparse LU, PARDISO where available, CG, and GMRES. The
+large image-map comparison notebooks use CG with PyAMG preconditioning when the
+map system is symmetric positive definite and large enough that a direct solve
+is not the preferred baseline.
+
 ---
 
 ## Upscaling
