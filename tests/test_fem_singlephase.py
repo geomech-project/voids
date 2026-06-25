@@ -99,6 +99,19 @@ def test_fem_taylor_hood_brinkman_supports_3d_constant_map() -> None:
     assert result.flow_axis == "z"
 
 
+def test_fem_brinkman_uses_unit_porosity_when_porosity_map_is_absent() -> None:
+    problem = FEMMapProblem(
+        permeability_map=PermeabilityMap(np.full((3, 3), 2.0), cell_size=1.0),
+        porosity_map=None,
+        viscosity=1.0,
+    )
+
+    result = solve_brinkman_taylor_hood(problem, flow_axis="x")
+
+    assert result.permeability == pytest.approx(2.0, rel=5.0e-4)
+    assert np.allclose(result.metadata["porosity_floor"], problem.porosity_floor)
+
+
 def test_fem_upscaling_dispatches_backends() -> None:
     problem = _constant_problem((3, 3), permeability=3.0)
 
@@ -112,6 +125,7 @@ def test_fem_upscaling_dispatches_backends() -> None:
     assert set(result.results) == {"x", "y"}
     assert result.permeability["x"] == pytest.approx(3.0, rel=5.0e-4)
     assert result.permeability["y"] == pytest.approx(3.0, rel=5.0e-4)
+    assert set(result.solve_seconds) == {"x", "y"}
     assert upscale_principal_permeabilities_fem(
         problem,
         backend="usfem_brinkman",
