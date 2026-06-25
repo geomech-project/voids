@@ -1119,7 +1119,7 @@ def test_benchmark_segmented_volume_with_xlb_rejects_empty_extracted_network(
 def test_benchmark_segmented_volume_with_xlb_returns_positive_permeabilities() -> None:
     """Test end-to-end extraction plus direct-image XLB comparison on a tiny segmented volume."""
 
-    pytest.importorskip("xlb")
+    xlb_mod._import_xlb()
 
     phases = np.zeros((12, 16, 16), dtype=int)
     phases[:, 5:11, 5:11] = 1
@@ -1166,7 +1166,7 @@ def test_benchmark_segmented_volume_with_xlb_returns_positive_permeabilities() -
 def test_xlb_direct_solver_open_duct_returns_finite_positive_permeability() -> None:
     """Test that an all-void duct does not produce NaNs or negative permeability."""
 
-    pytest.importorskip("xlb")
+    xlb_mod._import_xlb()
 
     phases = np.ones((16, 8, 8), dtype=int)
 

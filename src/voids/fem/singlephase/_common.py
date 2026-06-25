@@ -306,7 +306,10 @@ def _origin_tuple(permeability_map: PermeabilityMap) -> tuple[float, ...]:
 
 
 def _close_coordinate(values: Any, coordinate: float, *, atol: float) -> np.ndarray:
-    return np.isclose(np.asarray(values, dtype=float), float(coordinate), atol=float(atol))
+    return np.asarray(
+        np.isclose(np.asarray(values, dtype=float), float(coordinate), atol=float(atol)),
+        dtype=bool,
+    )
 
 
 def _match_point(values: Any, point: np.ndarray, *, ndim: int, atol: float) -> np.ndarray:

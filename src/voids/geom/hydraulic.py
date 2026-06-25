@@ -218,7 +218,7 @@ def _sanitize_shape_factor(
     gsf = np.asarray(shape_factor, dtype=float)
     if np.any(gsf < 0):
         raise ValueError("shape_factor contains negative values")
-    return np.clip(gsf, clip_min, clip_max)
+    return np.asarray(np.clip(gsf, clip_min, clip_max), dtype=float)
 
 
 def _get_entity_area(net: Network, kind: str) -> np.ndarray:

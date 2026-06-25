@@ -239,6 +239,12 @@ def _superficial_velocity_profile(
 def _import_xlb():
     try:
         import jax
+        import warp
+        import warp.utils
+
+        if not hasattr(warp.utils, "ScopedTimer") and hasattr(warp, "ScopedTimer"):
+            warp.utils.ScopedTimer = warp.ScopedTimer
+
         import xlb
         from xlb.compute_backend import ComputeBackend
         from xlb.operator.boundary_condition import HalfwayBounceBackBC, RegularizedBC
