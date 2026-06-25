@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -25,8 +26,30 @@ def test_fem_backend_reports_clean_missing_dolfinx_message(
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    with pytest.raises(ImportError, match="FEniCSx FEM backends require DOLFINx"):
+    with pytest.raises(ImportError, match="full DOLFINx/PETSc Python stack"):
         _common._require_dolfinx()
+
+
+def test_fem_backend_reports_native_windows_limitation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_import = builtins.__import__
+
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "dolfinx.fem.petsc":
+            raise ImportError("simulated missing petsc4py")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    with pytest.raises(ImportError) as exc_info:
+        _common._require_dolfinx()
+
+    message = str(exc_info.value)
+    assert "full DOLFINx/PETSc Python stack" in message
+    assert "Native Windows is currently not fully supported" in message
+    assert "Use Linux, macOS, WSL2, or Docker" in message
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Callable, cast
@@ -197,10 +198,20 @@ def _require_dolfinx() -> _DolfinxAPI:
         from mpi4py import MPI
         import ufl
     except ImportError as exc:  # pragma: no cover - depends on optional dependency
-        raise ImportError(
-            "FEniCSx FEM backends require DOLFINx. Use the Pixi 'fem' feature/environment "
-            "or install a compatible fenics-dolfinx stack before calling voids.fem."
-        ) from exc
+        message = (
+            "FEniCSx FEM backends require the full DOLFINx/PETSc Python stack, "
+            "including dolfinx.fem.petsc and petsc4py. Use the Pixi 'fem' "
+            "feature/environment or install a compatible fenics-dolfinx stack "
+            "before calling voids.fem."
+        )
+        if sys.platform.startswith("win"):
+            message += (
+                " Native Windows is currently not fully supported for these "
+                "PETSc-backed FEM solvers because petsc/petsc4py are not "
+                "available in the conda-forge Windows FEniCSx stack used by "
+                "voids. Use Linux, macOS, WSL2, or Docker for this FEM path."
+            )
+        raise ImportError(message) from exc
     return _DolfinxAPI(
         MPI=MPI,
         basix_ufl=basix_ufl,

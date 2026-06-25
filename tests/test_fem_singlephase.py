@@ -6,8 +6,6 @@ from typing import Any, Callable
 import numpy as np
 import pytest
 
-pytest.importorskip("dolfinx")
-
 from voids.fem.singlephase import (  # noqa: E402
     FEMMapProblem,
     FEniCSSolverOptions,
@@ -20,8 +18,16 @@ from voids.fem.singlephase import (  # noqa: E402
 from voids.fem.singlephase._common import (  # noqa: E402
     _FEM_THREAD_ENV_DEFAULTS,
     _apply_fem_thread_defaults,
+    _require_dolfinx,
 )
 from voids.image.porosity import PermeabilityMap, PorosityMap  # noqa: E402
+
+try:
+    _require_dolfinx()
+except ImportError as exc:
+    requires_fem_stack = pytest.mark.skip(reason=str(exc))
+else:
+    requires_fem_stack = pytest.mark.skipif(False, reason="")
 
 
 def _constant_problem(shape: tuple[int, ...], permeability: float = 2.0) -> FEMMapProblem:
@@ -76,6 +82,7 @@ def test_fenics_solver_options_direct_lu_builder() -> None:
         solve_brinkman_usfem,
     ],
 )
+@requires_fem_stack
 def test_fem_backends_recover_constant_2d_permeability(
     solver: Callable[..., Any],
 ) -> None:
@@ -89,6 +96,7 @@ def test_fem_backends_recover_constant_2d_permeability(
     assert np.all(np.isfinite(result.pressure.x.array))
 
 
+@requires_fem_stack
 def test_fem_taylor_hood_brinkman_supports_3d_constant_map() -> None:
     result = solve_brinkman_taylor_hood(
         _constant_problem((2, 2, 2), permeability=1.5),
@@ -99,6 +107,7 @@ def test_fem_taylor_hood_brinkman_supports_3d_constant_map() -> None:
     assert result.flow_axis == "z"
 
 
+@requires_fem_stack
 def test_fem_brinkman_uses_unit_porosity_when_porosity_map_is_absent() -> None:
     problem = FEMMapProblem(
         permeability_map=PermeabilityMap(np.full((3, 3), 2.0), cell_size=1.0),
@@ -112,6 +121,7 @@ def test_fem_brinkman_uses_unit_porosity_when_porosity_map_is_absent() -> None:
     assert np.allclose(result.metadata["porosity_floor"], problem.porosity_floor)
 
 
+@requires_fem_stack
 def test_fem_upscaling_dispatches_backends() -> None:
     problem = _constant_problem((3, 3), permeability=3.0)
 
