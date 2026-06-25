@@ -95,8 +95,8 @@ def test_umfpack_fem_backend_dispatches_optional_solver(
         def scatter_reverse(self) -> None:
             return None
 
-        def to_scipy(self) -> str:
-            return "matrix"
+        def to_scipy(self) -> Any:
+            return SimpleNamespace(copy=lambda: "matrix")
 
     vector = SimpleNamespace(
         array=np.array([1.0]),

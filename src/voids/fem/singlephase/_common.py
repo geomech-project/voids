@@ -646,7 +646,10 @@ def _solve_mixed_problem_scipy(
     fem.apply_lifting(vector.array, [a_form], [bcs])
     vector.scatter_reverse(la.InsertMode.add)
     fem.set_bc(vector.array, bcs)
-    solution_array = np.asarray(solve_linear_system(matrix.to_scipy(), vector.array.copy()))
+    sparse_matrix = matrix.to_scipy().copy()
+    solution_array = np.asarray(
+        solve_linear_system(sparse_matrix, np.ascontiguousarray(vector.array.copy(), dtype=float))
+    )
     solve_seconds = perf_counter() - start
 
     solution = fem.Function(mixed_space)

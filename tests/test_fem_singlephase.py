@@ -125,6 +125,20 @@ def test_fem_backends_recover_constant_2d_permeability_with_scipy_direct(
 
 
 @requires_fem_stack
+def test_fem_darcy_backend_recovers_constant_2d_permeability_with_umfpack_direct() -> None:
+    result = solve_darcy_taylor_hood(
+        _constant_problem((3, 3), permeability=2.0),
+        flow_axis="x",
+        options=FEniCSSolverOptions.umfpack_direct(),
+    )
+
+    assert result.permeability == pytest.approx(2.0, rel=5.0e-4)
+    assert result.metadata["linear_backend"] == "umfpack"
+    assert np.all(np.isfinite(result.velocity.x.array))
+    assert np.all(np.isfinite(result.pressure.x.array))
+
+
+@requires_fem_stack
 def test_fem_taylor_hood_brinkman_supports_3d_constant_map() -> None:
     result = solve_brinkman_taylor_hood(
         _constant_problem((2, 2, 2), permeability=1.5),
