@@ -24,7 +24,7 @@ jobs:
       - name: Install Pixi
         uses: prefix-dev/setup-pixi@v0
         with:
-          environments: default
+          environments: test
 
       - name: Fetch PR base branch
         shell: bash
@@ -35,7 +35,7 @@ jobs:
       - name: Run pre-commit on PR diff
         shell: bash
         run: |
-          pixi run -e default pre-commit run \
+          pixi run -e test pre-commit run \
             --from-ref "origin/${{ github.base_ref }}" \
             --to-ref "${{ github.sha }}" \
             --show-diff-on-failure
