@@ -110,7 +110,7 @@ FI_PROVIDER = "tcp"
 lint = "ruff check src tests"
 format-check = "ruff format --check src tests"
 typecheck = "mypy"
-test = "pytest -q"
+test = "pytest -q -v"
 test-lbm = "pytest -q tests/test_benchmark_xlb.py"
 test-cov = "pytest --cov=voids --cov-report=term-missing"
 spec-check = "pytest -q tests/test_schema_network.py"
@@ -133,5 +133,5 @@ NO_MKDOCS_2_WARNING = "1"
 
 [environments]
 default = { features = ["dev", "viz", "notebooks", "thermo", "lbm", "fem"], solve-group = "default" }
-test = { features = ["dev", "viz", "test"], solve-group = "default" }
+test = { features = ["dev", "viz", "thermo", "lbm", "fem", "test"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "docs" }
