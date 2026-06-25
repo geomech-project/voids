@@ -59,3 +59,36 @@ def test_singlephase_pardiso_solver_matches_direct(line_network):
         # Expected on non-Linux platforms
         assert "pypardiso" in str(exc).lower()
         pytest.skip("PARDISO solver not available on this platform")
+
+
+def test_singlephase_umfpack_solver_matches_direct(line_network):
+    """UMFPACK can be selected explicitly through the PNM solver options."""
+
+    bc = PressureBC("inlet_xmin", "outlet_xmax", pin=1.0, pout=0.0)
+    fluid = FluidSinglePhase(viscosity=1.0)
+
+    r_direct = solve(
+        line_network,
+        fluid=fluid,
+        bc=bc,
+        axis="x",
+        options=SinglePhaseOptions(solver="direct"),
+    )
+
+    try:
+        r_umfpack = solve(
+            line_network,
+            fluid=fluid,
+            bc=bc,
+            axis="x",
+            options=SinglePhaseOptions(solver="umfpack"),
+        )
+    except ImportError as exc:
+        assert "umfpack" in str(exc).lower()
+        pytest.skip("UMFPACK solver not available in this environment")
+
+    assert np.allclose(r_umfpack.pore_pressure, r_direct.pore_pressure, rtol=1.0e-12, atol=1.0e-14)
+    assert np.allclose(r_umfpack.throat_flux, r_direct.throat_flux, rtol=1.0e-12, atol=1.0e-14)
+    assert np.isclose(r_umfpack.total_flow_rate, r_direct.total_flow_rate, rtol=1.0e-12)
+    assert np.isclose(r_umfpack.permeability["x"], r_direct.permeability["x"], rtol=1.0e-12)
+    assert r_umfpack.solver_info["method"] == "umfpack"
