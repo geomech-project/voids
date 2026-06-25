@@ -85,6 +85,7 @@ nav:
     - Image Segmentation & Network Extraction: image_segmentation_network_extraction.md
     - Porosity Maps: porosity_maps.md
     - Map-Based Single-Phase Solvers: map_based_singlephase_solvers.md
+    - Solver Backends And Performance: fem_solver_backends.md
     - Local Thickness Morphometry: local_thickness_morphometry.md
     - Synthetic Image Cases: synthetic_cases.md
     - Theoretical Background: background.md
