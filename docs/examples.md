@@ -49,7 +49,7 @@ In practice:
 | `14_mwe_shape_factor_conductance_comparison` | Compare conductance closures and shape-factor sensitivity |
 | `15_mwe_external_pnflow_benchmark` | Compare `voids` against a committed external reference CNM workflow |
 | `16_mwe_viscosity_model_kabs_benchmark` | Quantify `Kabs` drift under constant vs thermodynamic viscosity |
-| `17_mwe_solver_options_benchmark` | Compare direct, Krylov, nonlinear, and preconditioned solver choices |
+| `17_mwe_solver_options_benchmark` | Compare direct, UMFPACK, Krylov, nonlinear, PyAMG, and FEM linear-backend choices |
 | `18_mwe_drp317_berea_raw_porosity_perm` | Validate the DRP-317 Berea case and compare `snow2`, PREGO, and native maximal-ball extraction |
 | `19_mwe_drp317_bentheimer_raw_porosity_perm` | Validate the DRP-317 Bentheimer case and compare `snow2`, PREGO, and native maximal-ball extraction |
 | `20_mwe_drp317_banderagray_raw_porosity_perm` | Validate the DRP-317 Bandera Gray case and compare `snow2`, PREGO, and native maximal-ball extraction |
@@ -268,10 +268,14 @@ pressure-dependent viscosity materially changes `Kabs` for a fixed network geome
 
 **`17_mwe_solver_options_benchmark`**
 
-Benchmarks the currently available solver options on both constant-viscosity and
-pressure-dependent viscosity cases. It is the right notebook when the question is
-numerical rather than physical: which combination of direct solve, Krylov method,
-nonlinear strategy, and `pyamg` preconditioner is most effective for a given regime.
+Benchmarks the currently available solver options on constant-viscosity,
+pressure-dependent-viscosity, and FEM map-solver cases. It is the right notebook
+when the question is numerical rather than physical: which combination of SciPy
+direct solve, explicit UMFPACK, Krylov method, nonlinear strategy, `pyamg`
+preconditioner, or FEM linear backend is most effective for a given regime.
+
+For setup guidance and stable benchmark plots, see
+[Solver Backends And Performance](fem_solver_backends.md).
 
 ---
 

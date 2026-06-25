@@ -30,9 +30,12 @@ CORE_EXCLUDED_PACKAGE_NAMES = frozenset(
         "kaleido",
     }
 )
+CORE_FEATURE_NAME = "core"
+PYPROJECT_EXCLUDED_FEATURE_NAMES = frozenset({"core", "docs"})
 FEATURE_EXCLUDED_PACKAGE_NAMES = {
     "dev": frozenset({"zlib"}),
     "fem": frozenset({"fenics-dolfinx"}),
+    "solvers": frozenset({"suitesparse", "libumfpack"}),
 }
 PYPI_NAME_OVERRIDES = {
     "coolprop": "CoolProp",
@@ -127,8 +130,15 @@ def _iter_target_requirements(raw_targets: object) -> Iterable[PixiRequirement]:
 
 
 def _iter_project_requirements(pixi_data: dict[str, object]) -> Iterable[PixiRequirement]:
-    yield from _iter_table_requirements(pixi_data.get("dependencies"))
-    yield from _iter_table_requirements(pixi_data.get("pypi-dependencies"))
+    """Yield package runtime requirements from Pixi's core feature.
+
+    The root Pixi dependency tables are intentionally kept small so auxiliary
+    environments such as ``docs`` can solve without inheriting the full package
+    runtime stack. PyPI package metadata is generated from ``feature.core`` plus
+    root platform-specific runtime dependencies.
+    """
+
+    yield from _iter_feature_requirements(pixi_data, CORE_FEATURE_NAME)
     yield from _iter_target_requirements(pixi_data.get("target"))
 
 
@@ -216,6 +226,9 @@ def _sync_targets_from_pixi(pixi_data: dict[str, object]) -> tuple[list[SyncTarg
     ]
     empty_feature_names: list[str] = []
     for feature_name in _feature_data(pixi_data):
+        if feature_name in PYPROJECT_EXCLUDED_FEATURE_NAMES:
+            empty_feature_names.append(feature_name)
+            continue
         rendered = _render_requirements(
             _iter_feature_requirements(pixi_data, feature_name),
             feature_name=feature_name,

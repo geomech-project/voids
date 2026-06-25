@@ -194,7 +194,7 @@ def crop_nonzero_cylindrical_volume(
     for i in iterator:
         specimen_mask[i] = ndi.binary_fill_holes(arr[i] > background_value)
 
-    common_mask = specimen_mask.all(axis=0)
+    common_mask = np.asarray(specimen_mask.all(axis=0), dtype=bool)
     crop_bounds_yx = largest_true_rectangle(common_mask)
     y0, y1, x0, x1 = crop_bounds_yx
     cropped = arr[:, y0:y1, x0:x1]

@@ -100,8 +100,8 @@ def _build_boundary_labels(shape3: tuple[int, int, int], ndim: int) -> dict[str,
     for axis_index, axis_name in enumerate(_AXES[:ndim]):
         inlet = np.zeros(node_ids.size, dtype=bool)
         outlet = np.zeros(node_ids.size, dtype=bool)
-        inlet[node_ids.take(indices=0, axis=axis_index).ravel()] = True
-        outlet[node_ids.take(indices=shape3[axis_index] - 1, axis=axis_index).ravel()] = True
+        inlet[node_ids.take(0, axis=axis_index).ravel()] = True
+        outlet[node_ids.take(shape3[axis_index] - 1, axis=axis_index).ravel()] = True
         labels[f"{axis_name}min"] = inlet.copy()
         labels[f"{axis_name}max"] = outlet.copy()
         labels[f"inlet_{axis_name}min"] = inlet

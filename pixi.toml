@@ -10,8 +10,10 @@ platforms = ["linux-64", "osx-arm64", "win-64"]
 ##########################################
 [dependencies]
 python = ">=3.11,<3.13"
-numpy = ">=1.26,<2.2"
-scipy = ">=1.11"
+
+[feature.core.dependencies]
+numpy = "*"
+scipy = "*"
 edt = ">=3.0"
 numba = ">=0.60"
 scikit-image = ">=0.22"
@@ -22,11 +24,10 @@ ipykernel = ">=7.2.0,<8"
 tqdm = ">=4.67.3,<5"
 plotly = ">=5.0"
 
-[pypi-dependencies]
+[feature.core.pypi-dependencies]
 voids = { path = ".", editable = true }
 porespy = ">=2.4"
 openpnm = ">=3.6,<3.7"
-pyamg = ">=5.3"
 pyvista = ">=0.43"
 kaleido = ">=0.2.1"
 meshio = ">=5.3"
@@ -74,9 +75,18 @@ diff-cover = "*"
 
 [feature.lbm.pypi-dependencies]
 xlb = ">=0.3,<0.4"
+jax = ">=0.8,<0.10"
 
 [feature.fem.dependencies]
 fenics-dolfinx = ">=0.9,<0.11"
+
+[feature.solvers.dependencies]
+suitesparse = "*"
+libumfpack = "*"
+scikit-umfpack = "*"
+
+[feature.solvers.pypi-dependencies]
+pyamg = ">=5.3"
 
 [feature.docs.dependencies]
 ruff = ">=0.6"
@@ -134,6 +144,6 @@ docs-serve = "pixi run -e docs mkdocs serve"
 NO_MKDOCS_2_WARNING = "1"
 
 [environments]
-default = { features = ["dev", "viz", "notebooks", "thermo", "lbm", "fem"], solve-group = "default" }
-test = { features = ["dev", "viz", "thermo", "lbm", "fem", "test"], solve-group = "default" }
+default = { features = ["core", "dev", "viz", "notebooks", "thermo", "lbm", "fem", "solvers"], solve-group = "default" }
+test = { features = ["core", "dev", "viz", "thermo", "lbm", "fem", "solvers", "test"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "docs" }
