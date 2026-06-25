@@ -604,6 +604,16 @@ def _solve_mixed_problem(
     return solution, perf_counter() - start
 
 
+def _set_dirichlet_bc_values(fem: Any, array: np.ndarray, bcs: list[Any]) -> None:
+    """Apply Dirichlet values to an assembled vector without using deprecated DOLFINx APIs."""
+
+    if all(hasattr(bc, "set") for bc in bcs):
+        for bc in bcs:
+            bc.set(array)
+        return
+    fem.set_bc(array, bcs)
+
+
 def _solve_mixed_problem_scipy(
     context: _FEMContext,
     *,
@@ -645,7 +655,7 @@ def _solve_mixed_problem_scipy(
     vector = fem.assemble_vector(rhs_form)
     fem.apply_lifting(vector.array, [a_form], [bcs])
     vector.scatter_reverse(la.InsertMode.add)
-    fem.set_bc(vector.array, bcs)
+    _set_dirichlet_bc_values(fem, vector.array, bcs)
     sparse_matrix = matrix.to_scipy().copy()
     solution_array = np.asarray(
         solve_linear_system(sparse_matrix, np.ascontiguousarray(vector.array.copy(), dtype=float))

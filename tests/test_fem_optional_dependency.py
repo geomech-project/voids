@@ -88,6 +88,42 @@ def test_scipy_fem_backend_rejects_distributed_mesh() -> None:
         )
 
 
+def test_fem_dirichlet_bc_values_use_modern_bc_set_path() -> None:
+    calls: list[float] = []
+    array = np.array([1.0, 2.0])
+
+    class FakeBC:
+        def __init__(self, value: float) -> None:
+            self.value = value
+
+        def set(self, target: np.ndarray) -> None:
+            calls.append(self.value)
+            target[:] = self.value
+
+    fem = SimpleNamespace(set_bc=lambda _array, _bcs: calls.append(-1.0))
+
+    _common._set_dirichlet_bc_values(fem, array, [FakeBC(3.0), FakeBC(4.0)])
+
+    assert calls == [3.0, 4.0]
+    assert np.array_equal(array, np.array([4.0, 4.0]))
+
+
+def test_fem_dirichlet_bc_values_fall_back_for_older_dolfinx() -> None:
+    calls: list[int] = []
+    array = np.array([1.0, 2.0])
+
+    def fake_set_bc(target: np.ndarray, bcs: list[object]) -> None:
+        calls.append(len(bcs))
+        target[:] = 0.0
+
+    fem = SimpleNamespace(set_bc=fake_set_bc)
+
+    _common._set_dirichlet_bc_values(fem, array, [object()])
+
+    assert calls == [1]
+    assert np.array_equal(array, np.array([0.0, 0.0]))
+
+
 def test_umfpack_fem_backend_dispatches_optional_solver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
