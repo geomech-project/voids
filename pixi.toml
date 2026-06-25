@@ -70,6 +70,7 @@ pytest = ">=8.0"
 pytest-cov = ">=5.0"
 pytest-regressions = ">=2.8"
 networkx = ">=3.2"
+diff-cover = "*"
 
 [feature.lbm.pypi-dependencies]
 xlb = ">=0.3,<0.4"
