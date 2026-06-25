@@ -224,6 +224,6 @@ a research unit of the Ministério da Ciência, Tecnologia e Inovação (MCTI), 
 
 <p align="center">
   <a href="https://www.gov.br/lncc/pt-br">
-    <img src="assets/lncc-mcti.svg" alt="LNCC (MCTI) logo" style="max-width: 820px; width: 100%;">
+    <img src="assets/lncc.svg" alt="LNCC logo" style="max-width: 420px; width: 100%;">
   </a>
 </p>
