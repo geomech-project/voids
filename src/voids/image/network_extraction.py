@@ -290,7 +290,7 @@ def _entity_radius_from_fields(net: Network, kind: str, *, fallback_radius: floa
         radius = np.sqrt(np.asarray(store["area"], dtype=float) / np.pi)
     else:
         radius = np.full(count, float(fallback_radius), dtype=float)
-    return np.maximum(radius, float(fallback_radius))
+    return np.asarray(np.maximum(radius, float(fallback_radius)), dtype=float)
 
 
 def _entity_diameter_for_pyramids_and_cuboids(
@@ -310,7 +310,7 @@ def _entity_diameter_for_pyramids_and_cuboids(
     else:
         diameter = np.full(count, float(fallback_diameter), dtype=float)
         minimum = max(float(fallback_diameter), minimum)
-    return np.maximum(diameter, minimum)
+    return np.asarray(np.maximum(diameter, minimum), dtype=float)
 
 
 def _extend_pore_field(

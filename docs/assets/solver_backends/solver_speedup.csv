@@ -1,0 +1,6 @@
+case,speedup
+constant_cg,0.6905412108131033
+constant_gmres,0.971621225989446
+newton_gmres,1.0424153249578236
+constant_direct_umfpack,1.0276234224977698
+newton_direct_umfpack,0.9577431862435621

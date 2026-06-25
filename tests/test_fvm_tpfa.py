@@ -93,6 +93,25 @@ def test_tpfa_accepts_iterative_solver_controls() -> None:
     assert result.residual_relative < 1.0e-10
 
 
+def test_tpfa_umfpack_solver_matches_direct() -> None:
+    """TPFA can reuse the shared UMFPACK direct sparse backend."""
+
+    permeability = np.full((4, 4), 3.1)
+    direct = solve_tpfa(permeability, flow_axis="y", solver_method="direct")
+
+    try:
+        umfpack = solve_tpfa(permeability, flow_axis="y", solver_method="umfpack")
+    except ImportError as exc:
+        assert "umfpack" in str(exc).lower()
+        pytest.skip("UMFPACK solver not available in this environment")
+
+    assert np.allclose(umfpack.pressure, direct.pressure, rtol=1.0e-12, atol=1.0e-14)
+    assert umfpack.permeability == pytest.approx(direct.permeability, rel=1.0e-12)
+    assert umfpack.flow_rate == pytest.approx(direct.flow_rate, rel=1.0e-12)
+    assert umfpack.solver_method == "umfpack"
+    assert umfpack.solver_info["backend"] == "scikits.umfpack.spsolve"
+
+
 def test_tpfa_rejects_nonpositive_pressure_drop() -> None:
     with pytest.raises(ValueError, match="pressure_inlet must be greater"):
         solve_tpfa(np.ones((2, 2)), pressure_inlet=0.0, pressure_outlet=1.0)

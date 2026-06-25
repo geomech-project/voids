@@ -3329,14 +3329,14 @@ def summarize_maximal_ball_extraction_diagnostics(
     zero_throat_region_mask = neighbor_counts == 0
     boundary_face_counts = np.asarray(region_adjacency.boundary_face_counts, dtype=np.int64)
     boundary_touch_mask = np.sum(boundary_face_counts, axis=1) > 0
+    assigned_void_count = int(np.count_nonzero(assigned_void_mask))
+    void_voxel_count = max(int(np.count_nonzero(mask)), 1)
 
     return MaximalBallExtractionDiagnostics(
         retained_ball_count=int(extraction_result.candidates.retained_center_indices.shape[0]),
         root_region_count=int(extraction_result.voxel_regions.root_labels.size),
         occupied_region_count=occupied_region_count,
-        assigned_void_fraction=float(
-            np.count_nonzero(assigned_void_mask) / max(np.count_nonzero(mask), 1)
-        ),
+        assigned_void_fraction=float(assigned_void_count / void_voxel_count),
         unassigned_void_voxel_count=unassigned_void_voxel_count,
         zero_throat_region_count=int(np.count_nonzero(zero_throat_region_mask)),
         internal_zero_throat_region_count=int(

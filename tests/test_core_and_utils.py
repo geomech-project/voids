@@ -8,12 +8,13 @@ import numpy as np
 import pytest
 from scipy import sparse
 
+import voids.linalg.solve as solve_mod
 from voids._logging import logger
 from voids._testing import set_seed
 from voids.core.sample import SampleGeometry
 from voids.graph.incidence import incidence_matrix
 from voids.linalg.backends import SCIPY, SciPyBackend
-from voids.linalg.solve import solve_linear_system, _import_pypardiso
+from voids.linalg.solve import solve_linear_system, _import_pypardiso, _import_umfpack
 from voids.paths import (
     DATA_PATH_ENV,
     EXAMPLES_PATH_ENV,
@@ -113,6 +114,25 @@ def test_solve_linear_system_supports_all_methods(method: str) -> None:
 
     assert np.allclose(x, b)
     assert info["method"] == method
+    assert info["info"] == 0
+
+
+def test_solve_linear_system_umfpack_available_or_raises_import_error() -> None:
+    """UMFPACK is exposed as an explicit reusable sparse direct backend."""
+
+    A = sparse.csr_matrix(np.array([[2.0, -1.0], [-1.0, 2.0]]))
+    b = np.array([1.0, 0.0])
+
+    try:
+        x, info = solve_linear_system(A, b, method="umfpack")
+    except ImportError as exc:
+        assert "umfpack" in str(exc).lower()
+        assert "scikit-umfpack" in str(exc).lower()
+        pytest.skip("UMFPACK solver not available in this environment")
+
+    assert np.allclose(A @ x, b)
+    assert info["method"] == "umfpack"
+    assert info["backend"] == "scikits.umfpack.spsolve"
     assert info["info"] == 0
 
 
@@ -247,6 +267,19 @@ def test_import_pypardiso_raises_clear_error_when_unavailable() -> None:
         assert "linux" in error_msg
 
 
+def test_import_umfpack_raises_clear_error_when_unavailable() -> None:
+    """Missing scikit-umfpack produces a backend-specific diagnostic."""
+
+    try:
+        solver = _import_umfpack()
+    except ImportError as exc:
+        error_msg = str(exc).lower()
+        assert "umfpack" in error_msg
+        assert "scikit-umfpack" in error_msg
+    else:
+        assert callable(solver)
+
+
 def test_solve_linear_system_pardiso_produces_same_result_as_direct() -> None:
     """Test that PARDISO produces identical results to the default direct solver."""
 
@@ -266,6 +299,41 @@ def test_solve_linear_system_pardiso_produces_same_result_as_direct() -> None:
     except ImportError:
         # Expected on non-Linux platforms
         pytest.skip("PARDISO solver not available on this platform")
+
+
+def test_solve_linear_system_pardiso_success_metadata_with_fake_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PARDISO success metadata is stable when the optional backend is present."""
+
+    def fake_pardiso_spsolve(A: sparse.csr_matrix, b: np.ndarray) -> np.ndarray:
+        return np.asarray(sparse.linalg.spsolve(A, b), dtype=float)
+
+    monkeypatch.setattr(solve_mod, "_import_pypardiso", lambda: fake_pardiso_spsolve)
+
+    A = sparse.csr_matrix(np.array([[3.0, -1.0], [-1.0, 3.0]]))
+    b = np.array([2.0, 4.0])
+
+    x, info = solve_linear_system(A, b, method="pardiso")
+
+    assert np.allclose(A @ x, b)
+    assert info == {"method": "pardiso", "backend": "pypardiso", "info": 0}
+
+
+def test_solve_linear_system_umfpack_produces_same_result_as_direct() -> None:
+    """UMFPACK matches the default direct sparse solve on a small SPD system."""
+
+    A = sparse.csr_matrix(np.array([[4.0, -1.0, 0.0], [-1.0, 4.0, -1.0], [0.0, -1.0, 4.0]]))
+    b = np.array([1.0, 2.0, 3.0])
+    x_direct, _ = solve_linear_system(A, b, method="direct")
+
+    try:
+        x_umfpack, info = solve_linear_system(A, b, method="umfpack")
+    except ImportError:
+        pytest.skip("UMFPACK solver not available in this environment")
+
+    assert np.allclose(x_umfpack, x_direct, rtol=1.0e-12, atol=1.0e-14)
+    assert info["method"] == "umfpack"
 
 
 def test_project_and_examples_paths_use_env_overrides(monkeypatch, tmp_path: Path) -> None:

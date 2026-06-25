@@ -46,6 +46,18 @@ class _PyPardisoSolver(Protocol):
         """Solve sparse linear system using PARDISO."""
 
 
+class _UmfpackSolver(Protocol):
+    """Minimal typed surface for scikits.umfpack.spsolve."""
+
+    def __call__(
+        self,
+        A: sparse.csr_matrix | sparse.csc_matrix,
+        b: np.ndarray,
+        **kwargs: object,
+    ) -> np.ndarray:
+        """Solve sparse linear system using UMFPACK."""
+
+
 SolverParameterValue: TypeAlias = (
     str | float | int | bool | dict[str, object] | LinearOperator[np.float64]
 )
@@ -75,6 +87,19 @@ def _import_pypardiso() -> _PyPardisoSolver:
             "This is currently only supported on Linux systems."
         ) from exc
     return cast(_PyPardisoSolver, pypardiso.spsolve)
+
+
+def _import_umfpack() -> _UmfpackSolver:
+    """Import scikit-umfpack lazily so missing SuiteSparse support is clear."""
+
+    try:
+        from scikits.umfpack import spsolve as umfpack_spsolve  # type: ignore[import-untyped]
+    except ImportError as exc:  # pragma: no cover - depends on environment
+        raise ImportError(
+            "UMFPACK solver requires the optional 'scikit-umfpack' package and "
+            "SuiteSparse/UMFPACK libraries to be installed."
+        ) from exc
+    return cast(_UmfpackSolver, umfpack_spsolve)
 
 
 def _build_preconditioner(
@@ -127,7 +152,7 @@ def solve_linear_system(
     method: str = "direct",
     solver_parameters: SolverParameters | None = None,
 ) -> tuple[np.ndarray, dict[str, str | float | int]]:
-    """Solve a sparse linear system with one of the supported SciPy backends.
+    """Solve a sparse linear system with one of the supported backends.
 
     Parameters
     ----------
@@ -136,8 +161,8 @@ def solve_linear_system(
     b :
         Right-hand-side vector.
     method :
-        Solver backend. Supported values are ``"direct"``, ``"pardiso"``,
-        ``"cg"``, and ``"gmres"``.
+        Solver backend. Supported values are ``"direct"``, ``"umfpack"``,
+        ``"pardiso"``, ``"cg"``, and ``"gmres"``.
     solver_parameters :
         Optional backend-specific solver options. For SciPy Krylov methods this
         maps directly to supported keyword arguments such as ``rtol``,
@@ -160,19 +185,34 @@ def solve_linear_system(
 
     Notes
     -----
-    The ``"pardiso"`` method uses the Intel MKL PARDISO solver via the
-    ``pypardiso`` package. This is typically only available on Linux systems
-    and may provide better performance for large systems compared to the
-    default SciPy direct solver.
+    The ``"direct"`` method uses :func:`scipy.sparse.linalg.spsolve`. The
+    ``"umfpack"`` method requests SuiteSparse/UMFPACK explicitly through
+    ``scikit-umfpack``. The ``"pardiso"`` method uses Intel MKL PARDISO through
+    ``pypardiso``; this is typically only available on Linux systems.
     """
 
     if method == "direct":
         x = spsolve(A, b)
-        return np.asarray(x, dtype=float), {"method": method, "info": 0}
+        return np.asarray(x, dtype=float), {
+            "method": method,
+            "backend": "scipy.sparse.linalg.spsolve",
+            "info": 0,
+        }
+    if method == "umfpack":
+        umfpack_spsolve = _import_umfpack()
+        x = umfpack_spsolve(
+            sparse.csc_matrix(A, dtype=float),
+            np.ascontiguousarray(np.asarray(b, dtype=float)),
+        )
+        return np.asarray(x, dtype=float), {
+            "method": method,
+            "backend": "scikits.umfpack.spsolve",
+            "info": 0,
+        }
     if method == "pardiso":
         pardiso_spsolve = _import_pypardiso()
         x = pardiso_spsolve(A, b)
-        return np.asarray(x, dtype=float), {"method": method, "info": 0}
+        return np.asarray(x, dtype=float), {"method": method, "backend": "pypardiso", "info": 0}
     if method == "cg":
         parameters = dict(solver_parameters or {})
         preconditioner, preconditioner_info = _build_preconditioner(A, solver_parameters=parameters)

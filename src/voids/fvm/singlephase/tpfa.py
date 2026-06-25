@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from importlib import import_module
 from time import perf_counter
 from typing import Any, cast
 import warnings
@@ -229,13 +230,24 @@ def solve_tpfa(
     with warnings.catch_warnings():
         warnings.simplefilter("error", MatrixRankWarning)
         try:
+            umfpack = import_module("scikits.umfpack")
+            umfpack_warning_type = cast(type[Warning], umfpack.UmfpackWarning)
+        except ImportError:  # pragma: no cover - depends on optional solver package
+
+            class FallbackUmfpackWarning(Warning):
+                """Fallback warning type used when UMFPACK is not installed."""
+
+            umfpack_warning_type = FallbackUmfpackWarning
+
+        warnings.simplefilter("error", umfpack_warning_type)
+        try:
             pressure_vector, solver_info = solve_linear_system(
                 matrix,
                 rhs,
                 method=solver_method,
                 solver_parameters=solver_parameters,
             )
-        except MatrixRankWarning as exc:
+        except (MatrixRankWarning, umfpack_warning_type) as exc:
             raise RuntimeError(
                 "TPFA pressure system is singular. Check for disconnected zero-permeability "
                 "regions or apply a physically justified permeability floor."

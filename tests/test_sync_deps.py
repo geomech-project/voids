@@ -27,17 +27,25 @@ def test_pep508_specifier_from_pixi_specifier_handles_pixi_forms() -> None:
     assert module._pep508_specifier_from_pixi_specifier(">=1.26,<2.2") == ">=1.26,<2.2"
 
 
-def test_project_targets_are_generated_from_pixi_tables() -> None:
+def test_project_targets_are_generated_from_core_feature_and_platform_tables() -> None:
     module = _load_sync_deps_module()
 
     pixi_data = {
         "dependencies": {
             "python": ">=3.11,<3.13",
-            "numpy": ">=1.26,<2.2",
         },
-        "pypi-dependencies": {
-            "voids": {"path": ".", "editable": True},
-            "pyamg": ">=5.3",
+        "feature": {
+            "core": {
+                "dependencies": {
+                    "numpy": ">=1.26,<2.2",
+                    "scipy": ">=1.11",
+                    "ipykernel": ">=7.2.0,<8",
+                },
+                "pypi-dependencies": {
+                    "voids": {"path": ".", "editable": True},
+                    "porespy": ">=2.4",
+                },
+            },
         },
         "target": {
             "linux-64": {
@@ -48,14 +56,15 @@ def test_project_targets_are_generated_from_pixi_tables() -> None:
 
     targets, empty_features = module._sync_targets_from_pixi(pixi_data)
 
-    assert empty_features == []
+    assert empty_features == ["core"]
     assert targets == [
         module.SyncTarget(
             section="project",
             key="dependencies",
             requirements=(
                 "numpy>=1.26,<2.2",
-                "pyamg>=5.3",
+                "scipy>=1.11",
+                "porespy>=2.4",
                 "pypardiso>=0.4; sys_platform == 'linux'",
             ),
         )
@@ -67,6 +76,11 @@ def test_feature_targets_are_generated_from_pixi_features_with_policy_exceptions
 
     pixi_data = {
         "feature": {
+            "core": {
+                "dependencies": {
+                    "numpy": ">=1.26,<2.2",
+                },
+            },
             "viz": {
                 "dependencies": {
                     "vtk": "9.*",
@@ -83,6 +97,16 @@ def test_feature_targets_are_generated_from_pixi_features_with_policy_exceptions
                     "fenics-dolfinx": ">=0.9,<0.11",
                 },
             },
+            "solvers": {
+                "dependencies": {
+                    "suitesparse": "*",
+                    "libumfpack": "*",
+                    "scikit-umfpack": "*",
+                },
+                "pypi-dependencies": {
+                    "pyamg": ">=5.3",
+                },
+            },
         }
     }
 
@@ -93,9 +117,14 @@ def test_feature_targets_are_generated_from_pixi_features_with_policy_exceptions
         "vtk==9.*",
         "matplotlib>=3.8",
     )
-    assert rendered[("project.optional-dependencies", "docs")] == ("mkdocstrings[python]>=0.25",)
+    assert ("project.optional-dependencies", "core") not in rendered
+    assert ("project.optional-dependencies", "docs") not in rendered
     assert ("project.optional-dependencies", "fem") not in rendered
-    assert empty_features == ["fem"]
+    assert rendered[("project.optional-dependencies", "solvers")] == (
+        "scikit-umfpack",
+        "pyamg>=5.3",
+    )
+    assert empty_features == ["core", "docs", "fem"]
 
 
 def test_sync_pyproject_text_removes_empty_conda_only_feature_extras() -> None:
@@ -116,9 +145,11 @@ def test_sync_pyproject_text_removes_empty_conda_only_feature_extras() -> None:
         "viz",
         "test",
         "lbm",
-        "docs",
         "thermo",
+        "solvers",
     }
+    assert "core" not in optional_dependencies
+    assert "docs" not in optional_dependencies
     assert "fem" not in optional_dependencies
     all_optional_requirements = [
         requirement
@@ -126,6 +157,8 @@ def test_sync_pyproject_text_removes_empty_conda_only_feature_extras() -> None:
         for requirement in requirements
     ]
     assert not any("fenics-dolfinx" in requirement for requirement in all_optional_requirements)
+    assert not any("suitesparse" in requirement for requirement in all_optional_requirements)
+    assert not any("libumfpack" in requirement for requirement in all_optional_requirements)
 
 
 def test_replace_toml_array_section_key_handles_brackets_inside_strings() -> None:
