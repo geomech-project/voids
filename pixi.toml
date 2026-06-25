@@ -42,6 +42,9 @@ mkl = ">=2023"
 [target.linux-64.pypi-dependencies]
 pypardiso = ">=0.4"
 
+[target.linux-64.activation.env]
+UCX_TLS = "tcp,self"
+
 ##########################################
 ####### Features dependencies ############
 ##########################################
