@@ -85,7 +85,9 @@ def upscale_permeability_fem(
     pressure_inlet, pressure_outlet :
         Natural pressure values imposed on opposite faces of each flow axis.
     options :
-        PETSc solver options passed to FEniCSx.
+        Linear solver options passed to the FEM backend. The default preserves
+        PETSc where available and uses a serial SciPy direct solve on native
+        Windows when PETSc is unavailable.
     backend_kwargs :
         Additional backend-specific keyword arguments.
     """

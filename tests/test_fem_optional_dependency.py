@@ -26,7 +26,7 @@ def test_fem_backend_reports_clean_missing_dolfinx_message(
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    with pytest.raises(ImportError, match="full DOLFINx/PETSc Python stack"):
+    with pytest.raises(ImportError, match="DOLFINx, Basix, UFL, and mpi4py"):
         _common._require_dolfinx()
 
 
@@ -47,9 +47,93 @@ def test_fem_backend_reports_native_windows_limitation(
         _common._require_dolfinx()
 
     message = str(exc_info.value)
-    assert "full DOLFINx/PETSc Python stack" in message
-    assert "Native Windows is currently not fully supported" in message
-    assert "Use Linux, macOS, WSL2, or Docker" in message
+    assert "PETSc FEM linear backend requires" in message
+    assert "linear_backend='auto' falls back to the SciPy direct backend" in message
+
+
+def test_fem_auto_linear_backend_uses_scipy_when_windows_lacks_petsc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_import = builtins.__import__
+
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "dolfinx.fem.petsc":
+            raise ImportError("simulated missing petsc4py")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    api = _common._require_dolfinx_core()
+
+    assert _common._resolve_linear_backend("auto", api) == "scipy"
+
+
+def test_fem_linear_backend_rejects_unknown_name() -> None:
+    with pytest.raises(ValueError, match="linear_backend must be one of"):
+        _common._resolve_linear_backend("not-a-backend", SimpleNamespace())  # type: ignore[arg-type]
+
+
+def test_scipy_fem_backend_rejects_distributed_mesh() -> None:
+    context = SimpleNamespace(mesh=SimpleNamespace(comm=SimpleNamespace(size=2)))
+
+    with pytest.raises(NotImplementedError, match="serial-only"):
+        _common._solve_mixed_problem_scipy(
+            context,
+            mixed_space=None,
+            form=None,
+            rhs=None,
+            bcs=[],
+            linear_backend="scipy",
+        )
+
+
+def test_umfpack_fem_backend_dispatches_optional_solver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeMatrix:
+        def scatter_reverse(self) -> None:
+            return None
+
+        def to_scipy(self) -> str:
+            return "matrix"
+
+    vector = SimpleNamespace(
+        array=np.array([1.0]),
+        scatter_reverse=lambda _mode: None,
+    )
+    solution = SimpleNamespace(
+        x=SimpleNamespace(
+            array=np.zeros(2),
+            scatter_forward=lambda: None,
+        )
+    )
+    fem = SimpleNamespace(
+        form=lambda value: value,
+        assemble_matrix=lambda _form, bcs: FakeMatrix(),
+        assemble_vector=lambda _rhs: vector,
+        apply_lifting=lambda _array, _forms, _bcs: None,
+        set_bc=lambda _array, _bcs: None,
+        Function=lambda _space: solution,
+    )
+    la = SimpleNamespace(InsertMode=SimpleNamespace(add="add"))
+    context = SimpleNamespace(
+        mesh=SimpleNamespace(comm=SimpleNamespace(size=1)),
+        api=SimpleNamespace(fem=fem, la=la),
+    )
+    fake_umfpack = SimpleNamespace(spsolve=lambda _matrix, _rhs: np.array([2.0]))
+
+    monkeypatch.setattr(_common, "import_module", lambda _name: fake_umfpack)
+
+    with pytest.raises(RuntimeError, match="incompatible size"):
+        _common._solve_mixed_problem_scipy(
+            context,
+            mixed_space=None,
+            form=None,
+            rhs=None,
+            bcs=[],
+            linear_backend="umfpack",
+        )
 
 
 @pytest.mark.parametrize(

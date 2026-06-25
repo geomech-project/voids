@@ -3,8 +3,9 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass, field
+from importlib import import_module
 from time import perf_counter
-from typing import Any, Callable, cast
+from typing import Any, Callable, Literal, cast
 
 _FEM_THREAD_ENV_DEFAULTS = {
     "OMP_NUM_THREADS": "1",
@@ -32,20 +33,26 @@ from voids.image.porosity import PermeabilityMap, PorosityMap  # noqa: E402
 _AXIS_NAMES = ("x", "y", "z")
 _MIN_MARKER = {"x": 1, "y": 3, "z": 5}
 _MAX_MARKER = {"x": 2, "y": 4, "z": 6}
+LinearSolverBackend = Literal["auto", "petsc", "scipy", "umfpack"]
 
 
 @dataclass(slots=True)
 class FEniCSSolverOptions:
-    """PETSc solver controls for FEniCSx linear problems.
+    """Linear solver controls for FEniCSx linear problems.
 
-    Defaults use a direct LU solve with MUMPS, matching the Pixi ``fem``
-    feature stack. Override ``petsc_options`` when a different PETSc
-    installation or preconditioned iterative strategy is desired. For
-    high-contrast mixed Darcy-Brinkman systems, prefer a robust external
-    factorization package such as MUMPS over PETSc's built-in LU backend unless
-    independent verification on the same problem class has confirmed the result.
+    The default ``linear_backend="auto"`` preserves the PETSc/MUMPS path on
+    platforms with a full DOLFINx/PETSc stack. On native Windows, where that
+    PETSc stack is not available in the conda-forge FEniCSx packages used by
+    ``voids``, ``auto`` uses DOLFINx assembly plus SciPy's direct sparse solver.
+
+    Use ``linear_backend="scipy"`` or ``"umfpack"`` to request the serial
+    DOLFINx-assembly/direct-sparse path explicitly on any platform. These paths
+    use the same weak form and boundary conditions as PETSc; only the linear
+    algebra backend changes. ``"umfpack"`` requires the optional
+    ``scikits.umfpack`` package.
     """
 
+    linear_backend: LinearSolverBackend = "auto"
     petsc_options: dict[str, Any] = field(
         default_factory=lambda: {
             "ksp_type": "preonly",
@@ -62,6 +69,7 @@ class FEniCSSolverOptions:
         cls,
         backend: str = "mumps",
         *,
+        linear_backend: LinearSolverBackend = "petsc",
         petsc_options_prefix: str = "voids_fem_",
         shift_amount: float | None = 1.0e-12,
         mumps_memory_relaxation_percent: int | None = None,
@@ -74,6 +82,9 @@ class FEniCSSolverOptions:
         backend :
             PETSc factorization package, for example ``"mumps"`` or
             ``"superlu_dist"``.
+        linear_backend :
+            Linear algebra backend. This builder configures PETSc options, so
+            the default is ``"petsc"``.
         petsc_options_prefix :
             Prefix used by DOLFINx for PETSc runtime options.
         shift_amount :
@@ -98,7 +109,23 @@ class FEniCSSolverOptions:
                 options["mat_mumps_icntl_14"] = int(mumps_memory_relaxation_percent)
             if mumps_workspace_mb is not None:
                 options["mat_mumps_icntl_23"] = int(mumps_workspace_mb)
-        return cls(petsc_options=options, petsc_options_prefix=petsc_options_prefix)
+        return cls(
+            linear_backend=linear_backend,
+            petsc_options=options,
+            petsc_options_prefix=petsc_options_prefix,
+        )
+
+    @classmethod
+    def scipy_direct(cls) -> FEniCSSolverOptions:
+        """Create options for the serial DOLFINx-assembly/SciPy direct backend."""
+
+        return cls(linear_backend="scipy")
+
+    @classmethod
+    def umfpack_direct(cls) -> FEniCSSolverOptions:
+        """Create options for the serial DOLFINx-assembly/UMFPACK backend."""
+
+        return cls(linear_backend="umfpack")
 
 
 @dataclass(slots=True)
@@ -172,8 +199,9 @@ class _DolfinxAPI:
     MPI: Any
     basix_ufl: Any
     fem: Any
+    la: Any
     mesh: Any
-    petsc: Any
+    petsc: Any | None
     ufl: Any
 
 
@@ -190,36 +218,77 @@ class _FEMContext:
     cross_section_area: float
 
 
-def _require_dolfinx() -> _DolfinxAPI:
+def _require_dolfinx_core() -> _DolfinxAPI:
     try:
         import basix.ufl as basix_ufl
-        from dolfinx import fem, mesh
-        import dolfinx.fem.petsc as petsc
+        from dolfinx import fem, la, mesh
         from mpi4py import MPI
         import ufl
     except ImportError as exc:  # pragma: no cover - depends on optional dependency
         message = (
-            "FEniCSx FEM backends require the full DOLFINx/PETSc Python stack, "
-            "including dolfinx.fem.petsc and petsc4py. Use the Pixi 'fem' "
-            "feature/environment or install a compatible fenics-dolfinx stack "
-            "before calling voids.fem."
+            "FEniCSx FEM backends require DOLFINx, Basix, UFL, and mpi4py. "
+            "Use the Pixi 'fem' feature/environment or install a compatible "
+            "fenics-dolfinx stack before calling voids.fem."
         )
-        if sys.platform.startswith("win"):
-            message += (
-                " Native Windows is currently not fully supported for these "
-                "PETSc-backed FEM solvers because petsc/petsc4py are not "
-                "available in the conda-forge Windows FEniCSx stack used by "
-                "voids. Use Linux, macOS, WSL2, or Docker for this FEM path."
-            )
         raise ImportError(message) from exc
     return _DolfinxAPI(
         MPI=MPI,
         basix_ufl=basix_ufl,
         fem=fem,
+        la=la,
         mesh=mesh,
-        petsc=petsc,
+        petsc=None,
         ufl=ufl,
     )
+
+
+def _require_dolfinx_petsc(api: _DolfinxAPI | None = None) -> _DolfinxAPI:
+    api = api or _require_dolfinx_core()
+    try:
+        import dolfinx.fem.petsc as petsc
+    except ImportError as exc:  # pragma: no cover - depends on optional dependency
+        message = (
+            "The PETSc FEM linear backend requires the full DOLFINx/PETSc "
+            "Python stack, including dolfinx.fem.petsc and petsc4py. Use "
+            "linear_backend='scipy' for a serial direct sparse solve, or "
+            "install a compatible PETSc-enabled fenics-dolfinx stack."
+        )
+        if sys.platform.startswith("win"):
+            message += (
+                " Native Windows does not provide this PETSc-backed path in "
+                "the conda-forge FEniCSx stack used by voids; "
+                "linear_backend='auto' falls back to the SciPy direct backend "
+                "on Windows."
+            )
+        raise ImportError(message) from exc
+    return _DolfinxAPI(
+        MPI=api.MPI,
+        basix_ufl=api.basix_ufl,
+        fem=api.fem,
+        la=api.la,
+        mesh=api.mesh,
+        petsc=petsc,
+        ufl=api.ufl,
+    )
+
+
+def _require_dolfinx() -> _DolfinxAPI:
+    """Return a DOLFINx API object with the PETSc linear backend available."""
+
+    return _require_dolfinx_petsc()
+
+
+def _resolve_linear_backend(requested: LinearSolverBackend, api: _DolfinxAPI) -> str:
+    if requested not in {"auto", "petsc", "scipy", "umfpack"}:
+        raise ValueError("linear_backend must be one of 'auto', 'petsc', 'scipy', or 'umfpack'")
+    if requested != "auto":
+        return requested
+    if sys.platform.startswith("win"):
+        try:
+            _require_dolfinx_petsc(api)
+        except ImportError:
+            return "scipy"
+    return "petsc"
 
 
 def _axis_index(axis: str, ndim: int) -> int:
@@ -350,8 +419,13 @@ def _dg0_function(api: _DolfinxAPI, domain: Any, values: np.ndarray, *, name: st
     return field
 
 
-def _build_context(problem: FEMMapProblem, *, flow_axis: str) -> _FEMContext:
-    api = _require_dolfinx()
+def _build_context(
+    problem: FEMMapProblem,
+    *,
+    flow_axis: str,
+    api: _DolfinxAPI | None = None,
+) -> _FEMContext:
+    api = api or _require_dolfinx_core()
     axis = _axis_index(flow_axis, problem.permeability_map.ndim)
     domain = _create_box_mesh(api, problem)
     tags = _facet_tags(api, domain, problem)
@@ -513,8 +587,10 @@ def _solve_mixed_problem(
     prefix_suffix: str,
 ) -> tuple[Any, float]:
     solver_options = options or FEniCSSolverOptions()
+    api = _require_dolfinx_petsc(context.api)
     start = perf_counter()
-    problem = context.api.petsc.LinearProblem(
+    petsc = cast(Any, api.petsc)
+    problem = petsc.LinearProblem(
         form,
         rhs,
         bcs=bcs,
@@ -523,6 +599,62 @@ def _solve_mixed_problem(
     )
     solution = problem.solve()
     return solution, perf_counter() - start
+
+
+def _solve_mixed_problem_scipy(
+    context: _FEMContext,
+    *,
+    mixed_space: Any,
+    form: Any,
+    rhs: Any,
+    bcs: list[Any],
+    linear_backend: Literal["scipy", "umfpack"],
+) -> tuple[Any, float]:
+    if context.mesh.comm.size != 1:
+        raise NotImplementedError(
+            "linear_backend='scipy' and linear_backend='umfpack' are serial-only; "
+            "use linear_backend='petsc' for MPI-distributed FEM solves."
+        )
+
+    solve_linear_system: Callable[[Any, Any], Any]
+    if linear_backend == "umfpack":
+        try:
+            umfpack = import_module("scikits.umfpack")
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "linear_backend='umfpack' requires the optional scikits.umfpack package. "
+                "Install scikit-umfpack or use linear_backend='scipy'."
+            ) from exc
+        solve_linear_system = cast(Callable[[Any, Any], Any], umfpack.spsolve)
+    else:
+        from scipy.sparse.linalg import spsolve
+
+        solve_linear_system = cast(Callable[[Any, Any], Any], spsolve)
+
+    fem = context.api.fem
+    la = context.api.la
+    a_form = fem.form(form)
+    rhs_form = fem.form(rhs)
+
+    start = perf_counter()
+    matrix = fem.assemble_matrix(a_form, bcs=bcs)
+    matrix.scatter_reverse()
+    vector = fem.assemble_vector(rhs_form)
+    fem.apply_lifting(vector.array, [a_form], [bcs])
+    vector.scatter_reverse(la.InsertMode.add)
+    fem.set_bc(vector.array, bcs)
+    solution_array = np.asarray(solve_linear_system(matrix.to_scipy(), vector.array.copy()))
+    solve_seconds = perf_counter() - start
+
+    solution = fem.Function(mixed_space)
+    if solution_array.size != solution.x.array.size:
+        raise RuntimeError(
+            "SciPy FEM solve returned a solution vector with incompatible size "
+            f"{solution_array.size}; expected {solution.x.array.size}."
+        )
+    solution.x.array[:] = solution_array.real
+    solution.x.scatter_forward()
+    return solution, solve_seconds
 
 
 def _collapse_solution(solution: Any) -> tuple[Any, Any]:
@@ -606,7 +738,11 @@ def _solve_with_form_builder(
 ) -> FEMSinglePhaseResult:
     _validate_pressure_drop(pressure_inlet, pressure_outlet)
     solver_options = options or FEniCSSolverOptions()
-    context = _build_context(problem, flow_axis=flow_axis)
+    api = _require_dolfinx_core()
+    selected_linear_backend = _resolve_linear_backend(solver_options.linear_backend, api)
+    if selected_linear_backend == "petsc":
+        api = _require_dolfinx_petsc(api)
+    context = _build_context(problem, flow_axis=flow_axis, api=api)
     W = _mixed_space(
         context.api,
         context.mesh,
@@ -625,14 +761,24 @@ def _solve_with_form_builder(
     )
     bcs = _side_wall_bcs(context, W, flow_axis=flow_axis)
     bcs.append(_pressure_gauge_bc(context, W))
-    solution, solve_seconds = _solve_mixed_problem(
-        context,
-        form=form,
-        rhs=rhs,
-        bcs=bcs,
-        options=solver_options,
-        prefix_suffix=prefix_suffix,
-    )
+    if selected_linear_backend == "petsc":
+        solution, solve_seconds = _solve_mixed_problem(
+            context,
+            form=form,
+            rhs=rhs,
+            bcs=bcs,
+            options=solver_options,
+            prefix_suffix=prefix_suffix,
+        )
+    else:
+        solution, solve_seconds = _solve_mixed_problem_scipy(
+            context,
+            mixed_space=W,
+            form=form,
+            rhs=rhs,
+            bcs=bcs,
+            linear_backend=cast(Literal["scipy", "umfpack"], selected_linear_backend),
+        )
     return _result_from_solution(
         context,
         solution,
@@ -644,6 +790,7 @@ def _solve_with_form_builder(
         viscosity=problem.viscosity,
         solve_seconds=solve_seconds,
         metadata={
+            "linear_backend": selected_linear_backend,
             "velocity_degree": velocity_degree,
             "pressure_family": pressure_family,
             "porosity_floor": problem.porosity_floor,
@@ -658,6 +805,7 @@ __all__ = [
     "FEMMapProblem",
     "FEMSinglePhaseResult",
     "FEniCSSolverOptions",
+    "LinearSolverBackend",
     "_build_context",
     "_solve_with_form_builder",
 ]

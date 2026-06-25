@@ -18,12 +18,12 @@ from voids.fem.singlephase import (  # noqa: E402
 from voids.fem.singlephase._common import (  # noqa: E402
     _FEM_THREAD_ENV_DEFAULTS,
     _apply_fem_thread_defaults,
-    _require_dolfinx,
+    _require_dolfinx_core,
 )
 from voids.image.porosity import PermeabilityMap, PorosityMap  # noqa: E402
 
 try:
-    _require_dolfinx()
+    _require_dolfinx_core()
 except ImportError as exc:
     requires_fem_stack = pytest.mark.skip(reason=str(exc))
 else:
@@ -55,6 +55,7 @@ def test_fem_thread_defaults_preserve_existing_environment(monkeypatch: pytest.M
 def test_fenics_solver_options_direct_lu_builder() -> None:
     options = FEniCSSolverOptions.direct_lu("superlu_dist")
 
+    assert options.linear_backend == "petsc"
     assert options.petsc_options == {
         "ksp_type": "preonly",
         "pc_type": "lu",
@@ -72,6 +73,8 @@ def test_fenics_solver_options_direct_lu_builder() -> None:
 
     assert mumps_options.petsc_options["mat_mumps_icntl_14"] == 500
     assert mumps_options.petsc_options["mat_mumps_icntl_23"] == 20000
+    assert FEniCSSolverOptions.scipy_direct().linear_backend == "scipy"
+    assert FEniCSSolverOptions.umfpack_direct().linear_backend == "umfpack"
 
 
 @pytest.mark.parametrize(
@@ -91,7 +94,32 @@ def test_fem_backends_recover_constant_2d_permeability(
     assert result.permeability == pytest.approx(2.0, rel=5.0e-4)
     assert result.flow_rate > 0.0
     assert result.solve_seconds >= 0.0
+    assert result.metadata["linear_backend"] in {"petsc", "scipy"}
     assert result.metadata["petsc_options"]["pc_factor_mat_solver_type"] == "mumps"
+    assert np.all(np.isfinite(result.velocity.x.array))
+    assert np.all(np.isfinite(result.pressure.x.array))
+
+
+@pytest.mark.parametrize(
+    "solver",
+    [
+        solve_darcy_taylor_hood,
+        solve_brinkman_taylor_hood,
+        solve_brinkman_usfem,
+    ],
+)
+@requires_fem_stack
+def test_fem_backends_recover_constant_2d_permeability_with_scipy_direct(
+    solver: Callable[..., Any],
+) -> None:
+    result = solver(
+        _constant_problem((3, 3), permeability=2.0),
+        flow_axis="x",
+        options=FEniCSSolverOptions.scipy_direct(),
+    )
+
+    assert result.permeability == pytest.approx(2.0, rel=5.0e-4)
+    assert result.metadata["linear_backend"] == "scipy"
     assert np.all(np.isfinite(result.velocity.x.array))
     assert np.all(np.isfinite(result.pressure.x.array))
 
