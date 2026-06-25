@@ -1,0 +1,44 @@
+{
+  "requested": true,
+  "status": "ok",
+  "options": {
+    "formulation": "steady_stokes_limit",
+    "backend": "jax",
+    "precision_policy": "FP32FP32",
+    "collision_model": "BGK",
+    "streaming_scheme": "pull",
+    "lattice_viscosity": 0.1,
+    "pressure_drop_lattice": 6.666666666666667e-05,
+    "inlet_outlet_buffer_cells": 12,
+    "max_steps": 20000,
+    "min_steps": 1200,
+    "check_interval": 100,
+    "steady_rtol": 0.0001
+  },
+  "runs": [
+    {
+      "axis": "x",
+      "steps": 2800,
+      "converged": true,
+      "convergence_metric": 3.2490986502603114e-06,
+      "K_mD": 133.03924798091208,
+      "solve_seconds": 152.50716149999062
+    },
+    {
+      "axis": "y",
+      "steps": 13400,
+      "converged": true,
+      "convergence_metric": 7.5226388342723e-05,
+      "K_mD": 36.10180129907789,
+      "solve_seconds": 712.51626975002
+    },
+    {
+      "axis": "z",
+      "steps": 8200,
+      "converged": true,
+      "convergence_metric": 2.4096979365290764e-05,
+      "K_mD": 49.864999267877494,
+      "solve_seconds": 445.0469645409612
+    }
+  ]
+}

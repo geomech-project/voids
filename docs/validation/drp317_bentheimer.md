@@ -79,7 +79,7 @@ the PREGO overestimate is therefore not fixed by switching to the generated
 PoreSpy/OpenPNM-style size factors; the reduced geometry and conduit assumptions
 remain the dominant modeling uncertainty.
 
-This is a reduced-network comparison against a laboratory-scale experimental
+This is a pore-network comparison against a laboratory-scale experimental
 reference. The numbers depend on the selected ROI, segmentation convention,
 boundary labeling, network reduction, and conductance closure; they should not be
 read as a direct voxel-scale flow simulation.

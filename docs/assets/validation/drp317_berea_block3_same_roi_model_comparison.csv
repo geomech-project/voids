@@ -1,0 +1,28 @@
+family,formulation,method,solver_backend,axis,K_m2,K_mD,solve_seconds
+map_resistor,darcy_darcy_tpfa_fv,TPFA finite-volume Darcy-Darcy,cg+pyamg,x,3.3183825155638827e-10,336235.0970499818,0.238587333005853
+map_resistor,darcy_darcy_tpfa_fv,TPFA finite-volume Darcy-Darcy,cg+pyamg,y,6.535682067842695e-11,66222.79631905229,0.1659727079677395
+map_resistor,darcy_darcy_tpfa_fv,TPFA finite-volume Darcy-Darcy,cg+pyamg,z,1.7330451965848088e-12,1756.007986218188,0.1550448750494979
+fem_micro_continuum,brinkman_usfem_p1dg1,Darcy-Brinkman micro-continuum USFEM CG1 x DG1,fenicsx:petsc-lu-superlu_dist,x,5.404941238558938e-13,547.6556525272974,152.41454899997916
+fem_micro_continuum,brinkman_usfem_p1dg1,Darcy-Brinkman micro-continuum USFEM CG1 x DG1,fenicsx:petsc-lu-superlu_dist,y,1.2602641241217756e-13,127.6962580700826,151.92743250000058
+fem_micro_continuum,brinkman_usfem_p1dg1,Darcy-Brinkman micro-continuum USFEM CG1 x DG1,fenicsx:petsc-lu-superlu_dist,z,7.648255373777184e-14,77.49594496124656,150.85633733298164
+fem_micro_continuum,brinkman_taylor_hood_p2p1,Darcy-Brinkman coefficient-field Taylor-Hood CG2 x CG1,fenicsx:petsc-lu-mumps,x,9.41067243376344e-13,953.5363521930668,166.41723704198375
+fem_micro_continuum,brinkman_taylor_hood_p2p1,Darcy-Brinkman coefficient-field Taylor-Hood CG2 x CG1,fenicsx:petsc-lu-mumps,y,2.2206849426268918e-13,225.01089422317736,166.60635008302052
+fem_micro_continuum,brinkman_taylor_hood_p2p1,Darcy-Brinkman coefficient-field Taylor-Hood CG2 x CG1,fenicsx:petsc-lu-mumps,z,1.505142967774375e-13,152.5086060663858,165.65881295897998
+fem_coefficient_field,darcy_taylor_hood_p2p1,Darcy-Darcy coefficient-field Taylor-Hood CG2 x CG1,fenicsx:petsc-lu-mumps,x,3.540168879078749e-10,358707.5995752404,164.8787271670299
+fem_coefficient_field,darcy_taylor_hood_p2p1,Darcy-Darcy coefficient-field Taylor-Hood CG2 x CG1,fenicsx:petsc-lu-mumps,y,9.519642772482623e-11,96457.77713914165,164.99805425002705
+fem_coefficient_field,darcy_taylor_hood_p2p1,Darcy-Darcy coefficient-field Taylor-Hood CG2 x CG1,fenicsx:petsc-lu-mumps,z,1.9583962395021353e-11,19843.44922753506,166.3997154579847
+direct_image_dns,xlb_steady_stokes_limit,"Direct-image LBM DNS (XLB, Stokes-limit preset)",xlb:jax,x,2.035379819467277e-12,2062.348532522514,55.21100837504491
+direct_image_dns,xlb_steady_stokes_limit,"Direct-image LBM DNS (XLB, Stokes-limit preset)",xlb:jax,y,5.252238475333751e-13,532.1830455653192,106.70283520797966
+direct_image_dns,xlb_steady_stokes_limit,"Direct-image LBM DNS (XLB, Stokes-limit preset)",xlb:jax,z,3.787491070867749e-13,383.767519813115,159.9384743340197
+extracted_pnm,pore_network_model,PoreSpy snow2,,x,4.890383657147159e-13,495.51810734908776,1.3697702909703366
+extracted_pnm,pore_network_model,PoreSpy snow2,,y,1.4779307919754256e-13,149.75133244654631,0.333903124963399
+extracted_pnm,pore_network_model,PoreSpy snow2,,z,1.0647791883257994e-13,107.8887476185636,0.3323317499598488
+extracted_pnm,pore_network_model,PREGO,,x,5.915905912979544e-13,599.4291464169042,0.2968297500046901
+extracted_pnm,pore_network_model,PREGO,,y,1.55797199214718e-13,157.8615067804337,0.2928057910175994
+extracted_pnm,pore_network_model,PREGO,,z,1.7920696312240885e-13,181.5814492599463,0.29012308397796
+extracted_pnm,pore_network_model,Native maximal-ball,,x,2.884498988352742e-13,292.2718501379734,0.2094052080065012
+extracted_pnm,pore_network_model,Native maximal-ball,,y,1.565378890626818e-13,158.61201074357226,0.1925525410333648
+extracted_pnm,pore_network_model,Native maximal-ball,,z,5.5992778809557606e-14,56.734681215407115,0.1973728750017471
+experimental,bulk_experiment,Experimental Kabs,,x,1.1941771930000001e-13,121.0,
+experimental,bulk_experiment,Experimental Kabs,,y,1.1941771930000001e-13,121.0,
+experimental,bulk_experiment,Experimental Kabs,,z,1.1941771930000001e-13,121.0,

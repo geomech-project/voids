@@ -410,6 +410,83 @@ patches, and field naming explicitly.
 
 ---
 
+## Structured Mesh Export
+
+`voids.mesh` can convert a regular `PorosityMap`, optionally paired with a
+matching `PermeabilityMap`, into a structured mesh. The default cells are
+quadrilaterals for 2-D maps and hexahedra for 3-D maps. If a downstream solver
+expects simplex cells, the same map grid can also be subdivided into triangles
+in 2-D or tetrahedra in 3-D.
+The cell data order is explicit:
+
+```python
+cell_data["porosity"][0][n] == porosity.values.ravel(order="C")[n]
+```
+
+This means the mesh is a representation of the coarse map grid, not a
+segmentation-boundary mesh of the original image.
+For a 2-D slice, each coarse porosity cell becomes one quadrilateral by default,
+or two triangles when `element_type="triangle"`. For a 3-D map, each coarse
+porosity cell becomes one hexahedron by default, or six tetrahedra when
+`element_type="tetra"` or `element_type="tetrahedron"`. In the simplex exports,
+the child cells inherit the same porosity, permeability, and parent
+`cell_index` values as the original coarse map cell.
+
+![Structured 2-D porosity map converted cell-for-cell into a quadrilateral mesh](assets/mesh/structured_map_to_quad_mesh.svg)
+
+The 2-D scheme shows the default cell-for-cell quadrilateral export. The 3-D
+default is analogous: each coarse map volume cell becomes one hexahedral mesh
+cell instead of one quadrilateral. The simplex options subdivide those default
+cells, but porosity and permeability remain cell-wise fields inherited from the
+parent map cell.
+
+```python
+from voids.mesh import write_structured_map_meshes
+
+paths = write_structured_map_meshes(
+    porosity,
+    "outputs/case_a",
+    stem="case_a_porosity_permeability",
+    permeability_map=permeability,
+    formats=("gmsh", "vtk", "vtu", "netgen"),
+)
+
+triangle_paths = write_structured_map_meshes(
+    porosity,
+    "outputs/case_a",
+    stem="case_a_porosity_permeability_triangles",
+    permeability_map=permeability,
+    formats=("gmsh", "vtk", "vtu"),
+    element_type="triangle",
+)
+```
+
+The Gmsh `.msh`, VTK `.vtk`, and VTU `.vtu` exports are intended to carry the
+floating porosity and permeability arrays as cell data.
+The Netgen `.vol` writer available through `meshio` can write the structured
+geometry, but it should not be treated as the authoritative carrier of
+floating porosity/permeability fields. Keep the HDF5 map files, or a
+cell-data-preserving format such as VTU, as the source of truth for the
+coefficients.
+
+![Field carriers for HDF5, Gmsh, VTK, VTU, and Netgen exports](assets/mesh/mesh_export_field_carriers.svg)
+
+`voids` uses [`meshio`](https://github.com/nschloe/meshio) for mesh-file I/O.
+The meshio project documents support for Gmsh, VTK, VTU, Netgen, and many other
+formats, but format support does not imply that every downstream code preserves
+the same field-data names, physical tags, or boundary-region conventions.
+Check the exported mesh in the target solver before interpreting a simulation.
+
+!!! warning "Gmsh export versus Gmsh meshing"
+    The `.msh` export is a structured map mesh written in Gmsh format. It does
+    not run Gmsh to remesh the bone/marrow interface. The triangular and
+    tetrahedral options are structured subdivisions of the porosity-map cells,
+    not boundary-conforming image-to-geometry meshes. If a later workflow needs
+    a boundary-conforming triangular or tetrahedral mesh, the image-to-geometry
+    step and boundary labels should be specified as a separate model.
+
+---
+
 ## Synthetic Verification Plan
 
 Synthetic cases are useful because the expected porosity is known before running
@@ -611,8 +688,8 @@ For real datasets, a defensible validation sequence should include:
 
 The `voids` porosity-map representation is compatible with the micro-continuum
 porosity fields described by Soulaine and Tchelepi (2016) and Soulaine et al.
-(2016), but it is not yet a full implementation of their Darcy-Brinkman or
-Darcy-Brinkman-Stokes model.
+(2016), but it does not implement their Darcy-Brinkman or
+Darcy-Brinkman-Stokes solver.
 
 In Soulaine and Tchelepi (2016) and Soulaine et al. (2016), the central
 image-derived field is a local void fraction:
@@ -720,8 +797,8 @@ So the safest statement is:
     the \(\epsilon_f\) field used in published micro-continuum models, and
     it can derive an associated Kozeny-Carman permeability or inverse-permeability
     field.
-    It does not yet implement the associated Darcy-Brinkman-Stokes equations or
-    a solver-specific field export.
+    It does not implement the associated Darcy-Brinkman-Stokes equations or a
+    solver-specific field export.
 
 ## References
 

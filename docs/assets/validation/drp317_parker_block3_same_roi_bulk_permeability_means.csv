@@ -1,0 +1,9 @@
+method,family,formulation,solver_backend,K_arithmetic_mean_mD,K_harmonic_mean_mD,K_arithmetic_over_experiment,K_harmonic_over_experiment,K_max_over_min
+"Direct-image LBM DNS (XLB, Stokes-limit preset)",direct_image_dns,xlb_steady_stokes_limit,xlb:jax,73.00201618262248,54.278822904741034,7.300201618262248,5.427882290474104,3.6851138501033787
+Darcy-Brinkman micro-continuum USFEM CG1 x DG1,fem_micro_continuum,brinkman_usfem_p1dg1,fenicsx:petsc-lu-superlu_dist,13.740772181575268,10.602221029916942,1.374077218157527,1.0602221029916943,3.537828022326588
+Darcy-Brinkman coefficient-field Taylor-Hood CG2 x CG1,fem_micro_continuum,brinkman_taylor_hood_p2p1,fenicsx:petsc-lu-mumps,22.543707327937778,17.994601068024036,2.254370732793778,1.7994601068024036,2.969600152845469
+Darcy-Darcy coefficient-field Taylor-Hood CG2 x CG1,fem_coefficient_field,darcy_taylor_hood_p2p1,fenicsx:petsc-lu-mumps,11886.85444021532,651.1925624140206,1188.685444021532,65.11925624140206,82.61128686562405
+TPFA finite-volume Darcy-Darcy,map_resistor,darcy_darcy_tpfa_fv,cg+pyamg,11301.506063330753,200.7440154555218,1130.1506063330753,20.07440154555218,295.3131667928241
+PoreSpy snow2,extracted_pnm,pore_network_model,,16.995312037940142,14.253223089861402,1.6995312037940142,1.4253223089861402,2.688399526187465
+PREGO,extracted_pnm,pore_network_model,,40.89516902987691,31.016219963051114,4.089516902987691,3.1016219963051115,3.2105073767624837
+Native maximal-ball,extracted_pnm,pore_network_model,,14.400842228125926,6.820942521673238,1.4400842228125925,0.6820942521673238,8.656683109050913

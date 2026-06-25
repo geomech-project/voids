@@ -1,0 +1,12 @@
+quantity,value,units
+sample,DRP-317 Berea,-
+RAW path,/Users/dtvolpatto/Work/voids/examples/data/drp-317/Berea_2d25um_binary.raw,-
+phase convention,"0=void/pore, 1=solid",-
+ROI origin,"(694, 462, 462)",voxels
+ROI shape,"(75, 75, 75)",voxels
+voxel size,2.25e-06,m
+ROI porosity,21.66637037037037,%
+full-image porosity if void==0,21.671533200000002,%
+experimental porosity,18.96,%
+experimental Kabs,121.0,mD
+map block shape,"(3, 3, 3)",voxels

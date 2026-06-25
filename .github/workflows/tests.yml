@@ -39,21 +39,17 @@ jobs:
       - name: Install Pixi
         uses: prefix-dev/setup-pixi@v0
         with:
-          environments: lbm
+          environments: test
 
       - name: Run tests with coverage (Ubuntu only)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          pixi run -e lbm pytest \
-            --cov=voids \
-            --cov-report=term-missing \
-            --cov-report=xml:coverage.xml \
-            -q
+          pixi run -e test test-cov-report
 
       - name: Run tests
         if: runner.os != 'Linux'
-        run: pixi run -e lbm pytest -q
+        run: pixi run -e test test-cov
 
       - name: Upload coverage artifact
         if: runner.os == 'Linux'

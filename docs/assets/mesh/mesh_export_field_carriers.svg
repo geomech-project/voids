@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="360" viewBox="0 0 920 360" role="img" aria-labelledby="title desc">
+  <title id="title">Field carriers used by structured map mesh export</title>
+  <desc id="desc">Porosity and permeability maps are exported to HDF5 as authoritative field files and to mesh formats through meshio. Gmsh, VTK, and VTU preserve floating cell data in this workflow, while Netgen export is geometry oriented.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#234f59"/>
+    </marker>
+    <style>
+      .title { font: 700 20px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1f2933; }
+      .label { font: 700 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #26323a; text-anchor: middle; }
+      .small { font: 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; text-anchor: middle; }
+      .box { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.3; rx: 10; }
+      .source { fill: #e0f2fe; stroke: #0f766e; }
+      .mesh { fill: #ecfdf5; stroke: #0f766e; }
+      .data { fill: #fef3c7; stroke: #b45309; }
+      .geometry { fill: #f1f5f9; stroke: #64748b; }
+      .hdf5 { fill: #fef2f2; stroke: #b45309; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="920" height="360" fill="#ffffff"/>
+  <text x="40" y="38" class="title">What each export carries</text>
+  <text x="40" y="63" class="small" text-anchor="start">The mesh exporter writes a structured grid; the field arrays remain cell-wise porosity and permeability coefficients.</text>
+
+  <rect x="48" y="112" width="160" height="72" class="box source"/>
+  <text x="128" y="139" class="label">PorosityMap</text>
+  <text x="128" y="161" class="small">phi values, cell size</text>
+
+  <rect x="48" y="210" width="160" height="72" class="box source"/>
+  <text x="128" y="237" class="label">PermeabilityMap</text>
+  <text x="128" y="259" class="small">k values, same grid</text>
+
+  <line x1="220" y1="148" x2="320" y2="174" stroke="#234f59" stroke-width="2.6" marker-end="url(#arrow)"/>
+  <line x1="220" y1="246" x2="320" y2="211" stroke="#234f59" stroke-width="2.6" marker-end="url(#arrow)"/>
+
+  <rect x="328" y="135" width="190" height="112" class="box mesh"/>
+  <text x="423" y="165" class="label">Structured map mesh</text>
+  <text x="423" y="189" class="small">quad or hexahedron cells</text>
+  <text x="423" y="211" class="small">cell_data: phi, k, index</text>
+  <text x="423" y="233" class="small">C-order map flattening</text>
+
+  <line x1="532" y1="191" x2="618" y2="117" stroke="#234f59" stroke-width="2.6" marker-end="url(#arrow)"/>
+  <line x1="532" y1="191" x2="618" y2="191" stroke="#234f59" stroke-width="2.6" marker-end="url(#arrow)"/>
+  <line x1="532" y1="191" x2="618" y2="265" stroke="#234f59" stroke-width="2.6" marker-end="url(#arrow)"/>
+
+  <rect x="636" y="80" width="230" height="74" class="box data"/>
+  <text x="751" y="107" class="label">Gmsh .msh</text>
+  <text x="751" y="129" class="small">geometry + floating cell data</text>
+
+  <rect x="636" y="166" width="230" height="74" class="box data"/>
+  <text x="751" y="193" class="label">VTK .vtk / VTU .vtu</text>
+  <text x="751" y="215" class="small">geometry + floating cell data</text>
+
+  <rect x="636" y="252" width="230" height="74" class="box geometry"/>
+  <text x="751" y="279" class="label">Netgen .vol</text>
+  <text x="751" y="301" class="small">geometry + integer cell tag</text>
+
+  <line x1="128" y1="292" x2="128" y2="320" stroke="#b45309" stroke-width="2.4"/>
+  <line x1="128" y1="320" x2="423" y2="320" stroke="#b45309" stroke-width="2.4" marker-end="url(#arrow)"/>
+  <rect x="328" y="285" width="190" height="54" class="box hdf5"/>
+  <text x="423" y="308" class="label">HDF5 maps</text>
+  <text x="423" y="328" class="small">authoritative field files</text>
+</svg>

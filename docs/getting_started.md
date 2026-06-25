@@ -1,7 +1,10 @@
 # Getting Started
 
-This page covers installation, environment setup, and the smallest end-to-end
-workflow that exercises the current single-phase solver.
+This page covers package installation and the smallest end-to-end workflow that
+exercises the pore-network single-phase solver. For the map-based FVM/FEM and
+direct-image LBM backends, see
+[Map-Based Single-Phase Solvers](map_based_singlephase_solvers.md) after the
+basic installation is working.
 
 ---
 
@@ -17,41 +20,6 @@ pip install voids
 
 Package page:
 <https://pypi.org/project/voids/>
-
-### Recommended: Pixi
-
-The repository is configured for [Pixi](https://pixi.sh) and exposes four primary
-environments:
-
-- **`default`**: core runtime + development tools + plotting + PyVista + thermodynamic viscosity backends
-- **`test`**: `default` plus test-only dependencies used in the full verification suite
-- **`lbm`**: `test` plus the optional XLB direct-image benchmark stack
-- **`docs`**: MkDocs, mkdocs-material, and mkdocstrings for building this documentation
-
-```bash
-# Install all environments from the lock file
-pixi install
-
-# Verify the installation
-pixi run -e default python -c "import voids; print(voids.__version__)"
-```
-
-Pixi activation sets the following environment variables used by notebooks:
-
-| Variable | Description |
-|---|---|
-| `VOIDS_PROJECT_ROOT` | Root of the repository |
-| `VOIDS_NOTEBOOKS_PATH` | `notebooks/` directory |
-| `VOIDS_EXAMPLES_PATH` | `examples/` directory |
-| `VOIDS_DATA_PATH` | `examples/data/` directory |
-
-After installation, the fastest sanity check is:
-
-```bash
-pixi run examples-singlephase
-```
-
-That command exercises the packaged demo workflow and prints a compact JSON summary.
 
 ### Editable pip install
 
@@ -80,6 +48,12 @@ python -m pip install -e ".[lbm]"
 # All extras
 python -m pip install -e ".[dev,viz,test,lbm,docs]"
 ```
+
+There is no `fem` PyPI extra at the moment. Plain pip users must install a
+compatible FEniCSx/DOLFINx stack separately before using `voids.fem`.
+
+Repository development, notebook variables, and documentation build commands are
+covered in [Development](development.md).
 
 ---
 
@@ -154,49 +128,3 @@ Two assumptions change in this mode:
 - pressures must be absolute and positive, typically in Pa
 - the nonlinear solve is with respect to the tabulated/interpolated constitutive law,
   not the raw backend callable directly
-
----
-
-## Development Commands
-
-Useful Pixi tasks for development:
-
-| Command | Description |
-|---|---|
-| `pixi run test` | Run the test suite |
-| `pixi run test-cov` | Run tests with coverage report |
-| `pixi run lint` | Run Ruff linter |
-| `pixi run typecheck` | Run MyPy type checker |
-| `pixi run precommit` | Run all pre-commit hooks |
-| `pixi run notebooks-smoke` | List all paired notebooks |
-| `pixi run examples-singlephase` | Run the single-phase workflow entry point |
-| `pixi run docs-build` | Build the documentation in the docs environment |
-| `pixi run docs-serve` | Serve the documentation locally with live reload |
-
----
-
-## Building the Docs Locally
-
-To build and preview this documentation locally:
-
-```bash
-# Build the docs
-pixi run docs-build
-
-# Serve locally with live reload
-pixi run docs-serve
-```
-
-If you prefer, `pixi run -e docs docs-build` and `pixi run -e docs docs-serve`
-also work, but the explicit `-e docs` is redundant because the tasks already enter
-the docs environment.
-
-With the current MkDocs configuration, the local preview is served at
-<http://127.0.0.1:8000/voids/>.
-
-Alternatively, install the docs extra via pip and use `mkdocs` directly:
-
-```bash
-pip install -e ".[docs]"
-mkdocs serve
-```

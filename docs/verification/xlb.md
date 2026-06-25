@@ -276,7 +276,7 @@ All cases in this report use:
   - `steady_rtol = 1.0e-3`
   - `Δp_lu = 3.333e-4`
   - `inlet_outlet_buffer_cells = 6`
-- XLB steady Stokes-limit options:
+- XLB steady Stokes-limit options used for the artifacts in this report:
   - `formulation = "steady_stokes_limit"`
   - `max_steps = 3000`
   - `min_steps = 800`
@@ -284,6 +284,13 @@ All cases in this report use:
   - `steady_rtol = 5.0e-4`
   - `Δp_lu = 6.667e-5`
   - `inlet_outlet_buffer_cells = 6`
+
+!!! note "Current package default"
+    The current package-level `XLBOptions.steady_stokes_defaults()` preset is
+    stricter for direct-image validation runs: 12 inlet/outlet buffer cells,
+    `max_steps=8000`, `min_steps=1200`, and `steady_rtol=1e-4`. The values above
+    are preserved because they describe the already-generated synthetic
+    verification artifacts on this page.
 
 The 15-case verification set spans five porosity levels and three blobiness
 levels per porosity:

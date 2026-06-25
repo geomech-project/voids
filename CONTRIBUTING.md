@@ -1,8 +1,10 @@
 # Contributing
 
-`voids` is a scientific Python project for pore-network modeling. Contributions
-should improve the codebase without weakening reproducibility, numerical clarity, or
-scientific traceability.
+`voids` is a scientific Python package for digital porous media research. The
+main modeling approach is pore-network modeling, complemented by micro-continuum
+finite-volume/finite-element methods and direct-image LBM DNS for single-phase
+studies. Contributions should improve the codebase without weakening
+reproducibility, numerical clarity, or scientific traceability.
 
 This guide is intentionally general. It describes how to contribute effectively
 without repeating project details that are better treated as the source of truth in

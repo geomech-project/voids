@@ -1,5 +1,5 @@
 site_name: voids
-site_description: Scientific Python package for pore network modeling (PNM)
+site_description: Scientific Python package for digital porous media research
 site_url: https://geomech-project.github.io/voids/
 repo_url: https://github.com/geomech-project/voids
 repo_name: geomech-project/voids
@@ -84,10 +84,12 @@ nav:
     - Concepts and Conventions: concepts.md
     - Image Segmentation & Network Extraction: image_segmentation_network_extraction.md
     - Porosity Maps: porosity_maps.md
+    - Map-Based Single-Phase Solvers: map_based_singlephase_solvers.md
     - Local Thickness Morphometry: local_thickness_morphometry.md
     - Synthetic Image Cases: synthetic_cases.md
     - Theoretical Background: background.md
   - Scientific Workflow: workflow.md
+  - Development: development.md
   - Examples:
     - Overview: examples.md
     - Notebook Reports:
@@ -110,15 +112,19 @@ nav:
       - Experimental Validation Overview: validation/index.md
       - DRP-317 Sandstone Validation Overview: validation/drp317.md
       - DRP-317 Parker Notebook Report: validation/drp317_parker.md
+      - DRP-317 Parker Same-ROI Map Solver Validation: validation/drp317_parker_block3_same_roi.md
       - DRP-317 Kirby Notebook Report: validation/drp317_kirby.md
       - DRP-317 Bandera Brown Notebook Report: validation/drp317_bandera_brown.md
       - DRP-317 Berea Sister Gray Notebook Report: validation/drp317_berea_sister_gray.md
       - DRP-317 Berea Upper Gray Notebook Report: validation/drp317_berea_upper_gray.md
       - DRP-317 Berea Notebook Report: validation/drp317_berea.md
+      - DRP-317 Berea Same-ROI Map Solver Validation: validation/drp317_berea_block3_same_roi.md
+      - DRP-317 LBM Default Sensitivity: validation/drp317_lbm_sensitivity.md
       - DRP-317 Castlegate Notebook Report: validation/drp317_castlegate.md
       - DRP-317 Buff Berea Notebook Report: validation/drp317_buff_berea.md
       - DRP-317 Leopard Notebook Report: validation/drp317_leopard.md
       - DRP-317 Bentheimer Notebook Report: validation/drp317_bentheimer.md
+      - DRP-317 Bentheimer Same-ROI Map Solver Validation: validation/drp317_bentheimer_block3_same_roi.md
       - DRP-317 Bandera Gray Notebook Report: validation/drp317_banderagray.md
   - API Reference:
     - Overview: api/index.md
@@ -140,6 +146,14 @@ nav:
       - api/generators.md
     - Image Processing:
       - api/image.md
+    - Finite Volumes:
+      - api/fvm.md
+    - Finite Elements:
+      - api/fem.md
+    - Lattice Boltzmann:
+      - api/lbm.md
+    - Mesh Export:
+      - api/mesh.md
     - Visualization:
       - api/visualization.md
     - Simulators:

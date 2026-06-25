@@ -58,7 +58,7 @@ largest and smallest backend aggregate permeability is about `4.18`x,
 which makes extraction sensitivity a material part of this sample's validation
 result.
 
-This is a reduced-network comparison against a laboratory-scale experimental
+This is a pore-network comparison against a laboratory-scale experimental
 reference. The numbers depend on the selected ROI, segmentation convention,
 boundary labeling, network reduction, and conductance closure; they should not be
 read as a direct voxel-scale flow simulation.

@@ -160,7 +160,7 @@ do not answer the same question.
 | Extraction backend | Reuse saved external extraction | `snow2` or native maximal-ball | `pnextract` |
 | Unknowns | Imported CNM pores plus explicit `pnflow` compatibility on solver-box handling | One pressure unknown per retained pore | `pnflow` network unknowns on `pnextract` output |
 | Conductance closure | `valvatne_blunt` conduit model, matched throat-by-throat to checked-in `pnflow` | `valvatne_blunt` conduit model | `pnflow` internal network model |
-| Main question | Does `voids` reproduce the checked-in `pnflow` single-phase solve on the same reduced network? | How different is the full `voids` image-to-network workflow from the external workflow? | Reference branch |
+| Main question | Does `voids` reproduce the checked-in `pnflow` single-phase solve on the same pore network? | How different is the full `voids` image-to-network workflow from the external workflow? | Reference branch |
 
 Therefore, near machine-precision agreement is expected for the imported-CNM
 branch, while much larger disagreement is expected for the image-re-extraction
@@ -229,7 +229,7 @@ Summary statistics for this five-case set:
   second-side throat ball when computing pore-to-throat lengths
 
 Together, these checks are the key outcome of the investigation: once the same
-reduced network and the checked-in `pnflow` preprocessing are used, the
+pore network and the checked-in `pnflow` preprocessing are used, the
 single-phase `voids` solve agrees with `pnflow` to plotting precision. The
 remaining mismatch is therefore dominated by image-to-network extraction and
 geometric reduction, especially conduit-area, shape-factor, and boundary

@@ -1,15 +1,18 @@
 # Theoretical Background
 
-This page summarizes the current physical and numerical model implemented in `voids`.
-The emphasis is on what the code actually solves today, not on the full space of pore-
-network models described in the literature.
+This page summarizes the physical and numerical models implemented in `voids`.
+The emphasis is on the equations, assumptions, units, and boundary conventions
+that define the package's digital porous media workflows.
 
 The main scientific boundary is simple:
 
-- `voids` is currently a single-phase pore-network code
-- hydraulic conductance can be constant-viscosity or pressure-dependent
+- `voids` is a scientific Python package for digital porous media research
+- pore-network modeling is the main graph-based modeling approach
+- map-based FVM/FEM and direct-image LBM backends provide complementary
+  single-phase upscaling and comparison methods
+- pore-network hydraulic conductance can be constant-viscosity or pressure-dependent
 - conductance can be selected explicitly or through the data-adaptive `auto` model
-- geometry can be circular, size-factor based, shape-aware throat-only, or
+- pore-network geometry can be circular, size-factor based, shape-aware throat-only, or
   shape-aware pore-throat-pore
 - thermodynamic viscosity is available through tabulated `thermo` and `CoolProp` backends
 
@@ -557,6 +560,19 @@ an empirical numerical option rather than as a universal guarantee.
 
 ## Darcy-Scale Permeability
 
+Map-based continuum upscaling in `voids.fvm` and `voids.fem` uses the same
+Darcy reporting convention below, but the field solve is no longer a pore-network
+pressure solve. The TPFA backend solves a cell-centered finite-volume Darcy problem
+on a scalar permeability map. The FEM backends solve mixed Darcy-Darcy or
+Darcy-Brinkman forms on porosity/permeability maps, with the local drag coefficient
+\(\gamma = \mu / K\) and, for Brinkman models, an effective viscous coefficient
+\(\mu / \phi\). These models are useful for direct map upscaling and
+micro-continuum comparisons, but their quantitative validity still depends on the
+map closure for \(K\), the porosity field, mesh resolution, pressure boundary
+conditions, and representative-volume assumptions.
+For the full TPFA, FEM, USFEM, and LBM formulations used by the package, see
+[Map-Based Single-Phase Solvers](map_based_singlephase_solvers.md).
+
 After solving the pore pressures, `voids` computes throat fluxes and sums the net
 inlet flow rate \(Q\). The reported apparent permeability is then obtained from
 Darcy's law:
@@ -658,5 +674,25 @@ to be tightened before the resulting permeability should be interpreted quantita
 - Khan, Z. A., and J. T. Gostick (2024). Enhancing pore network extraction
   performance via seed-based pore region growing segmentation. *Advances in Water
   Resources*, 183, 104591. <https://doi.org/10.1016/j.advwatres.2023.104591>
+- Brinkman, H. C. (1947/1949). A calculation of the viscous force exerted by a
+  flowing fluid on a dense swarm of particles. *Applied Scientific Research*,
+  1, 27-34. <https://doi.org/10.1007/BF02120313>
+- Soulaine, C., and Tchelepi, H. A. (2016). Micro-continuum approach for pore-scale
+  simulation of subsurface processes. *Transport in Porous Media*, 113(3).
+  <https://doi.org/10.1007/s11242-016-0701-3>
+- Soulaine, C., Gjetvaj, F., Garing, C., et al. (2016). The impact of
+  sub-resolution porosity of X-ray microtomography images on the permeability.
+  *Transport in Porous Media*, 113(1). <https://doi.org/10.1007/s11242-016-0690-2>
+- Franca, L. P., and Valentin, F. (2000). On an improved unusual stabilized
+  finite element method for the advective-reactive-diffusive equation.
+  *Computer Methods in Applied Mechanics and Engineering*, 190(13-14),
+  1785-1800. <https://doi.org/10.1016/S0045-7825(00)00190-0>
+- Barrenechea, G. R., and Valentin, F. (2002). An unusual stabilized finite
+  element method for a generalized Stokes problem. *Numerische Mathematik*,
+  92, 653-677. <https://doi.org/10.1007/s002110100371>
+- Pacazuca, J. F., Valentin, F., and Volpatto, D. (2026). A Locally Conservative
+  Low-Order Stabilized Mixed Finite Element Method for the Brinkman Problem in
+  Highly Heterogeneous Porous Media. InterPore 2026 poster.
+  <https://doi.org/10.13140/RG.2.2.23699.23840>
 - `thermo` project documentation: <https://thermo.readthedocs.io/>
 - CoolProp documentation: <https://coolprop.org/>

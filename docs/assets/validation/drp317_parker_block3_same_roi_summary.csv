@@ -1,0 +1,12 @@
+quantity,value,units
+sample,DRP-317 Parker,-
+RAW path,/Users/dtvolpatto/Work/voids/examples/data/drp-317/Parker_2d25um_binary.raw,-
+phase convention,"0=void/pore, 1=solid",-
+ROI origin,"(694, 925, 925)",voxels
+ROI shape,"(75, 75, 75)",voxels
+voxel size,2.25e-06,m
+ROI porosity,13.577007407407407,%
+full-image porosity if void==0,13.6520926,%
+experimental porosity,14.77,%
+experimental Kabs,10.0,mD
+map block shape,"(3, 3, 3)",voxels

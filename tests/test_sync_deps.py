@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+import tomllib
 
 
 def _load_sync_deps_module():
@@ -18,27 +19,113 @@ def _load_sync_deps_module():
     return module
 
 
-def test_sync_requirement_list_updates_versions_and_preserves_unknowns() -> None:
+def test_pep508_specifier_from_pixi_specifier_handles_pixi_forms() -> None:
     module = _load_sync_deps_module()
 
-    requirements = [
-        "numpy>=1.20",
-        "mkdocstrings[python]>=0.20",
-        "unknownpkg>=0.1",
-    ]
-    pixi_specs = {
-        module._canonicalize_name("numpy"): ">=1.26,<2.2",
-        module._canonicalize_name("mkdocstrings"): ">=0.25",
+    assert module._pep508_specifier_from_pixi_specifier("*") == ""
+    assert module._pep508_specifier_from_pixi_specifier("9.*") == "==9.*"
+    assert module._pep508_specifier_from_pixi_specifier(">=1.26,<2.2") == ">=1.26,<2.2"
+
+
+def test_project_targets_are_generated_from_pixi_tables() -> None:
+    module = _load_sync_deps_module()
+
+    pixi_data = {
+        "dependencies": {
+            "python": ">=3.11,<3.13",
+            "numpy": ">=1.26,<2.2",
+        },
+        "pypi-dependencies": {
+            "voids": {"path": ".", "editable": True},
+            "pyamg": ">=5.3",
+        },
+        "target": {
+            "linux-64": {
+                "pypi-dependencies": {"pypardiso": ">=0.4"},
+            },
+        },
     }
 
-    synced, missing = module._sync_requirement_list(requirements, pixi_specs=pixi_specs)
+    targets, empty_features = module._sync_targets_from_pixi(pixi_data)
 
-    assert synced == [
-        "numpy>=1.26,<2.2",
-        "mkdocstrings[python]>=0.25",
-        "unknownpkg>=0.1",
+    assert empty_features == []
+    assert targets == [
+        module.SyncTarget(
+            section="project",
+            key="dependencies",
+            requirements=(
+                "numpy>=1.26,<2.2",
+                "pyamg>=5.3",
+                "pypardiso>=0.4; sys_platform == 'linux'",
+            ),
+        )
     ]
-    assert missing == ["unknownpkg"]
+
+
+def test_feature_targets_are_generated_from_pixi_features_with_policy_exceptions() -> None:
+    module = _load_sync_deps_module()
+
+    pixi_data = {
+        "feature": {
+            "viz": {
+                "dependencies": {
+                    "vtk": "9.*",
+                    "matplotlib-base": "*",
+                },
+            },
+            "docs": {
+                "pypi-dependencies": {
+                    "mkdocstrings": {"version": ">=0.25", "extras": ["python"]},
+                },
+            },
+            "fem": {
+                "dependencies": {
+                    "fenics-dolfinx": ">=0.9,<0.11",
+                },
+            },
+        }
+    }
+
+    targets, empty_features = module._sync_targets_from_pixi(pixi_data)
+
+    rendered = {(target.section, target.key): target.requirements for target in targets}
+    assert rendered[("project.optional-dependencies", "viz")] == (
+        "vtk==9.*",
+        "matplotlib>=3.8",
+    )
+    assert rendered[("project.optional-dependencies", "docs")] == ("mkdocstrings[python]>=0.25",)
+    assert ("project.optional-dependencies", "fem") not in rendered
+    assert empty_features == ["fem"]
+
+
+def test_sync_pyproject_text_removes_empty_conda_only_feature_extras() -> None:
+    module = _load_sync_deps_module()
+    repo_root = Path(__file__).resolve().parents[1]
+
+    pixi_data = module._read_toml(repo_root / "pixi.toml")
+    synced = module._sync_pyproject_text(
+        pixi_data,
+        (repo_root / "pyproject.toml").read_text(encoding="utf-8"),
+    )
+    pyproject_data = tomllib.loads(synced)
+
+    optional_dependencies = pyproject_data["project"]["optional-dependencies"]
+    assert set(optional_dependencies) >= {
+        "dev",
+        "notebooks",
+        "viz",
+        "test",
+        "lbm",
+        "docs",
+        "thermo",
+    }
+    assert "fem" not in optional_dependencies
+    all_optional_requirements = [
+        requirement
+        for requirements in optional_dependencies.values()
+        for requirement in requirements
+    ]
+    assert not any("fenics-dolfinx" in requirement for requirement in all_optional_requirements)
 
 
 def test_replace_toml_array_section_key_handles_brackets_inside_strings() -> None:
