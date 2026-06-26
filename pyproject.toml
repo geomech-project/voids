@@ -100,6 +100,13 @@ Issues = "https://github.com/geomech-project/voids/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/voids"]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "examples/data",
+  "notebooks",
+  "docs",
+]
+
 [tool.setuptools]
 # map the “root” of all your packages to src/
 package-dir = { "" = "src" }
