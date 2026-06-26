@@ -102,9 +102,9 @@ packages = ["src/voids"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
-  "examples/data",
-  "notebooks",
-  "docs",
+  "examples/data/**",
+  "notebooks/**",
+  "docs/**",
 ]
 
 [tool.setuptools]
