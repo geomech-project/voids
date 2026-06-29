@@ -31,7 +31,7 @@ pip install "voids[solvers]"
 FEM still requires a compatible DOLFINx/FEniCSx installation. On native Windows,
 the conda-forge DOLFINx stack used by `voids` does not provide the PETSc-backed
 `dolfinx.fem.petsc` path, so FEM `linear_backend="auto"` falls back to the
-serial SciPy sparse direct backend when PETSc is unavailable.
+serial SciPy/SuperLU sparse direct backend when PETSc is unavailable.
 
 ## PNM And TPFA Backends
 
@@ -85,10 +85,12 @@ the linear solve path:
 
 | `linear_backend` | Linear algebra path | Platform role | Main caveat |
 |---|---|---|---|
-| `"auto"` | PETSc when available; SciPy direct fallback on native Windows when PETSc is missing | recommended default for portable scripts | resolved backend can differ by platform |
+| `"auto"` | PETSc when available; SciPy/SuperLU fallback on native Windows when PETSc is missing | recommended default for portable scripts | resolved backend can differ by platform |
 | `"petsc"` | DOLFINx PETSc `LinearProblem` with PETSc options from `FEniCSSolverOptions` | production Linux/macOS path; supports PETSc/MPI workflows | unavailable in native Windows conda-forge DOLFINx stack used by `voids` |
-| `"scipy"` | DOLFINx assembly converted to SciPy sparse format and solved with `spsolve` | serial direct fallback and comparison backend | serial-only |
-| `"umfpack"` | DOLFINx assembly converted to SciPy sparse format and solved with `scikits.umfpack.spsolve` | explicit serial SuiteSparse/UMFPACK path | requires `scikit-umfpack`; serial-only |
+| `"superlu"` | DOLFINx assembly converted to SciPy CSC format and solved with SciPy's SuperLU wrapper | preferred explicit serial SuperLU backend | serial-only |
+| `"scipy"` | Backward-compatible alias for the SciPy/SuperLU path | serial direct fallback and comparison backend | serial-only |
+| `"umfpack"` | DOLFINx assembly converted to SciPy CSC format and solved with the 64-bit-index `scikits.umfpack.UmfpackContext("dl")` path | explicit serial SuiteSparse/UMFPACK path | requires `scikit-umfpack`; serial-only and can be much slower than PARDISO on large mixed FEM systems |
+| `"pardiso"` | DOLFINx assembly converted to SciPy CSR format and solved with `pypardiso.spsolve` | Linux MKL/PARDISO direct path | Linux-only optional dependency; serial-only |
 
 Default portable behavior:
 
@@ -99,13 +101,14 @@ result = upscale_permeability_fem(problem, options=FEniCSSolverOptions())
 print(result.results["x"].metadata["linear_backend"])
 ```
 
-Force PETSc, SciPy, or UMFPACK:
+Force PETSc, SuperLU, SciPy/SuperLU alias, or UMFPACK:
 
 ```python
 from voids.fem.singlephase import FEniCSSolverOptions
 
 petsc_options = FEniCSSolverOptions.direct_lu("mumps")
-scipy_options = FEniCSSolverOptions.scipy_direct()
+superlu_options = FEniCSSolverOptions.superlu_direct()
+scipy_alias_options = FEniCSSolverOptions.scipy_direct()
 umfpack_options = FEniCSSolverOptions.umfpack_direct()
 ```
 
@@ -186,14 +189,20 @@ backend.
 
 - Use `"direct"` for the most portable PNM/TPFA baseline.
 - Use `"umfpack"` when you want to request SuiteSparse/UMFPACK explicitly,
-  especially for Windows-compatible direct-solver studies.
+  especially for Windows-compatible direct-solver studies. FEM UMFPACK solves
+  force the 64-bit-index family to avoid misleading 32-bit UMFPACK workspace
+  failures on larger mixed systems. For USFEM-style mixed Brinkman systems,
+  start tuning with `FEniCSSolverOptions.umfpack_direct(strategy="unsymmetric")`;
+  lowering `pivot_tolerance` can be faster but should be accepted only after
+  comparison against a direct reference on the same coefficient map.
 - Use `"pardiso"` only when the Linux MKL/PARDISO stack is available and has
   been checked against the same system.
 - Use Krylov methods with PyAMG when direct factorizations become too expensive,
   but record convergence tolerances and residuals.
 - Use FEM `"petsc"` for PETSc/MPI or heavily configured production runs.
-- Use FEM `"scipy"` or `"umfpack"` for serial Windows-compatible FEM solves when
-  DOLFINx core is available but PETSc is not.
+- Use FEM `"superlu"` or `"umfpack"` for serial Windows-compatible FEM solves
+  when DOLFINx core is available but PETSc is not. The older FEM `"scipy"`
+  name remains accepted as an alias for the SuperLU path.
 
 ## Scientific Caveats
 
