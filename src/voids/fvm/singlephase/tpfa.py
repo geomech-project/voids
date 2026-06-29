@@ -125,6 +125,97 @@ def _cross_section_area(
     return float(np.prod([shape[i] * cell_size[i] for i in range(len(shape)) if i != axis_index]))
 
 
+def _assemble_tpfa_system(
+    values: np.ndarray,
+    *,
+    cell_size: tuple[float, ...],
+    flow_axis_index: int,
+    viscosity: float,
+    pressure_inlet: float,
+    pressure_outlet: float,
+) -> tuple[sparse.csr_matrix, np.ndarray]:
+    """Assemble the TPFA pressure matrix using vectorized face operations."""
+
+    shape = values.shape
+    ndim = values.ndim
+    n_cells = int(values.size)
+    flat_ids = np.arange(n_cells, dtype=np.int64).reshape(shape, order="C")
+    diagonal = np.zeros(n_cells, dtype=float)
+    rhs = np.zeros(n_cells, dtype=float)
+
+    boundary_factor = _face_area(cell_size, flow_axis_index) / (
+        viscosity * (cell_size[flow_axis_index] / 2.0)
+    )
+    inlet_selector: list[slice | int] = [slice(None)] * ndim
+    outlet_selector: list[slice | int] = [slice(None)] * ndim
+    inlet_selector[flow_axis_index] = 0
+    outlet_selector[flow_axis_index] = shape[flow_axis_index] - 1
+    inlet = tuple(inlet_selector)
+    outlet = tuple(outlet_selector)
+
+    inlet_ids = flat_ids[inlet].ravel(order="C")
+    inlet_transmissibility = (
+        np.asarray(values[inlet], dtype=float).ravel(order="C") * boundary_factor
+    )
+    inlet_active = inlet_transmissibility > 0.0
+    diagonal[inlet_ids[inlet_active]] += inlet_transmissibility[inlet_active]
+    rhs[inlet_ids[inlet_active]] += inlet_transmissibility[inlet_active] * float(pressure_inlet)
+
+    outlet_ids = flat_ids[outlet].ravel(order="C")
+    outlet_transmissibility = (
+        np.asarray(values[outlet], dtype=float).ravel(order="C") * boundary_factor
+    )
+    outlet_active = outlet_transmissibility > 0.0
+    diagonal[outlet_ids[outlet_active]] += outlet_transmissibility[outlet_active]
+    rhs[outlet_ids[outlet_active]] += outlet_transmissibility[outlet_active] * float(
+        pressure_outlet
+    )
+
+    row_blocks: list[np.ndarray] = []
+    col_blocks: list[np.ndarray] = []
+    data_blocks: list[np.ndarray] = []
+
+    for direction in range(ndim):
+        left_selector = [slice(None)] * ndim
+        right_selector = [slice(None)] * ndim
+        left_selector[direction] = slice(0, -1)
+        right_selector[direction] = slice(1, None)
+        left = tuple(left_selector)
+        right = tuple(right_selector)
+
+        left_values = np.asarray(values[left], dtype=float)
+        right_values = np.asarray(values[right], dtype=float)
+        active = (left_values > 0.0) & (right_values > 0.0)
+        if not np.any(active):
+            continue
+
+        left_active = left_values[active]
+        right_active = right_values[active]
+        face_permeability = 2.0 * left_active * right_active / (left_active + right_active)
+        transmissibility = (
+            face_permeability
+            * _face_area(cell_size, direction)
+            / (viscosity * cell_size[direction])
+        )
+
+        left_ids = flat_ids[left][active]
+        right_ids = flat_ids[right][active]
+        np.add.at(diagonal, left_ids, transmissibility)
+        np.add.at(diagonal, right_ids, transmissibility)
+        row_blocks.extend((left_ids, right_ids))
+        col_blocks.extend((right_ids, left_ids))
+        data_blocks.extend((-transmissibility, -transmissibility))
+
+    row_blocks.append(np.arange(n_cells, dtype=np.int64))
+    col_blocks.append(np.arange(n_cells, dtype=np.int64))
+    data_blocks.append(diagonal)
+    rows = np.concatenate(row_blocks)
+    cols = np.concatenate(col_blocks)
+    data = np.concatenate(data_blocks)
+    matrix = sparse.coo_matrix((data, (rows, cols)), shape=(n_cells, n_cells)).tocsr()
+    return matrix, rhs
+
+
 def solve_tpfa(
     permeability: PermeabilityMap | np.ndarray,
     *,
@@ -181,50 +272,14 @@ def solve_tpfa(
     shape = values.shape
     ndim = values.ndim
     axis = _axis_index(flow_axis, ndim)
-    n_cells = int(values.size)
-    rows: list[int] = []
-    cols: list[int] = []
-    data: list[float] = []
-    rhs = np.zeros(n_cells, dtype=float)
-    diagonal = np.zeros(n_cells, dtype=float)
-
-    def flat(index: tuple[int, ...]) -> int:
-        return int(np.ravel_multi_index(index, shape, order="C"))
-
-    for index in np.ndindex(shape):
-        row = flat(index)
-        k_cell = float(values[index])
-
-        if index[axis] == 0 and k_cell > 0.0:
-            transmissibility = k_cell * _face_area(size, axis) / (viscosity * (size[axis] / 2.0))
-            diagonal[row] += transmissibility
-            rhs[row] += transmissibility * float(pressure_inlet)
-        if index[axis] == shape[axis] - 1 and k_cell > 0.0:
-            transmissibility = k_cell * _face_area(size, axis) / (viscosity * (size[axis] / 2.0))
-            diagonal[row] += transmissibility
-            rhs[row] += transmissibility * float(pressure_outlet)
-
-        for direction in range(ndim):
-            neighbor_index = list(index)
-            neighbor_index[direction] += 1
-            if neighbor_index[direction] >= shape[direction]:
-                continue
-            neighbor = tuple(neighbor_index)
-            neighbor_row = flat(neighbor)
-            k_face = _harmonic_face_permeability(k_cell, float(values[neighbor]))
-            if k_face <= 0.0:
-                continue
-            transmissibility = k_face * _face_area(size, direction) / (viscosity * size[direction])
-            diagonal[row] += transmissibility
-            diagonal[neighbor_row] += transmissibility
-            rows.extend((row, neighbor_row))
-            cols.extend((neighbor_row, row))
-            data.extend((-transmissibility, -transmissibility))
-
-    rows.extend(range(n_cells))
-    cols.extend(range(n_cells))
-    data.extend(diagonal.tolist())
-    matrix = sparse.csr_matrix((data, (rows, cols)), shape=(n_cells, n_cells))
+    matrix, rhs = _assemble_tpfa_system(
+        values,
+        cell_size=size,
+        flow_axis_index=axis,
+        viscosity=float(viscosity),
+        pressure_inlet=float(pressure_inlet),
+        pressure_outlet=float(pressure_outlet),
+    )
 
     start = perf_counter()
     with warnings.catch_warnings():
@@ -264,28 +319,19 @@ def solve_tpfa(
     residual_relative = residual_norm / max(rhs_norm, 1.0e-300)
     pressure = pressure_vector.reshape(shape, order="C")
 
-    inlet_flow = 0.0
-    outlet_flow = 0.0
     inlet_selector: list[slice | int] = [slice(None)] * ndim
     outlet_selector: list[slice | int] = [slice(None)] * ndim
     inlet_selector[axis] = 0
     outlet_selector[axis] = shape[axis] - 1
-    for index in np.ndindex(values[tuple(inlet_selector)].shape):
-        full_index = list(index)
-        full_index.insert(axis, 0)
-        idx = tuple(full_index)
-        k_cell = float(values[idx])
-        if k_cell > 0.0:
-            transmissibility = k_cell * _face_area(size, axis) / (viscosity * (size[axis] / 2.0))
-            inlet_flow += transmissibility * (float(pressure_inlet) - float(pressure[idx]))
-    for index in np.ndindex(values[tuple(outlet_selector)].shape):
-        full_index = list(index)
-        full_index.insert(axis, shape[axis] - 1)
-        idx = tuple(full_index)
-        k_cell = float(values[idx])
-        if k_cell > 0.0:
-            transmissibility = k_cell * _face_area(size, axis) / (viscosity * (size[axis] / 2.0))
-            outlet_flow += transmissibility * (float(pressure[idx]) - float(pressure_outlet))
+    boundary_factor = _face_area(size, axis) / (viscosity * (size[axis] / 2.0))
+    inlet = tuple(inlet_selector)
+    outlet = tuple(outlet_selector)
+    inlet_transmissibility = values[inlet] * boundary_factor
+    outlet_transmissibility = values[outlet] * boundary_factor
+    inlet_flow = float(np.sum(inlet_transmissibility * (float(pressure_inlet) - pressure[inlet])))
+    outlet_flow = float(
+        np.sum(outlet_transmissibility * (pressure[outlet] - float(pressure_outlet)))
+    )
 
     pressure_drop = float(pressure_inlet) - float(pressure_outlet)
     length = _domain_length(shape, size, axis)

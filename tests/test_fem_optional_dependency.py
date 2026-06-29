@@ -48,7 +48,7 @@ def test_fem_backend_reports_native_windows_limitation(
 
     message = str(exc_info.value)
     assert "PETSc FEM linear backend requires" in message
-    assert "linear_backend='auto' falls back to the SciPy direct backend" in message
+    assert "linear_backend='auto' falls back to the SciPy/SuperLU direct backend" in message
 
 
 def test_fem_auto_linear_backend_uses_scipy_when_windows_lacks_petsc(
@@ -74,11 +74,313 @@ def test_fem_linear_backend_rejects_unknown_name() -> None:
         _common._resolve_linear_backend("not-a-backend", SimpleNamespace())  # type: ignore[arg-type]
 
 
-def test_scipy_fem_backend_rejects_distributed_mesh() -> None:
+def test_fem_thread_environment_metadata_reports_solver_relevant_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OMP_NUM_THREADS", "4")
+    monkeypatch.delenv("MKL_NUM_THREADS", raising=False)
+
+    metadata = _common._thread_environment_metadata()
+
+    assert metadata["OMP_NUM_THREADS"] == "4"
+    assert "MKL_NUM_THREADS" in metadata
+
+
+def test_petsc_solver_diagnostics_extracts_available_ksp_metadata() -> None:
+    solver = SimpleNamespace(
+        getType=lambda: "fgmres",
+        getConvergedReason=lambda: 2,
+        getIterationNumber=lambda: 17,
+        getResidualNorm=lambda: 1.0e-9,
+    )
+    problem = SimpleNamespace(solver=solver)
+
+    assert _common._petsc_solver_diagnostics(problem) == {
+        "petsc_ksp_type": "fgmres",
+        "petsc_converged_reason": 2,
+        "petsc_iteration_number": 17,
+        "petsc_residual_norm": 1.0e-9,
+    }
+
+
+def test_petsc_solver_diagnostics_tolerates_missing_solver() -> None:
+    assert _common._petsc_solver_diagnostics(SimpleNamespace()) == {}
+
+
+def test_petsc_solver_diagnostics_skips_missing_ksp_methods() -> None:
+    problem = SimpleNamespace(solver=SimpleNamespace(getType=lambda: "preonly"))
+
+    assert _common._petsc_solver_diagnostics(problem) == {"petsc_ksp_type": "preonly"}
+
+
+def test_petsc_solve_raises_when_returned_ksp_diverged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeLinearProblem:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.solver = SimpleNamespace(
+                getType=lambda: "fgmres",
+                getConvergedReason=lambda: -3,
+                getIterationNumber=lambda: 300,
+                getResidualNorm=lambda: 1.0e-5,
+            )
+
+        def solve(self) -> object:
+            return object()
+
+    fake_api = SimpleNamespace(petsc=SimpleNamespace(LinearProblem=FakeLinearProblem))
+    monkeypatch.setattr(_common, "_require_dolfinx_petsc", lambda _api: fake_api)
+    context = SimpleNamespace(api=SimpleNamespace())
+    options = _common.FEniCSSolverOptions(
+        linear_backend="petsc",
+        petsc_options={
+            "ksp_type": "fgmres",
+            "ksp_error_if_not_converged": True,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="PETSc linear solve did not converge"):
+        _common._solve_mixed_problem(
+            context,
+            form=None,
+            rhs=None,
+            bcs=[],
+            options=options,
+            prefix_suffix="probe",
+        )
+
+
+def test_petsc_block_solve_normalizes_tuple_solution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeLinearProblem:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.solver = SimpleNamespace(
+                getConvergedReason=lambda: 4,
+                getIterationNumber=lambda: 1,
+                getResidualNorm=lambda: 0.0,
+            )
+
+        def solve(self) -> tuple[str, str]:
+            return ("u", "p")
+
+    fake_api = SimpleNamespace(petsc=SimpleNamespace(LinearProblem=FakeLinearProblem))
+    monkeypatch.setattr(_common, "_require_dolfinx_petsc", lambda _api: fake_api)
+    context = SimpleNamespace(api=SimpleNamespace())
+
+    solution, _, metadata = _common._solve_block_problem_petsc(
+        context,
+        forms=[[None, None], [None, None]],
+        rhs=[None, None],
+        bcs=[],
+        solution_functions=[],
+        options=_common.FEniCSSolverOptions(linear_backend="petsc"),
+        prefix_suffix="probe",
+        matrix_kind="mpi",
+    )
+
+    assert solution == ["u", "p"]
+    assert metadata["petsc_matrix_kind"] == "mpi"
+
+
+def test_petsc_block_solve_wraps_single_solution_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = object()
+
+    class FakeLinearProblem:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.solver = SimpleNamespace(getConvergedReason=lambda: 4)
+
+        def solve(self) -> object:
+            return sentinel
+
+    fake_api = SimpleNamespace(petsc=SimpleNamespace(LinearProblem=FakeLinearProblem))
+    monkeypatch.setattr(_common, "_require_dolfinx_petsc", lambda _api: fake_api)
+    context = SimpleNamespace(api=SimpleNamespace())
+
+    solution, _, _ = _common._solve_block_problem_petsc(
+        context,
+        forms=[[None]],
+        rhs=[None],
+        bcs=[],
+        solution_functions=[],
+        options=_common.FEniCSSolverOptions(linear_backend="petsc"),
+        prefix_suffix="probe",
+        matrix_kind="mpi",
+    )
+
+    assert solution == [sentinel]
+
+
+def test_petsc_block_solve_raises_when_returned_ksp_diverged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeOptions(dict):
+        def prefixPush(self, _prefix: str) -> None:  # noqa: N802
+            return None
+
+        def prefixPop(self) -> None:  # noqa: N802
+            return None
+
+    class FakeLinearProblem:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.solver = SimpleNamespace(
+                getOptionsPrefix=lambda: "fake_",
+                setFromOptions=lambda: None,
+                getConvergedReason=lambda: -3,
+                getIterationNumber=lambda: 10,
+                getResidualNorm=lambda: 1.0e-5,
+            )
+
+        def solve(self) -> list[object]:
+            return [object(), object()]
+
+    fake_api = SimpleNamespace(
+        petsc=SimpleNamespace(
+            LinearProblem=FakeLinearProblem,
+            PETSc=SimpleNamespace(Options=FakeOptions),
+        )
+    )
+    monkeypatch.setattr(_common, "_require_dolfinx_petsc", lambda _api: fake_api)
+    context = SimpleNamespace(api=SimpleNamespace())
+    options = _common.FEniCSSolverOptions(
+        linear_backend="petsc",
+        petsc_options={
+            "ksp_type": "fgmres",
+            "ksp_error_if_not_converged": True,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="PETSc linear solve did not converge"):
+        _common._solve_block_problem_petsc(
+            context,
+            forms=[[None, None], [None, None]],
+            rhs=[None, None],
+            bcs=[],
+            solution_functions=[],
+            options=options,
+            prefix_suffix="probe",
+            matrix_kind="nest",
+        )
+
+
+def test_petsc_block_solve_defers_nested_options_until_after_fields_are_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[str, Any]] = []
+
+    class FakeOptions(dict):
+        def prefixPush(self, prefix: str) -> None:  # noqa: N802
+            events.append(("prefixPush", prefix))
+
+        def __setitem__(self, key: str, value: Any) -> None:
+            events.append(("set", key, value))
+            super().__setitem__(key, value)
+
+        def __delitem__(self, key: str) -> None:
+            events.append(("del", key))
+            super().__delitem__(key)
+
+        def prefixPop(self) -> None:  # noqa: N802
+            events.append(("prefixPop", None))
+
+    class FakeLinearProblem:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            events.append(("init_petsc_options", kwargs.get("petsc_options")))
+            pc = SimpleNamespace(
+                setFieldSplitIS=lambda *fields: events.append(("setFieldSplitIS", fields))
+            )
+            self.solver = SimpleNamespace(
+                getOptionsPrefix=lambda: "voids_block_",
+                setFromOptions=lambda: events.append(("setFromOptions", None)),
+                getConvergedReason=lambda: 4,
+                getPC=lambda: pc,
+            )
+            self.A = SimpleNamespace(getNestISs=lambda: (("u_is", "p_is"), None))
+            self.u = [SimpleNamespace(name="u"), SimpleNamespace(name="p")]
+
+        def solve(self) -> list[str]:
+            return ["u", "p"]
+
+    fake_api = SimpleNamespace(
+        petsc=SimpleNamespace(
+            LinearProblem=FakeLinearProblem,
+            PETSc=SimpleNamespace(Options=FakeOptions),
+        )
+    )
+    monkeypatch.setattr(_common, "_require_dolfinx_petsc", lambda _api: fake_api)
+    context = SimpleNamespace(api=SimpleNamespace())
+
+    _, _, metadata = _common._solve_block_problem_petsc(
+        context,
+        forms=[[None, None], [None, None]],
+        rhs=[None, None],
+        bcs=[],
+        solution_functions=[],
+        options=_common.FEniCSSolverOptions(
+            linear_backend="petsc",
+            petsc_options={"pc_type": "fieldsplit", "fieldsplit_velocity_pc_type": "lu"},
+        ),
+        prefix_suffix="probe",
+        matrix_kind="nest",
+    )
+
+    assert ("init_petsc_options", None) in events
+    assert events.index(("init_petsc_options", None)) < events.index(("setFromOptions", None))
+    assert ("prefixPush", "voids_block_") in events
+    assert ("set", "pc_type", "fieldsplit") in events
+    assert ("set", "fieldsplit_velocity_pc_type", "lu") in events
+    assert ("setFieldSplitIS", (("u_0", "u_is"), ("p_1", "p_is"))) in events
+    assert events.count(("setFromOptions", None)) == 2
+    assert ("del", "pc_type") in events
+    assert events[-1] == ("prefixPop", None)
+    assert metadata["petsc_options_applied_after_block_setup"] is True
+    assert metadata["petsc_nest_fieldsplit_is_reapplied"] is True
+
+
+def test_standalone_pressure_gauge_requires_petsc() -> None:
+    context = SimpleNamespace(api=SimpleNamespace(petsc=None))
+
+    with pytest.raises(ImportError, match="standalone pressure gauge"):
+        _common._standalone_pressure_gauge_bc(context, pressure_space=None)
+
+
+def test_standalone_pressure_gauge_falls_back_to_first_dof_when_origin_not_found() -> None:
+    captured: dict[str, Any] = {}
+    comm = SimpleNamespace(allreduce=lambda value, op=None: value)
+    context = SimpleNamespace(
+        mesh=SimpleNamespace(
+            geometry=SimpleNamespace(x=np.array([[0.0, 0.0], [1.0, 1.0]]), dim=2),
+            comm=comm,
+        ),
+        api=SimpleNamespace(
+            MPI=SimpleNamespace(MIN="min", MAX="max"),
+            fem=SimpleNamespace(
+                locate_dofs_geometrical=lambda _space, _marker: np.array([], dtype=np.int32),
+                dirichletbc=lambda value, dofs, space: (
+                    captured.update(
+                        value=value,
+                        dofs=dofs,
+                        space=space,
+                    )
+                    or "bc"
+                ),
+            ),
+            petsc=SimpleNamespace(PETSc=SimpleNamespace(ScalarType=float)),
+        ),
+    )
+
+    assert _common._standalone_pressure_gauge_bc(context, pressure_space="Q") == "bc"
+    assert np.array_equal(captured["dofs"], np.array([0], dtype=np.int32))
+    assert captured["space"] == "Q"
+
+
+def test_serial_direct_fem_backend_rejects_distributed_mesh() -> None:
     context = SimpleNamespace(mesh=SimpleNamespace(comm=SimpleNamespace(size=2)))
 
     with pytest.raises(NotImplementedError, match="serial-only"):
-        _common._solve_mixed_problem_scipy(
+        _common._solve_mixed_problem_serial_direct(
             context,
             mixed_space=None,
             form=None,
@@ -127,12 +429,33 @@ def test_fem_dirichlet_bc_values_fall_back_for_older_dolfinx() -> None:
 def test_umfpack_fem_backend_dispatches_optional_solver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    class FakeSparseMatrix:
+        nnz = 1
+
+        def __init__(self) -> None:
+            self.data = np.array([1.0])
+            self.indices = np.array([0], dtype=np.int32)
+            self.indptr = np.array([0, 1], dtype=np.int32)
+
+        def tocsc(self) -> FakeSparseMatrix:
+            return self
+
+        def tocsr(self) -> FakeSparseMatrix:
+            return self
+
+        def copy(self) -> FakeSparseMatrix:
+            copied = FakeSparseMatrix()
+            copied.data = self.data.copy()
+            copied.indices = self.indices.copy()
+            copied.indptr = self.indptr.copy()
+            return copied
+
     class FakeMatrix:
         def scatter_reverse(self) -> None:
             return None
 
         def to_scipy(self) -> Any:
-            return SimpleNamespace(copy=lambda: "matrix")
+            return FakeSparseMatrix()
 
     vector = SimpleNamespace(
         array=np.array([1.0]),
@@ -157,18 +480,123 @@ def test_umfpack_fem_backend_dispatches_optional_solver(
         mesh=SimpleNamespace(comm=SimpleNamespace(size=1)),
         api=SimpleNamespace(fem=fem, la=la),
     )
-    fake_umfpack = SimpleNamespace(spsolve=lambda _matrix, _rhs: np.array([2.0]))
+    calls: dict[str, Any] = {}
+
+    class FakeUmfpackContext:
+        def __init__(self, family: str) -> None:
+            calls["family"] = family
+            self.control = np.zeros(20)
+
+        def numeric(self, matrix: Any) -> None:
+            calls["numeric_indices_dtype"] = str(matrix.indices.dtype)
+            calls["numeric_indptr_dtype"] = str(matrix.indptr.dtype)
+            calls["ordering_control"] = self.control[10]
+            calls["pivot_tolerance_control"] = self.control[3]
+
+        def solve(
+            self,
+            system: Any,
+            matrix: Any,
+            rhs: Any,
+            *,
+            autoTranspose: bool,
+        ) -> np.ndarray:
+            calls["system"] = system
+            calls["solve_indices_dtype"] = str(matrix.indices.dtype)
+            calls["solve_indptr_dtype"] = str(matrix.indptr.dtype)
+            calls["autoTranspose"] = autoTranspose
+            return np.array([2.0])
+
+    fake_umfpack = SimpleNamespace(
+        UMFPACK_A="A",
+        UMFPACK_ORDERING=10,
+        UMFPACK_ORDERING_METIS_GUARD=7,
+        UMFPACK_PIVOT_TOLERANCE=3,
+        UmfpackContext=FakeUmfpackContext,
+    )
 
     monkeypatch.setattr(_common, "import_module", lambda _name: fake_umfpack)
 
     with pytest.raises(RuntimeError, match="incompatible size"):
-        _common._solve_mixed_problem_scipy(
+        _common._solve_mixed_problem_serial_direct(
             context,
             mixed_space=None,
             form=None,
             rhs=None,
             bcs=[],
             linear_backend="umfpack",
+            umfpack_controls={"ordering": "metis_guard", "pivot_tolerance": 1.0e-2},
+        )
+    assert calls == {
+        "family": "dl",
+        "numeric_indices_dtype": "int64",
+        "numeric_indptr_dtype": "int64",
+        "ordering_control": 7.0,
+        "pivot_tolerance_control": 1.0e-2,
+        "system": "A",
+        "solve_indices_dtype": "int64",
+        "solve_indptr_dtype": "int64",
+        "autoTranspose": True,
+    }
+
+
+def test_pardiso_fem_backend_dispatches_optional_solver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSparseMatrix:
+        nnz = 1
+
+        def tocsc(self) -> FakeSparseMatrix:
+            return self
+
+        def tocsr(self) -> FakeSparseMatrix:
+            return self
+
+        def copy(self) -> str:
+            return "matrix"
+
+    class FakeMatrix:
+        def scatter_reverse(self) -> None:
+            return None
+
+        def to_scipy(self) -> Any:
+            return FakeSparseMatrix()
+
+    vector = SimpleNamespace(
+        array=np.array([1.0]),
+        scatter_reverse=lambda _mode: None,
+    )
+    solution = SimpleNamespace(
+        x=SimpleNamespace(
+            array=np.zeros(2),
+            scatter_forward=lambda: None,
+        )
+    )
+    fem = SimpleNamespace(
+        form=lambda value: value,
+        assemble_matrix=lambda _form, bcs: FakeMatrix(),
+        assemble_vector=lambda _rhs: vector,
+        apply_lifting=lambda _array, _forms, _bcs: None,
+        set_bc=lambda _array, _bcs: None,
+        Function=lambda _space: solution,
+    )
+    la = SimpleNamespace(InsertMode=SimpleNamespace(add="add"))
+    context = SimpleNamespace(
+        mesh=SimpleNamespace(comm=SimpleNamespace(size=1)),
+        api=SimpleNamespace(fem=fem, la=la),
+    )
+    fake_pypardiso = SimpleNamespace(spsolve=lambda _matrix, _rhs: np.array([2.0]))
+
+    monkeypatch.setattr(_common, "import_module", lambda _name: fake_pypardiso)
+
+    with pytest.raises(RuntimeError, match="incompatible size"):
+        _common._solve_mixed_problem_serial_direct(
+            context,
+            mixed_space=None,
+            form=None,
+            rhs=None,
+            bcs=[],
+            linear_backend="pardiso",
         )
 
 

@@ -47,6 +47,103 @@ def test_tpfa_constant_3d_array_accepts_sequence_cell_size() -> None:
     assert result.mass_balance_error < 1.0e-12
 
 
+def test_tpfa_vectorized_assembly_matches_reference_stencil() -> None:
+    values = np.array(
+        [
+            [[1.0, 2.0], [0.5, 0.0]],
+            [[4.0, 3.0], [2.5, 1.5]],
+        ],
+        dtype=float,
+    )
+    cell_size = (0.2, 0.3, 0.4)
+    flow_axis = 2
+    viscosity = 1.7
+    pressure_inlet = 5.0
+    pressure_outlet = 1.0
+    shape = values.shape
+    n_cells = int(values.size)
+    rows: list[int] = []
+    cols: list[int] = []
+    data: list[float] = []
+    rhs = np.zeros(n_cells, dtype=float)
+    diagonal = np.zeros(n_cells, dtype=float)
+
+    def flat(index: tuple[int, ...]) -> int:
+        return int(np.ravel_multi_index(index, shape, order="C"))
+
+    for index in np.ndindex(shape):
+        row = flat(index)
+        k_cell = float(values[index])
+        if index[flow_axis] == 0 and k_cell > 0.0:
+            trans = (
+                k_cell
+                * tpfa_mod._face_area(cell_size, flow_axis)
+                / (viscosity * (cell_size[flow_axis] / 2.0))
+            )
+            diagonal[row] += trans
+            rhs[row] += trans * pressure_inlet
+        if index[flow_axis] == shape[flow_axis] - 1 and k_cell > 0.0:
+            trans = (
+                k_cell
+                * tpfa_mod._face_area(cell_size, flow_axis)
+                / (viscosity * (cell_size[flow_axis] / 2.0))
+            )
+            diagonal[row] += trans
+            rhs[row] += trans * pressure_outlet
+
+        for direction in range(values.ndim):
+            neighbor_index = list(index)
+            neighbor_index[direction] += 1
+            if neighbor_index[direction] >= shape[direction]:
+                continue
+            neighbor = tuple(neighbor_index)
+            neighbor_row = flat(neighbor)
+            k_face = tpfa_mod._harmonic_face_permeability(k_cell, float(values[neighbor]))
+            if k_face <= 0.0:
+                continue
+            trans = (
+                k_face
+                * tpfa_mod._face_area(cell_size, direction)
+                / (viscosity * cell_size[direction])
+            )
+            diagonal[row] += trans
+            diagonal[neighbor_row] += trans
+            rows.extend((row, neighbor_row))
+            cols.extend((neighbor_row, row))
+            data.extend((-trans, -trans))
+
+    rows.extend(range(n_cells))
+    cols.extend(range(n_cells))
+    data.extend(diagonal.tolist())
+    expected_matrix = sparse.csr_matrix((data, (rows, cols)), shape=(n_cells, n_cells))
+
+    matrix, assembled_rhs = tpfa_mod._assemble_tpfa_system(
+        values,
+        cell_size=cell_size,
+        flow_axis_index=flow_axis,
+        viscosity=viscosity,
+        pressure_inlet=pressure_inlet,
+        pressure_outlet=pressure_outlet,
+    )
+
+    assert np.allclose(matrix.toarray(), expected_matrix.toarray())
+    assert np.allclose(assembled_rhs, rhs)
+
+
+def test_tpfa_vectorized_assembly_handles_zero_transmissibility_directions() -> None:
+    matrix, rhs = tpfa_mod._assemble_tpfa_system(
+        np.zeros((2, 2, 2), dtype=float),
+        cell_size=(1.0, 1.0, 1.0),
+        flow_axis_index=0,
+        viscosity=1.0,
+        pressure_inlet=1.0,
+        pressure_outlet=0.0,
+    )
+
+    assert np.allclose(matrix.toarray(), 0.0)
+    assert np.allclose(rhs, 0.0)
+
+
 def test_tpfa_array_accepts_scalar_cell_size() -> None:
     result = solve_tpfa(np.full((2, 2), 2.0), cell_size=0.5)
 

@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass, field
 from importlib import import_module
 from time import perf_counter
-from typing import Any, Callable, Literal, cast
+from typing import Any, Callable, Literal, Mapping, cast
 
 _FEM_THREAD_ENV_DEFAULTS = {
     "OMP_NUM_THREADS": "1",
@@ -33,7 +33,14 @@ from voids.image.porosity import PermeabilityMap, PorosityMap  # noqa: E402
 _AXIS_NAMES = ("x", "y", "z")
 _MIN_MARKER = {"x": 1, "y": 3, "z": 5}
 _MAX_MARKER = {"x": 2, "y": 4, "z": 6}
-LinearSolverBackend = Literal["auto", "petsc", "scipy", "umfpack"]
+LinearSolverBackend = Literal["auto", "petsc", "scipy", "superlu", "umfpack", "pardiso"]
+FEMSolverPreset = Literal[
+    "custom",
+    "direct_reference",
+    "direct_parallel",
+    "iterative_block_lgmres_experimental",
+    "iterative_fieldsplit_experimental",
+]
 
 
 @dataclass(slots=True)
@@ -43,16 +50,20 @@ class FEniCSSolverOptions:
     The default ``linear_backend="auto"`` preserves the PETSc/MUMPS path on
     platforms with a full DOLFINx/PETSc stack. On native Windows, where that
     PETSc stack is not available in the conda-forge FEniCSx packages used by
-    ``voids``, ``auto`` uses DOLFINx assembly plus SciPy's direct sparse solver.
+    ``voids``, ``auto`` uses DOLFINx assembly plus SciPy/SuperLU.
 
-    Use ``linear_backend="scipy"`` or ``"umfpack"`` to request the serial
-    DOLFINx-assembly/direct-sparse path explicitly on any platform. These paths
-    use the same weak form and boundary conditions as PETSc; only the linear
-    algebra backend changes. ``"umfpack"`` requires the optional
-    ``scikits.umfpack`` package.
+    Use ``linear_backend="superlu"``, ``"scipy"``, ``"umfpack"``, or
+    ``"pardiso"`` to request the serial DOLFINx-assembly/direct-sparse path
+    explicitly. These paths use the same weak form and boundary conditions as
+    PETSc; only the linear algebra backend changes. ``"scipy"`` is kept as a
+    backward-compatible alias for the SciPy/SuperLU path. ``"umfpack"``
+    requires the optional ``scikits.umfpack`` package, and ``"pardiso"``
+    requires the optional ``pypardiso`` package.
     """
 
     linear_backend: LinearSolverBackend = "auto"
+    solver_preset: FEMSolverPreset = "direct_reference"
+    umfpack_controls: dict[str, Any] = field(default_factory=dict)
     petsc_options: dict[str, Any] = field(
         default_factory=lambda: {
             "ksp_type": "preonly",
@@ -111,21 +122,197 @@ class FEniCSSolverOptions:
                 options["mat_mumps_icntl_23"] = int(mumps_workspace_mb)
         return cls(
             linear_backend=linear_backend,
+            solver_preset="direct_reference",
             petsc_options=options,
             petsc_options_prefix=petsc_options_prefix,
         )
 
     @classmethod
-    def scipy_direct(cls) -> FEniCSSolverOptions:
-        """Create options for the serial DOLFINx-assembly/SciPy direct backend."""
+    def direct_reference(
+        cls,
+        backend: str = "mumps",
+        *,
+        petsc_options_prefix: str = "voids_fem_",
+        shift_amount: float | None = 1.0e-12,
+        mumps_memory_relaxation_percent: int | None = None,
+        mumps_workspace_mb: int | None = None,
+    ) -> FEniCSSolverOptions:
+        """Create the conservative PETSc direct-solve preset.
 
-        return cls(linear_backend="scipy")
+        This preset is the stable baseline for permeability comparisons: one
+        monolithic sparse LU factorization through PETSc, normally MUMPS. It is
+        appropriate as the direct reference before testing faster iterative or
+        distributed configurations.
+        """
+
+        return cls.direct_lu(
+            backend,
+            petsc_options_prefix=petsc_options_prefix,
+            shift_amount=shift_amount,
+            mumps_memory_relaxation_percent=mumps_memory_relaxation_percent,
+            mumps_workspace_mb=mumps_workspace_mb,
+        )
 
     @classmethod
-    def umfpack_direct(cls) -> FEniCSSolverOptions:
+    def direct_parallel(
+        cls,
+        backend: str = "mumps",
+        *,
+        petsc_options_prefix: str = "voids_fem_",
+        shift_amount: float | None = 1.0e-12,
+        mumps_memory_relaxation_percent: int | None = 500,
+        mumps_workspace_mb: int | None = None,
+    ) -> FEniCSSolverOptions:
+        """Create an MPI-oriented PETSc direct-solve preset.
+
+        This still uses a direct factorization, but records a distinct preset
+        name and applies a larger default MUMPS memory-relaxation factor. It is
+        intended for runs launched under MPI, where MUMPS or SuperLU_DIST can
+        distribute the factorization.
+        """
+
+        options = cls.direct_lu(
+            backend,
+            petsc_options_prefix=petsc_options_prefix,
+            shift_amount=shift_amount,
+            mumps_memory_relaxation_percent=(
+                mumps_memory_relaxation_percent if backend == "mumps" else None
+            ),
+            mumps_workspace_mb=mumps_workspace_mb if backend == "mumps" else None,
+        )
+        options.solver_preset = "direct_parallel"
+        return options
+
+    @classmethod
+    def iterative_fieldsplit_experimental(
+        cls,
+        *,
+        petsc_options_prefix: str = "voids_fem_",
+        ksp_type: str = "fgmres",
+        rtol: float = 1.0e-8,
+        max_it: int = 500,
+    ) -> FEniCSSolverOptions:
+        """Create an experimental PETSc field-split preset for mixed systems.
+
+        The preset is deliberately labelled experimental because scalable
+        saddle-point preconditioning depends on the formulation, coefficient
+        contrast, mesh, and PETSc build. Permeability results from this preset
+        should be compared against a direct reference before being used for
+        scientific conclusions.
+        """
+
+        return cls(
+            linear_backend="petsc",
+            solver_preset="iterative_fieldsplit_experimental",
+            petsc_options={
+                "ksp_type": ksp_type,
+                "ksp_rtol": float(rtol),
+                "ksp_max_it": int(max_it),
+                "ksp_error_if_not_converged": True,
+                "pc_type": "fieldsplit",
+                "pc_fieldsplit_type": "schur",
+                "pc_fieldsplit_schur_fact_type": "upper",
+                "pc_fieldsplit_detect_saddle_point": True,
+                "fieldsplit_0_ksp_type": "preonly",
+                "fieldsplit_0_pc_type": "hypre",
+                "fieldsplit_1_ksp_type": "preonly",
+                "fieldsplit_1_pc_type": "jacobi",
+            },
+            petsc_options_prefix=petsc_options_prefix,
+        )
+
+    @classmethod
+    def iterative_block_lgmres_experimental(
+        cls,
+        *,
+        petsc_options_prefix: str = "voids_fem_",
+        rtol: float = 1.0e-8,
+        atol: float = 1.0e-10,
+        max_it: int = 3000,
+        block_lu_backend: str = "superlu_dist",
+    ) -> FEniCSSolverOptions:
+        """Create an experimental block-LGMRES preset for USFEM block solves.
+
+        This preset is intended for ``solve_brinkman_usfem_block`` with
+        ``matrix_kind="nest"`` and ``preconditioner="none"``. It uses a
+        multiplicative velocity/pressure field split as the outer
+        preconditioner, with direct LU subsolves on the two diagonal operator
+        blocks. It is a correctness-oriented iterative baseline, not a scalable
+        multigrid preconditioner.
+        """
+
+        return cls(
+            linear_backend="petsc",
+            solver_preset="iterative_block_lgmres_experimental",
+            petsc_options={
+                "ksp_type": "lgmres",
+                "ksp_rtol": float(rtol),
+                "ksp_atol": float(atol),
+                "ksp_max_it": int(max_it),
+                "ksp_norm_type": "unpreconditioned",
+                "ksp_error_if_not_converged": True,
+                "pc_type": "fieldsplit",
+                "pc_fieldsplit_type": "multiplicative",
+                "fieldsplit_u_0_ksp_type": "preonly",
+                "fieldsplit_u_0_pc_type": "lu",
+                "fieldsplit_u_0_pc_factor_mat_solver_type": block_lu_backend,
+                "fieldsplit_p_1_ksp_type": "preonly",
+                "fieldsplit_p_1_pc_type": "lu",
+                "fieldsplit_p_1_pc_factor_mat_solver_type": block_lu_backend,
+            },
+            petsc_options_prefix=petsc_options_prefix,
+        )
+
+    @classmethod
+    def scipy_direct(cls) -> FEniCSSolverOptions:
+        """Create options for the serial DOLFINx-assembly/SciPy SuperLU backend."""
+
+        return cls(linear_backend="scipy", solver_preset="direct_reference")
+
+    @classmethod
+    def superlu_direct(cls) -> FEniCSSolverOptions:
+        """Create options for the serial DOLFINx-assembly/SuperLU backend."""
+
+        return cls(linear_backend="superlu", solver_preset="direct_reference")
+
+    @classmethod
+    def umfpack_direct(
+        cls,
+        *,
+        ordering: str | int | float | None = None,
+        strategy: str | int | float | None = None,
+        pivot_tolerance: float | None = None,
+        sym_pivot_tolerance: float | None = None,
+        scale: str | int | float | None = None,
+        block_size: int | None = None,
+        controls: Mapping[str, Any] | None = None,
+    ) -> FEniCSSolverOptions:
         """Create options for the serial DOLFINx-assembly/UMFPACK backend."""
 
-        return cls(linear_backend="umfpack")
+        umfpack_controls: dict[str, Any] = dict(controls or {})
+        if ordering is not None:
+            umfpack_controls["ordering"] = ordering
+        if strategy is not None:
+            umfpack_controls["strategy"] = strategy
+        if pivot_tolerance is not None:
+            umfpack_controls["pivot_tolerance"] = float(pivot_tolerance)
+        if sym_pivot_tolerance is not None:
+            umfpack_controls["sym_pivot_tolerance"] = float(sym_pivot_tolerance)
+        if scale is not None:
+            umfpack_controls["scale"] = scale
+        if block_size is not None:
+            umfpack_controls["block_size"] = int(block_size)
+        return cls(
+            linear_backend="umfpack",
+            solver_preset="direct_reference",
+            umfpack_controls=umfpack_controls,
+        )
+
+    @classmethod
+    def pardiso_direct(cls) -> FEniCSSolverOptions:
+        """Create options for the serial DOLFINx-assembly/PARDISO backend."""
+
+        return cls(linear_backend="pardiso", solver_preset="direct_reference")
 
 
 @dataclass(slots=True)
@@ -250,14 +437,14 @@ def _require_dolfinx_petsc(api: _DolfinxAPI | None = None) -> _DolfinxAPI:
         message = (
             "The PETSc FEM linear backend requires the full DOLFINx/PETSc "
             "Python stack, including dolfinx.fem.petsc and petsc4py. Use "
-            "linear_backend='scipy' for a serial direct sparse solve, or "
+            "linear_backend='superlu' for a serial direct sparse solve, or "
             "install a compatible PETSc-enabled fenics-dolfinx stack."
         )
         if sys.platform.startswith("win"):
             message += (
                 " Native Windows does not provide this PETSc-backed path in "
                 "the conda-forge FEniCSx stack used by voids; "
-                "linear_backend='auto' falls back to the SciPy direct backend "
+                "linear_backend='auto' falls back to the SciPy/SuperLU direct backend "
                 "on Windows."
             )
         raise ImportError(message) from exc
@@ -279,8 +466,11 @@ def _require_dolfinx() -> _DolfinxAPI:
 
 
 def _resolve_linear_backend(requested: LinearSolverBackend, api: _DolfinxAPI) -> str:
-    if requested not in {"auto", "petsc", "scipy", "umfpack"}:
-        raise ValueError("linear_backend must be one of 'auto', 'petsc', 'scipy', or 'umfpack'")
+    if requested not in {"auto", "petsc", "scipy", "superlu", "umfpack", "pardiso"}:
+        raise ValueError(
+            "linear_backend must be one of 'auto', 'petsc', 'scipy', 'superlu', "
+            "'umfpack', or 'pardiso'"
+        )
     if requested != "auto":
         return requested
     if sys.platform.startswith("win"):
@@ -498,8 +688,7 @@ def _mixed_space(
     )
 
 
-def _side_wall_bcs(context: _FEMContext, mixed_space: Any, *, flow_axis: str) -> list[Any]:
-    axis = _axis_index(flow_axis, context.mesh.geometry.dim)
+def _boundary_geometry(context: _FEMContext) -> tuple[np.ndarray, np.ndarray, float]:
     local_origin = np.min(context.mesh.geometry.x[:, : context.mesh.geometry.dim], axis=0)
     local_upper = np.max(context.mesh.geometry.x[:, : context.mesh.geometry.dim], axis=0)
     problem_origin = np.asarray(
@@ -512,11 +701,44 @@ def _side_wall_bcs(context: _FEMContext, mixed_space: Any, *, flow_axis: str) ->
     )
     extent = float(np.max(problem_upper - problem_origin))
     atol = max(extent * 1.0e-10, float(np.finfo(float).eps))
+    return problem_origin, problem_upper, atol
+
+
+def _side_wall_bcs(context: _FEMContext, mixed_space: Any, *, flow_axis: str) -> list[Any]:
+    axis = _axis_index(flow_axis, context.mesh.geometry.dim)
+    problem_origin, problem_upper, atol = _boundary_geometry(context)
     bcs: list[Any] = []
     for side_axis in range(context.mesh.geometry.dim):
         if side_axis == axis:
             continue
         component_space = mixed_space.sub(0).sub(side_axis)
+        collapsed, _ = component_space.collapse()
+        zero = context.api.fem.Function(collapsed)
+        zero.x.array[:] = 0.0
+        for coordinate in (float(problem_origin[side_axis]), float(problem_upper[side_axis])):
+            dofs = context.api.fem.locate_dofs_geometrical(
+                (component_space, collapsed),
+                lambda x, side_axis=side_axis, coordinate=coordinate: _close_coordinate(
+                    x[side_axis], coordinate, atol=atol
+                ),
+            )
+            bcs.append(context.api.fem.dirichletbc(zero, dofs, component_space))
+    return bcs
+
+
+def _velocity_side_wall_bcs(
+    context: _FEMContext,
+    velocity_space: Any,
+    *,
+    flow_axis: str,
+) -> list[Any]:
+    axis = _axis_index(flow_axis, context.mesh.geometry.dim)
+    problem_origin, problem_upper, atol = _boundary_geometry(context)
+    bcs: list[Any] = []
+    for side_axis in range(context.mesh.geometry.dim):
+        if side_axis == axis:
+            continue
+        component_space = velocity_space.sub(side_axis)
         collapsed, _ = component_space.collapse()
         zero = context.api.fem.Function(collapsed)
         zero.x.array[:] = 0.0
@@ -537,18 +759,7 @@ def _pressure_gauge_bc(context: _FEMContext, mixed_space: Any) -> Any:
     zero = context.api.fem.Function(collapsed)
     zero.x.array[:] = 0.0
 
-    local_origin = np.min(context.mesh.geometry.x[:, : context.mesh.geometry.dim], axis=0)
-    problem_origin = np.asarray(
-        context.mesh.comm.allreduce(local_origin, op=context.api.MPI.MIN),
-        dtype=float,
-    )
-    extent = float(
-        context.mesh.comm.allreduce(
-            np.max(context.mesh.geometry.x[:, : context.mesh.geometry.dim]) - np.min(local_origin),
-            op=context.api.MPI.MAX,
-        )
-    )
-    atol = max(extent * 1.0e-10, float(np.finfo(float).eps))
+    problem_origin, _, atol = _boundary_geometry(context)
     dofs = context.api.fem.locate_dofs_geometrical(
         (pressure_space, collapsed),
         lambda x: _match_point(x, problem_origin, ndim=context.mesh.geometry.dim, atol=atol),
@@ -556,6 +767,25 @@ def _pressure_gauge_bc(context: _FEMContext, mixed_space: Any) -> Any:
     if dofs[0].size > 1:
         dofs = [dofs[0][:1], dofs[1][:1]]
     return context.api.fem.dirichletbc(zero, dofs, pressure_space)
+
+
+def _standalone_pressure_gauge_bc(context: _FEMContext, pressure_space: Any) -> Any:
+    if context.api.petsc is None:
+        raise ImportError("standalone pressure gauge boundary conditions require PETSc support.")
+    problem_origin, _, atol = _boundary_geometry(context)
+    dofs = context.api.fem.locate_dofs_geometrical(
+        pressure_space,
+        lambda x: _match_point(x, problem_origin, ndim=context.mesh.geometry.dim, atol=atol),
+    )
+    if dofs.size == 0:
+        dofs = np.asarray([0], dtype=np.int32)
+    else:
+        dofs = dofs[:1]
+    return context.api.fem.dirichletbc(
+        context.api.petsc.PETSc.ScalarType(0),
+        dofs,
+        pressure_space,
+    )
 
 
 def _pressure_boundary_load(
@@ -580,6 +810,90 @@ def _assemble_scalar(context: _FEMContext, expression: Any) -> float:
     return float(context.mesh.comm.allreduce(local, op=context.api.MPI.SUM))
 
 
+def _thread_environment_metadata() -> dict[str, str | None]:
+    return {name: os.environ.get(name) for name in sorted(_FEM_THREAD_ENV_DEFAULTS)}
+
+
+def _mpi_metadata(context: _FEMContext) -> dict[str, int]:
+    return {
+        "mpi_size": int(context.mesh.comm.size),
+        "mpi_rank": int(context.mesh.comm.rank),
+    }
+
+
+def _petsc_solver_diagnostics(problem: Any) -> dict[str, int | float | str]:
+    solver = getattr(problem, "solver", None)
+    if solver is None:
+        return {}
+
+    diagnostics: dict[str, int | float | str] = {}
+    for metadata_key, method_name in (
+        ("petsc_ksp_type", "getType"),
+        ("petsc_converged_reason", "getConvergedReason"),
+        ("petsc_iteration_number", "getIterationNumber"),
+        ("petsc_residual_norm", "getResidualNorm"),
+    ):
+        method = getattr(solver, method_name, None)
+        if method is None:
+            continue
+        try:
+            value = method()
+        except Exception:  # pragma: no cover - defensive around petsc4py versions
+            continue
+        if isinstance(value, (str, int, float)):
+            diagnostics[metadata_key] = value
+    return diagnostics
+
+
+def _apply_petsc_ksp_options_after_setup(
+    petsc_module: Any,
+    solver: Any,
+    petsc_options: dict[str, Any],
+    reapply_fieldsplit_is: Callable[[], bool] | None = None,
+) -> bool:
+    fieldsplit_is_reapplied = False
+    opts = petsc_module.PETSc.Options()
+    opts.prefixPush(solver.getOptionsPrefix())
+    try:
+        for key, value in petsc_options.items():
+            opts[key] = value
+        solver.setFromOptions()
+        if reapply_fieldsplit_is is not None:
+            fieldsplit_is_reapplied = reapply_fieldsplit_is()
+            if fieldsplit_is_reapplied:
+                solver.setFromOptions()
+    finally:
+        for key in petsc_options:
+            del opts[key]
+        opts.prefixPop()
+    return fieldsplit_is_reapplied
+
+
+def _set_nest_fieldsplit_is(problem: Any) -> bool:
+    matrix = getattr(problem, "A", None)
+    get_nest_iss = getattr(matrix, "getNestISs", None)
+    solver = getattr(problem, "solver", None)
+    get_pc = getattr(solver, "getPC", None)
+    solution_fields = getattr(problem, "u", None)
+    if get_nest_iss is None or get_pc is None or not isinstance(solution_fields, (list, tuple)):
+        return False
+
+    pc = get_pc()
+    set_fieldsplit_is = getattr(pc, "setFieldSplitIS", None)
+    if set_fieldsplit_is is None:
+        return False
+
+    nest_is = get_nest_iss()
+    row_is = nest_is[0]
+    fields = []
+    for index, (solution_field, field_is) in enumerate(zip(solution_fields, row_is, strict=False)):
+        name = getattr(solution_field, "name", "f")
+        prefix = f"{name}_" if name != "f" else ""
+        fields.append((f"{prefix}{index}", field_is))
+    set_fieldsplit_is(*fields)
+    return True
+
+
 def _solve_mixed_problem(
     context: _FEMContext,
     *,
@@ -588,20 +902,105 @@ def _solve_mixed_problem(
     bcs: list[Any],
     options: FEniCSSolverOptions | None,
     prefix_suffix: str,
-) -> tuple[Any, float]:
+) -> tuple[Any, float, dict[str, Any]]:
     solver_options = options or FEniCSSolverOptions()
     api = _require_dolfinx_petsc(context.api)
     start = perf_counter()
     petsc = cast(Any, api.petsc)
+    petsc_options_prefix = f"{solver_options.petsc_options_prefix}{prefix_suffix}_"
     problem = petsc.LinearProblem(
         form,
         rhs,
         bcs=bcs,
-        petsc_options_prefix=f"{solver_options.petsc_options_prefix}{prefix_suffix}_",
+        petsc_options_prefix=petsc_options_prefix,
         petsc_options=dict(solver_options.petsc_options),
     )
     solution = problem.solve()
-    return solution, perf_counter() - start
+    solve_seconds = perf_counter() - start
+    solver_metadata = {
+        "petsc_options_prefix_effective": petsc_options_prefix,
+        **_petsc_solver_diagnostics(problem),
+    }
+    converged_reason = solver_metadata.get("petsc_converged_reason")
+    if (
+        bool(solver_options.petsc_options.get("ksp_error_if_not_converged", False))
+        and isinstance(converged_reason, (int, float))
+        and converged_reason < 0
+    ):
+        raise RuntimeError(
+            "PETSc linear solve did not converge: "
+            f"reason={converged_reason}, diagnostics={solver_metadata}"
+        )
+    return (
+        solution,
+        solve_seconds,
+        solver_metadata,
+    )
+
+
+def _solve_block_problem_petsc(
+    context: _FEMContext,
+    *,
+    forms: list[list[Any]],
+    rhs: list[Any],
+    bcs: list[Any],
+    solution_functions: list[Any],
+    options: FEniCSSolverOptions | None,
+    prefix_suffix: str,
+    matrix_kind: Literal["mpi", "nest"],
+    preconditioner_forms: list[list[Any | None]] | None = None,
+) -> tuple[list[Any], float, dict[str, Any]]:
+    solver_options = options or FEniCSSolverOptions()
+    api = _require_dolfinx_petsc(context.api)
+    start = perf_counter()
+    petsc = cast(Any, api.petsc)
+    petsc_options_prefix = f"{solver_options.petsc_options_prefix}{prefix_suffix}_"
+    deferred_petsc_options = dict(solver_options.petsc_options) if matrix_kind == "nest" else None
+    problem = petsc.LinearProblem(
+        forms,
+        rhs,
+        bcs=bcs,
+        u=solution_functions,
+        P=preconditioner_forms,
+        kind=matrix_kind,
+        petsc_options_prefix=petsc_options_prefix,
+        petsc_options=None
+        if deferred_petsc_options is not None
+        else dict(solver_options.petsc_options),
+    )
+    fieldsplit_is_reapplied = False
+    if deferred_petsc_options is not None:
+        fieldsplit_is_reapplied = _apply_petsc_ksp_options_after_setup(
+            petsc,
+            problem.solver,
+            deferred_petsc_options,
+            reapply_fieldsplit_is=lambda: _set_nest_fieldsplit_is(problem),
+        )
+    solution = problem.solve()
+    solve_seconds = perf_counter() - start
+    solver_metadata = {
+        "petsc_options_prefix_effective": petsc_options_prefix,
+        "petsc_matrix_kind": matrix_kind,
+        "petsc_has_preconditioner_forms": preconditioner_forms is not None,
+        "petsc_options_applied_after_block_setup": deferred_petsc_options is not None,
+        "petsc_nest_fieldsplit_is_reapplied": fieldsplit_is_reapplied,
+        **_petsc_solver_diagnostics(problem),
+    }
+    converged_reason = solver_metadata.get("petsc_converged_reason")
+    if (
+        bool(solver_options.petsc_options.get("ksp_error_if_not_converged", False))
+        and isinstance(converged_reason, (int, float))
+        and converged_reason < 0
+    ):
+        raise RuntimeError(
+            "PETSc linear solve did not converge: "
+            f"reason={converged_reason}, diagnostics={solver_metadata}"
+        )
+    if isinstance(solution, tuple):
+        solution = list(solution)
+    elif not isinstance(solution, list):
+        solution = [solution]
+    return solution, solve_seconds, solver_metadata
 
 
 def _set_dirichlet_bc_values(fem: Any, array: np.ndarray, bcs: list[Any]) -> None:
@@ -614,22 +1013,149 @@ def _set_dirichlet_bc_values(fem: Any, array: np.ndarray, bcs: list[Any]) -> Non
     fem.set_bc(array, bcs)
 
 
-def _solve_mixed_problem_scipy(
+def _copy_sparse_matrix_with_index_dtype(matrix: Any, dtype: np.dtype[Any]) -> Any:
+    """Copy a SciPy sparse matrix and force its structural arrays to ``dtype``."""
+
+    copied = matrix.copy()
+    copied.indices = copied.indices.astype(dtype, copy=False)
+    copied.indptr = copied.indptr.astype(dtype, copy=False)
+    return copied
+
+
+_UMFPACK_CONTROL_CONSTANTS = {
+    "strategy": "UMFPACK_STRATEGY",
+    "ordering": "UMFPACK_ORDERING",
+    "pivot_tolerance": "UMFPACK_PIVOT_TOLERANCE",
+    "sym_pivot_tolerance": "UMFPACK_SYM_PIVOT_TOLERANCE",
+    "scale": "UMFPACK_SCALE",
+    "block_size": "UMFPACK_BLOCK_SIZE",
+    "alloc_init": "UMFPACK_ALLOC_INIT",
+    "front_alloc_init": "UMFPACK_FRONT_ALLOC_INIT",
+}
+_UMFPACK_NAMED_CONTROL_VALUES = {
+    "strategy": {
+        "auto": "UMFPACK_STRATEGY_AUTO",
+        "unsymmetric": "UMFPACK_STRATEGY_UNSYMMETRIC",
+        "symmetric": "UMFPACK_STRATEGY_SYMMETRIC",
+    },
+    "ordering": {
+        "cholmod": "UMFPACK_ORDERING_CHOLMOD",
+        "amd": "UMFPACK_ORDERING_AMD",
+        "metis": "UMFPACK_ORDERING_METIS",
+        "best": "UMFPACK_ORDERING_BEST",
+        "none": "UMFPACK_ORDERING_NONE",
+        "metis_guard": "UMFPACK_ORDERING_METIS_GUARD",
+    },
+    "scale": {
+        "none": "UMFPACK_SCALE_NONE",
+        "sum": "UMFPACK_SCALE_SUM",
+        "max": "UMFPACK_SCALE_MAX",
+    },
+}
+
+
+def _normalize_umfpack_control_key(key: str) -> str:
+    normalized = key.strip().lower().replace("-", "_")
+    if normalized not in _UMFPACK_CONTROL_CONSTANTS:
+        supported = ", ".join(sorted(_UMFPACK_CONTROL_CONSTANTS))
+        raise ValueError(f"Unsupported UMFPACK control {key!r}; supported controls: {supported}")
+    return normalized
+
+
+def _resolve_umfpack_control_value(umfpack: Any, key: str, value: Any) -> float:
+    if isinstance(value, str):
+        normalized_value = value.strip().lower().replace("-", "_")
+        constant_name = _UMFPACK_NAMED_CONTROL_VALUES.get(key, {}).get(normalized_value)
+        if constant_name is None:
+            raise ValueError(f"Unsupported UMFPACK {key!r} value {value!r}")
+        if not hasattr(umfpack, constant_name):
+            raise ValueError(
+                f"UMFPACK control {key!r} value {value!r} requires unavailable "
+                f"constant {constant_name}"
+            )
+        return float(getattr(umfpack, constant_name))
+    return float(value)
+
+
+def _apply_umfpack_controls(
+    umfpack: Any,
+    context: Any,
+    controls: Mapping[str, Any],
+) -> dict[str, float]:
+    resolved: dict[str, float] = {}
+    for key, value in controls.items():
+        normalized_key = _normalize_umfpack_control_key(str(key))
+        constant_name = _UMFPACK_CONTROL_CONSTANTS[normalized_key]
+        if not hasattr(umfpack, constant_name):
+            raise ValueError(
+                f"UMFPACK control {normalized_key!r} requires unavailable constant {constant_name}"
+            )
+        resolved_value = _resolve_umfpack_control_value(umfpack, normalized_key, value)
+        context.control[int(getattr(umfpack, constant_name))] = resolved_value
+        resolved[normalized_key] = resolved_value
+    return resolved
+
+
+def _json_safe_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key, value in mapping.items():
+        if isinstance(value, str | int | float | bool) or value is None:
+            safe[str(key)] = value
+        else:
+            safe[str(key)] = str(value)
+    return safe
+
+
+def _solve_umfpack_int64(
+    umfpack: Any,
+    matrix: Any,
+    rhs_array: Any,
+    *,
+    controls: Mapping[str, Any],
+) -> tuple[Any, dict[str, Any]]:
+    """Solve with the 64-bit-index UMFPACK family exposed by scikit-umfpack."""
+
+    matrix_int64 = _copy_sparse_matrix_with_index_dtype(matrix, np.dtype(np.int64))
+    context = umfpack.UmfpackContext("dl")
+    resolved_controls = _apply_umfpack_controls(umfpack, context, controls)
+    context.numeric(matrix_int64)
+    solution = context.solve(
+        umfpack.UMFPACK_A,
+        matrix_int64,
+        rhs_array,
+        autoTranspose=True,
+    )
+    return solution, {
+        "serial_sparse_umfpack_family": "dl",
+        "serial_sparse_matrix_indices_dtype": str(matrix_int64.indices.dtype),
+        "serial_sparse_matrix_indptr_dtype": str(matrix_int64.indptr.dtype),
+        "serial_sparse_umfpack_requested_controls": _json_safe_mapping(controls),
+        "serial_sparse_umfpack_resolved_controls": resolved_controls,
+    }
+
+
+def _solve_mixed_problem_serial_direct(
     context: _FEMContext,
     *,
     mixed_space: Any,
     form: Any,
     rhs: Any,
     bcs: list[Any],
-    linear_backend: Literal["scipy", "umfpack"],
-) -> tuple[Any, float]:
+    linear_backend: Literal["scipy", "superlu", "umfpack", "pardiso"],
+    umfpack_controls: Mapping[str, Any] | None = None,
+) -> tuple[Any, float, dict[str, Any]]:
     if context.mesh.comm.size != 1:
         raise NotImplementedError(
-            "linear_backend='scipy' and linear_backend='umfpack' are serial-only; "
-            "use linear_backend='petsc' for MPI-distributed FEM solves."
+            "linear_backend='scipy', linear_backend='superlu', "
+            "linear_backend='umfpack', and linear_backend='pardiso' are "
+            "serial-only; use linear_backend='petsc' for MPI-distributed FEM "
+            "solves."
         )
 
     solve_linear_system: Callable[[Any, Any], Any]
+    sparse_matrix_format = "csr"
+    serial_solver_backend = "scipy.sparse.linalg.splu"
+    serial_solver_metadata: dict[str, Any] = {}
     if linear_backend == "umfpack":
         try:
             umfpack = import_module("scikits.umfpack")
@@ -638,11 +1164,39 @@ def _solve_mixed_problem_scipy(
                 "linear_backend='umfpack' requires the optional scikits.umfpack package. "
                 "Install scikit-umfpack or use linear_backend='scipy'."
             ) from exc
-        solve_linear_system = cast(Callable[[Any, Any], Any], umfpack.spsolve)
-    else:
-        from scipy.sparse.linalg import spsolve
 
-        solve_linear_system = cast(Callable[[Any, Any], Any], spsolve)
+        def solve_umfpack(matrix: Any, rhs_array: Any) -> Any:
+            solution, metadata = _solve_umfpack_int64(
+                umfpack,
+                matrix,
+                rhs_array,
+                controls=umfpack_controls or {},
+            )
+            serial_solver_metadata.update(metadata)
+            return solution
+
+        solve_linear_system = solve_umfpack
+        sparse_matrix_format = "csc"
+        serial_solver_backend = "scikits.umfpack.UmfpackContext(dl)"
+    elif linear_backend == "pardiso":
+        try:
+            pypardiso = import_module("pypardiso")
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "linear_backend='pardiso' requires the optional pypardiso package. "
+                "Install pypardiso or use linear_backend='scipy'."
+            ) from exc
+        solve_linear_system = cast(Callable[[Any, Any], Any], pypardiso.spsolve)
+        serial_solver_backend = "pypardiso.spsolve"
+    else:
+        from scipy.sparse.linalg import splu
+
+        sparse_matrix_format = "csc"
+
+        def solve_superlu(matrix: Any, rhs_array: Any) -> Any:
+            return splu(matrix).solve(rhs_array)
+
+        solve_linear_system = solve_superlu
 
     fem = context.api.fem
     la = context.api.la
@@ -656,7 +1210,7 @@ def _solve_mixed_problem_scipy(
     fem.apply_lifting(vector.array, [a_form], [bcs])
     vector.scatter_reverse(la.InsertMode.add)
     _set_dirichlet_bc_values(fem, vector.array, bcs)
-    sparse_matrix = matrix.to_scipy().copy()
+    sparse_matrix = getattr(matrix.to_scipy(), f"to{sparse_matrix_format}")().copy()
     solution_array = np.asarray(
         solve_linear_system(sparse_matrix, np.ascontiguousarray(vector.array.copy(), dtype=float))
     )
@@ -665,12 +1219,21 @@ def _solve_mixed_problem_scipy(
     solution = fem.Function(mixed_space)
     if solution_array.size != solution.x.array.size:
         raise RuntimeError(
-            "SciPy FEM solve returned a solution vector with incompatible size "
+            "Serial FEM solve returned a solution vector with incompatible size "
             f"{solution_array.size}; expected {solution.x.array.size}."
         )
     solution.x.array[:] = solution_array.real
     solution.x.scatter_forward()
-    return solution, solve_seconds
+    return (
+        solution,
+        solve_seconds,
+        {
+            "serial_sparse_matrix_nnz": int(sparse_matrix.nnz),
+            "serial_sparse_matrix_format": sparse_matrix_format,
+            "serial_sparse_solver_backend": serial_solver_backend,
+            **serial_solver_metadata,
+        },
+    )
 
 
 def _collapse_solution(solution: Any) -> tuple[Any, Any]:
@@ -703,6 +1266,37 @@ def _result_from_solution(
     metadata: dict[str, Any] | None = None,
 ) -> FEMSinglePhaseResult:
     velocity, pressure = _collapse_solution(solution)
+    return _result_from_velocity_pressure(
+        context,
+        velocity,
+        pressure,
+        method=method,
+        formulation=formulation,
+        flow_axis=flow_axis,
+        pressure_inlet=pressure_inlet,
+        pressure_outlet=pressure_outlet,
+        viscosity=viscosity,
+        solve_seconds=solve_seconds,
+        metadata=metadata,
+    )
+
+
+def _result_from_velocity_pressure(
+    context: _FEMContext,
+    velocity: Any,
+    pressure: Any,
+    *,
+    method: str,
+    formulation: str,
+    flow_axis: str,
+    pressure_inlet: float,
+    pressure_outlet: float,
+    viscosity: float,
+    solve_seconds: float,
+    metadata: dict[str, Any] | None = None,
+) -> FEMSinglePhaseResult:
+    velocity.name = "velocity"
+    pressure.name = "pressure"
     pressure = _zero_mean_pressure(context, pressure)
     flow_rate = _assemble_scalar(
         context,
@@ -778,7 +1372,7 @@ def _solve_with_form_builder(
     bcs = _side_wall_bcs(context, W, flow_axis=flow_axis)
     bcs.append(_pressure_gauge_bc(context, W))
     if selected_linear_backend == "petsc":
-        solution, solve_seconds = _solve_mixed_problem(
+        solution, solve_seconds, solver_metadata = _solve_mixed_problem(
             context,
             form=form,
             rhs=rhs,
@@ -787,13 +1381,17 @@ def _solve_with_form_builder(
             prefix_suffix=prefix_suffix,
         )
     else:
-        solution, solve_seconds = _solve_mixed_problem_scipy(
+        solution, solve_seconds, solver_metadata = _solve_mixed_problem_serial_direct(
             context,
             mixed_space=W,
             form=form,
             rhs=rhs,
             bcs=bcs,
-            linear_backend=cast(Literal["scipy", "umfpack"], selected_linear_backend),
+            linear_backend=cast(
+                Literal["scipy", "superlu", "umfpack", "pardiso"],
+                selected_linear_backend,
+            ),
+            umfpack_controls=solver_options.umfpack_controls,
         )
     return _result_from_solution(
         context,
@@ -807,17 +1405,23 @@ def _solve_with_form_builder(
         solve_seconds=solve_seconds,
         metadata={
             "linear_backend": selected_linear_backend,
+            "solver_preset": solver_options.solver_preset,
             "velocity_degree": velocity_degree,
             "pressure_family": pressure_family,
             "porosity_floor": problem.porosity_floor,
             "permeability_floor": problem.permeability_floor,
             "petsc_options": dict(solver_options.petsc_options),
             "petsc_options_prefix": solver_options.petsc_options_prefix,
+            "umfpack_controls": dict(solver_options.umfpack_controls),
+            "thread_environment": _thread_environment_metadata(),
+            **_mpi_metadata(context),
+            **solver_metadata,
         },
     )
 
 
 __all__ = [
+    "FEMSolverPreset",
     "FEMMapProblem",
     "FEMSinglePhaseResult",
     "FEniCSSolverOptions",

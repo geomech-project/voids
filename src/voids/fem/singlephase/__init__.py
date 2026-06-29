@@ -2,6 +2,7 @@
 
 from voids.fem.singlephase._common import (
     FEMMapProblem,
+    FEMSolverPreset,
     FEMSinglePhaseResult,
     FEniCSSolverOptions,
     LinearSolverBackend,
@@ -15,16 +16,18 @@ from voids.fem.singlephase.upscaling import (
     upscale_permeability_fem,
     upscale_principal_permeabilities_fem,
 )
-from voids.fem.singlephase.usfem import solve_brinkman_usfem
+from voids.fem.singlephase.usfem import solve_brinkman_usfem, solve_brinkman_usfem_block
 
 __all__ = [
     "FEMMapProblem",
+    "FEMSolverPreset",
     "FEMSinglePhaseResult",
     "FEMUpscalingResult",
     "FEniCSSolverOptions",
     "LinearSolverBackend",
     "solve_brinkman_taylor_hood",
     "solve_brinkman_usfem",
+    "solve_brinkman_usfem_block",
     "solve_darcy_taylor_hood",
     "upscale_permeability_fem",
     "upscale_principal_permeabilities_fem",
