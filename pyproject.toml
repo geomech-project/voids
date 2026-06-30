@@ -10,7 +10,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "LGPL-2.1-only" }
 authors = [
-  { name = "Diego Volpatto", email = "volpatto@lncc.br" }
+  { name = "Diego Volpatto", email = "volpatto@lncc.br" },
+  { name = "Frederic Valentin", email = "valentin@lncc.br" }
 ]
 keywords = [
   "pore-network-modeling",
