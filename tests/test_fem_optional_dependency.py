@@ -12,6 +12,7 @@ from voids.fem.singlephase import FEMMapProblem, _common
 from voids.fem.singlephase import solve_brinkman_usfem
 from voids.fem.singlephase.upscaling import _backend_from_name, _default_axes
 from voids.image.porosity import PermeabilityMap, PorosityMap
+from voids.linalg import cudss as cudss_linalg
 
 
 def test_fem_backend_reports_clean_missing_dolfinx_message(
@@ -714,6 +715,141 @@ def test_pardiso_fem_backend_dispatches_optional_solver(
             bcs=[],
             linear_backend="pardiso",
         )
+
+
+def test_nvmath_cudss_controls_reject_invalid_values() -> None:
+    with pytest.raises(ValueError, match="dtype"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"dtype": "float16"})
+    with pytest.raises(ValueError, match="device_ids"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"device_ids": ()})
+    with pytest.raises(ValueError, match="ir_steps"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"ir_steps": -1})
+    with pytest.raises(ValueError, match="pivot_type"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"pivot_type": "bad"})
+    with pytest.raises(ValueError, match="residual_rtol"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"residual_rtol": 0.0})
+
+
+def test_nvmath_cudss_backend_reports_missing_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_import_module(name: str) -> Any:
+        if name == "torch":
+            return SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True))
+        if name == "nvmath.bindings.cudss":
+            raise ImportError("simulated missing nvmath")
+        raise AssertionError(name)
+
+    monkeypatch.setattr(cudss_linalg, "import_module", fake_import_module)
+
+    with pytest.raises(ImportError, match="linear_backend='nvmath_cudss' requires"):
+        cudss_linalg.require_nvmath_cudss()
+
+
+def test_nvmath_cudss_backend_reports_missing_cuda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_import_module(name: str) -> Any:
+        if name == "torch":
+            return SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+        if name == "nvmath.bindings.cudss":
+            return SimpleNamespace()
+        raise AssertionError(name)
+
+    monkeypatch.setattr(cudss_linalg, "import_module", fake_import_module)
+
+    with pytest.raises(RuntimeError, match="requires a CUDA-capable GPU"):
+        cudss_linalg.require_nvmath_cudss()
+
+
+def test_nvmath_cudss_device_ids_accept_multiple_devices() -> None:
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            current_device=lambda: 0,
+            device_count=lambda: 2,
+        ),
+    )
+
+    assert cudss_linalg.nvmath_cudss_device_ids(fake_torch, "all") == (0, 1)
+    assert cudss_linalg.nvmath_cudss_device_ids(fake_torch, (0, 1)) == (0, 1)
+    assert cudss_linalg.nvmath_cudss_device_ids(fake_torch, None) == (0,)
+    assert cudss_linalg.nvmath_cudss_device_ids(fake_torch, (0,)) == (0,)
+    assert cudss_linalg.nvmath_cudss_device_ids(fake_torch, (1,)) == (1,)
+    with pytest.raises(ValueError, match="unavailable CUDA device"):
+        cudss_linalg.nvmath_cudss_device_ids(fake_torch, (2,))
+
+
+def test_nvmath_cudss_fem_backend_dispatches_optional_solver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSparseMatrix:
+        nnz = 1
+
+        def tocsr(self) -> FakeSparseMatrix:
+            return self
+
+        def tocsc(self) -> FakeSparseMatrix:
+            return self
+
+        def copy(self) -> FakeSparseMatrix:
+            return self
+
+    class FakeMatrix:
+        def scatter_reverse(self) -> None:
+            return None
+
+        def to_scipy(self) -> Any:
+            return FakeSparseMatrix()
+
+    vector = SimpleNamespace(
+        array=np.array([1.0]),
+        scatter_reverse=lambda _mode: None,
+    )
+    solution = SimpleNamespace(
+        x=SimpleNamespace(
+            array=np.zeros(2),
+            scatter_forward=lambda: None,
+        )
+    )
+    fem = SimpleNamespace(
+        form=lambda value: value,
+        assemble_matrix=lambda _form, bcs: FakeMatrix(),
+        assemble_vector=lambda _rhs: vector,
+        apply_lifting=lambda _array, _forms, _bcs: None,
+        set_bc=lambda _array, _bcs: None,
+        Function=lambda _space: solution,
+    )
+    la = SimpleNamespace(InsertMode=SimpleNamespace(add="add"))
+    context = SimpleNamespace(
+        mesh=SimpleNamespace(comm=SimpleNamespace(size=1)),
+        api=SimpleNamespace(fem=fem, la=la),
+    )
+    calls: dict[str, Any] = {}
+
+    def fake_solve(matrix: Any, rhs: Any, *, controls: Any) -> tuple[np.ndarray, dict[str, Any]]:
+        calls["matrix"] = matrix
+        calls["rhs"] = rhs.copy()
+        calls["controls"] = dict(controls)
+        return np.array([2.0]), {"serial_sparse_nvmath_cudss_relative_residual": 0.0}
+
+    monkeypatch.setattr(_common, "_solve_nvmath_cudss", fake_solve)
+
+    with pytest.raises(RuntimeError, match="incompatible size"):
+        _common._solve_mixed_problem_serial_direct(
+            context,
+            mixed_space=None,
+            form=None,
+            rhs=None,
+            bcs=[],
+            linear_backend="nvmath_cudss",
+            nvmath_cudss_controls={"device_ids": (1,), "dtype": "float64"},
+        )
+    assert isinstance(calls["matrix"], FakeSparseMatrix)
+    assert np.array_equal(calls["rhs"], np.array([1.0]))
+    assert calls["controls"]["device_ids"] == (1,)
+    assert calls["controls"]["dtype"] == "float64"
+    assert calls["controls"]["use_matching"] is True
+    assert calls["controls"]["ir_steps"] == 5
 
 
 @pytest.mark.parametrize(
