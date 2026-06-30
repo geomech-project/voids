@@ -1,8 +1,9 @@
 # %% [markdown]
-# # MWE 47 - GPU Sparse Solver Backend Comparison
+# # MWE 47 - CPU/GPU Sparse Solver Precision Comparison
 #
-# This notebook benchmarks the optional `nvmath_cudss` sparse direct backend
-# across the non-LBM single-phase methods exposed by `voids`:
+# This notebook benchmarks CPU single/double precision sparse direct solves and
+# the optional `nvmath_cudss` sparse direct backend across the non-LBM
+# single-phase methods exposed by `voids`:
 #
 # - pore-network single-phase flow,
 # - TPFA finite-volume Darcy flow,
@@ -112,10 +113,11 @@ output_dir = (
 output_dir.mkdir(parents=True, exist_ok=True)
 output_prefix = (
     "gpu_sparse_solver_comparison_image300_phi025_voxel5um_block10_map30_"
-    "extracted_pnm_cudss_all_gpus"
+    "extracted_pnm_cpu_gpu_precision_cudss_all_gpus"
 )
 
 run_benchmark = True
+run_fem_serial_cpu_precision = False
 flow_axis = "x"
 pressure_inlet = 1.0
 pressure_outlet = 0.0
@@ -144,10 +146,11 @@ synthetic_max_tries = 64
 fine_voxel_size = 5.0e-6
 cell_size = fine_voxel_size * float(fine_voxels_per_cell[0])
 kozeny_constant = 180.0
-permeability_floor = 1.0e-6 * cell_size**2
-permeability_cap = 5.0e-2 * cell_size**2
-porosity_floor = 5.0e-2
+permeability_floor = 1.0e-20
+permeability_cap = 1.0e-8
+porosity_floor = 1.0e-3
 gpu_device_ids: int | tuple[int, ...] | str = "all"
+cpu_dtypes = ("float64", "float32")
 gpu_dtypes = ("float64", "float32")
 pnm_extraction_backend = "porespy"
 pnm_extraction_kwargs: dict[str, object] = {
@@ -433,7 +436,9 @@ case_metadata = pd.DataFrame(
             "flow_axis": flow_axis,
             "pressure_drop": pressure_inlet - pressure_outlet,
             "gpu_device_ids": gpu_device_ids,
+            "cpu_dtypes": ", ".join(cpu_dtypes),
             "gpu_dtypes": ", ".join(gpu_dtypes),
+            "run_fem_serial_cpu_precision": run_fem_serial_cpu_precision,
             "benchmark_thread_count": benchmark_thread_count,
         }
     ]
@@ -447,6 +452,10 @@ print(f"Saved case metadata: {case_metadata_path}")
 # %%
 def cudss_parameters(dtype: str) -> dict[str, object]:
     return {"device_ids": gpu_device_ids, "dtype": dtype}
+
+
+def cpu_solver_parameters(dtype: str) -> dict[str, object]:
+    return {"dtype": dtype}
 
 
 def metadata_value(metadata: dict[str, Any], key: str) -> object:
@@ -614,6 +623,10 @@ def run_pnm_case(
         "mass_balance_error": float(result.mass_balance_error),
         "solver_method": solver_info.get("method", solver),
         "solver_backend": solver_info.get("backend", ""),
+        "linear_system_dtype": solver_info.get(
+            "linear_system_dtype",
+            solver_info.get("serial_sparse_nvmath_cudss_dtype", ""),
+        ),
         "cudss_dtype": solver_info.get("serial_sparse_nvmath_cudss_dtype", ""),
         "cudss_residual": solver_info.get(
             "serial_sparse_nvmath_cudss_relative_residual", ""
@@ -677,6 +690,10 @@ def run_tpfa_case(
         "matrix_nnz": int(result.matrix_nnz),
         "solver_method": result.solver_method,
         "solver_backend": solver_info.get("backend", ""),
+        "linear_system_dtype": solver_info.get(
+            "linear_system_dtype",
+            solver_info.get("serial_sparse_nvmath_cudss_dtype", ""),
+        ),
         "cudss_dtype": solver_info.get("serial_sparse_nvmath_cudss_dtype", ""),
         "cudss_residual": solver_info.get(
             "serial_sparse_nvmath_cudss_relative_residual", ""
@@ -749,6 +766,10 @@ def run_fem_case(
         "matrix_nnz": metadata_value(metadata, "serial_sparse_matrix_nnz"),
         "solver_method": metadata.get("linear_backend", ""),
         "solver_backend": metadata.get("serial_sparse_solver_backend", ""),
+        "linear_system_dtype": metadata.get(
+            "serial_sparse_linear_system_dtype",
+            metadata.get("linear_system_dtype", ""),
+        ),
         "cudss_dtype": metadata.get("serial_sparse_nvmath_cudss_dtype", ""),
         "cudss_residual": metadata.get(
             "serial_sparse_nvmath_cudss_relative_residual", ""
@@ -797,6 +818,25 @@ backend_rows: list[dict[str, object]] = [
         "solver_parameters": {},
     },
 ]
+for dtype in cpu_dtypes:
+    backend_rows.extend(
+        [
+            {
+                "method_family": "PNM",
+                "formulation": "pore_network",
+                "backend_label": f"superlu_cpu_{dtype}",
+                "solver": "superlu",
+                "solver_parameters": cpu_solver_parameters(dtype),
+            },
+            {
+                "method_family": "TPFA",
+                "formulation": "tpfa_darcy",
+                "backend_label": f"superlu_cpu_{dtype}",
+                "solver": "superlu",
+                "solver_parameters": cpu_solver_parameters(dtype),
+            },
+        ]
+    )
 for dtype in gpu_dtypes:
     backend_rows.extend(
         [
@@ -837,6 +877,18 @@ fem_formulations: list[dict[str, object]] = [
         "reference_options": FEniCSSolverOptions.direct_parallel("superlu_dist"),
     },
 ]
+fem_cpu_backends: list[dict[str, object]] = []
+if run_fem_serial_cpu_precision:
+    for dtype in cpu_dtypes:
+        fem_cpu_backends.append(
+            {
+                "backend_label": f"superlu_cpu_{dtype}",
+                "options": FEniCSSolverOptions.superlu_direct(
+                    linear_system_dtype=dtype,  # type: ignore[arg-type]
+                ),
+            }
+        )
+
 fem_gpu_backends: list[dict[str, object]] = []
 for dtype in gpu_dtypes:
     fem_gpu_backends.append(
@@ -857,6 +909,7 @@ display(
                 "formulation": item["formulation"],
                 "backend_label": item["reference_label"],
                 "linear_backend": item["reference_options"].linear_backend,
+                "linear_system_dtype": item["reference_options"].linear_system_dtype,
                 "role": "cpu_reference",
             }
             for item in fem_formulations
@@ -866,6 +919,18 @@ display(
                 "formulation": item["formulation"],
                 "backend_label": backend["backend_label"],
                 "linear_backend": backend["options"].linear_backend,
+                "linear_system_dtype": backend["options"].linear_system_dtype,
+                "role": "cpu_precision_candidate",
+            }
+            for item in fem_formulations
+            for backend in fem_cpu_backends
+        ]
+        + [
+            {
+                "formulation": item["formulation"],
+                "backend_label": backend["backend_label"],
+                "linear_backend": backend["options"].linear_backend,
+                "linear_system_dtype": backend["options"].linear_system_dtype,
                 "role": "gpu_candidate",
             }
             for item in fem_formulations
@@ -912,6 +977,7 @@ if run_benchmark:
                 "backend_label": formulation["reference_label"],
                 "options": formulation["reference_options"],
             },
+            *fem_cpu_backends,
             *fem_gpu_backends,
         ]
         for backend in fem_backend_rows:
@@ -1034,7 +1100,7 @@ else:
     ax.bar(x, plot_df["wall_seconds"], color="tab:blue", alpha=0.75)
     ax.set_yscale("log")
     ax.set_ylabel("wall time [s]")
-    ax.set_title("CPU reference and nvmath/cuDSS wall time by method")
+    ax.set_title("CPU reference and CPU/GPU precision wall time by method")
     ax.set_xticks(x)
     ax.set_xticklabels(plot_df["label"], rotation=70, ha="right")
     ax.grid(axis="y", which="both", alpha=0.25)
@@ -1048,7 +1114,7 @@ accuracy_df = (
 )
 accuracy_df = accuracy_df[~accuracy_df["backend_label"].str.endswith("_cpu_reference")]
 if accuracy_df.empty:
-    print("No cuDSS rows with CPU references to plot.")
+    print("No candidate rows with CPU references to plot.")
 else:
     accuracy_df["label"] = (
         accuracy_df["method_family"].astype(str)
@@ -1062,7 +1128,7 @@ else:
     ax.bar(x, accuracy_df["K_relative_to_reference"], color="tab:green", alpha=0.75)
     ax.set_yscale("log")
     ax.set_ylabel("relative K difference vs CPU reference")
-    ax.set_title("nvmath/cuDSS permeability parity")
+    ax.set_title("CPU/GPU backend permeability parity")
     ax.set_xticks(x)
     ax.set_xticklabels(accuracy_df["label"], rotation=70, ha="right")
     ax.grid(axis="y", which="both", alpha=0.25)
@@ -1076,8 +1142,8 @@ else:
 # Successful rows are also sampled onto the common 30³ cell-centered grid. TPFA
 # pressure already lives on that grid, FEM pressure and velocity are sampled at
 # cell centers, and PNM pore pressures are projected to the grid by nearest pore.
-# Each comparison plot shows the CPU reference, cuDSS float64, cuDSS float32,
-# the absolute float32 error, and the signed float32-reference difference.
+# Each comparison plot shows the CPU reference, successful CPU/GPU candidates,
+# and error/difference rows for reduced-precision candidates.
 
 # %%
 field_plot_dir = output_dir / f"{output_prefix}_field_plots"
@@ -1087,6 +1153,21 @@ field_titles = {
     "pressure": "pressure",
     "velocity_x": f"{flow_axis}-velocity component",
 }
+comparison_backend_labels = tuple(
+    [f"superlu_cpu_{dtype}" for dtype in cpu_dtypes]
+    + [f"nvmath_cudss_{dtype}" for dtype in gpu_dtypes]
+)
+reduced_precision_backend_labels = tuple(
+    label for label in comparison_backend_labels if label.endswith("float32")
+)
+
+
+def display_backend_label(label: str) -> str:
+    return (
+        label.replace("superlu_cpu_", "SuperLU CPU ")
+        .replace("nvmath_cudss_", "cuDSS ")
+        .replace("_", " ")
+    )
 
 
 def finite_values(values: np.ndarray) -> np.ndarray:
@@ -1143,17 +1224,21 @@ def float32_difference_arrays(field_name: str) -> list[np.ndarray]:
         formulation,
     ), reference_label in reference_label_by_formulation.items():
         reference_key = (method_family, formulation, reference_label)
-        candidate_key = (method_family, formulation, "nvmath_cudss_float32")
-        if reference_key not in solution_fields or candidate_key not in solution_fields:
+        if reference_key not in solution_fields:
             continue
-        if (
-            field_name not in solution_fields[reference_key]
-            or field_name not in solution_fields[candidate_key]
-        ):
+        if field_name not in solution_fields[reference_key]:
             continue
         reference = np.asarray(solution_fields[reference_key][field_name], dtype=float)
-        candidate = np.asarray(solution_fields[candidate_key][field_name], dtype=float)
-        difference_arrays.append(candidate - reference)
+        for backend_label in reduced_precision_backend_labels:
+            candidate_key = (method_family, formulation, backend_label)
+            if candidate_key not in solution_fields:
+                continue
+            if field_name not in solution_fields[candidate_key]:
+                continue
+            candidate = np.asarray(
+                solution_fields[candidate_key][field_name], dtype=float
+            )
+            difference_arrays.append(candidate - reference)
     return difference_arrays
 
 
@@ -1273,32 +1358,38 @@ def plot_field_comparison(
     candidate_rows: list[tuple[str, np.ndarray, str, tuple[str, str, str] | None]] = [
         (f"reference\n{reference_label}", reference, "field", reference_key)
     ]
-    for backend_label in ("nvmath_cudss_float64", "nvmath_cudss_float32"):
+    for backend_label in comparison_backend_labels:
         key = (method_family, formulation, backend_label)
         if key in solution_fields and field_name in solution_fields[key]:
             candidate_rows.append(
                 (
-                    backend_label.replace("nvmath_cudss_", "cuDSS "),
+                    display_backend_label(backend_label),
                     np.asarray(solution_fields[key][field_name], dtype=float),
                     "field",
                     key,
                 )
             )
 
-    float32_key = (method_family, formulation, "nvmath_cudss_float32")
-    if float32_key in solution_fields and field_name in solution_fields[float32_key]:
+    for backend_label in reduced_precision_backend_labels:
+        float32_key = (method_family, formulation, backend_label)
+        if (
+            float32_key not in solution_fields
+            or field_name not in solution_fields[float32_key]
+        ):
+            continue
         float32_values = np.asarray(
             solution_fields[float32_key][field_name], dtype=float
         )
+        short_label = display_backend_label(backend_label)
         candidate_rows.extend(
             [
                 (
-                    "|cuDSS float32 - ref|",
+                    f"|{short_label} - ref|",
                     np.abs(float32_values - reference),
                     "error",
                     None,
                 ),
-                ("cuDSS float32 - ref", float32_values - reference, "diff", None),
+                (f"{short_label} - ref", float32_values - reference, "diff", None),
             ]
         )
 
@@ -1380,7 +1471,7 @@ for (
     reference_key = (method_family, formulation, reference_label)
     if reference_key not in solution_fields:
         continue
-    for backend_label in ("nvmath_cudss_float64", "nvmath_cudss_float32"):
+    for backend_label in comparison_backend_labels:
         candidate_key = (method_family, formulation, backend_label)
         if candidate_key not in solution_fields:
             continue
