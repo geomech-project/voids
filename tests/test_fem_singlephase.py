@@ -88,6 +88,7 @@ def test_fenics_solver_options_direct_lu_builder() -> None:
 
     assert options.linear_backend == "petsc"
     assert options.solver_preset == "direct_reference"
+    assert options.linear_system_dtype == "float64"
     assert options.petsc_options == {
         "ksp_type": "preonly",
         "pc_type": "lu",
@@ -109,6 +110,10 @@ def test_fenics_solver_options_direct_lu_builder() -> None:
     assert FEniCSSolverOptions.scipy_direct().solver_preset == "direct_reference"
     assert FEniCSSolverOptions.superlu_direct().linear_backend == "superlu"
     assert FEniCSSolverOptions.superlu_direct().solver_preset == "direct_reference"
+    assert (
+        FEniCSSolverOptions.superlu_direct(linear_system_dtype="float32").linear_system_dtype
+        == "float32"
+    )
     tuned_superlu = FEniCSSolverOptions.superlu_direct(
         permc_spec="COLAMD",
         diag_pivot_thresh=0.0,
@@ -126,6 +131,10 @@ def test_fenics_solver_options_direct_lu_builder() -> None:
     }
     assert FEniCSSolverOptions.umfpack_direct().linear_backend == "umfpack"
     assert FEniCSSolverOptions.umfpack_direct().solver_preset == "direct_reference"
+    assert (
+        FEniCSSolverOptions.umfpack_direct(linear_system_dtype="float32").linear_system_dtype
+        == "float32"
+    )
     tuned_umfpack = FEniCSSolverOptions.umfpack_direct(
         ordering="metis_guard",
         strategy="unsymmetric",
@@ -138,6 +147,10 @@ def test_fenics_solver_options_direct_lu_builder() -> None:
     }
     assert FEniCSSolverOptions.pardiso_direct().linear_backend == "pardiso"
     assert FEniCSSolverOptions.pardiso_direct().solver_preset == "direct_reference"
+    assert (
+        FEniCSSolverOptions.pardiso_direct(linear_system_dtype="float32").linear_system_dtype
+        == "float32"
+    )
     assert FEniCSSolverOptions.nvmath_cudss_direct().linear_backend == "nvmath_cudss"
     assert FEniCSSolverOptions.nvmath_cudss_direct().solver_preset == "direct_reference"
     cudss_options = FEniCSSolverOptions.nvmath_cudss_direct(
@@ -153,6 +166,8 @@ def test_fenics_solver_options_direct_lu_builder() -> None:
         "device_ids": (0,),
         "residual_rtol": 1.0e-8,
     }
+    assert cudss_options.linear_system_dtype == "float64"
+    assert FEniCSSolverOptions.nvmath_cudss_direct(dtype="float32").linear_system_dtype == "float32"
 
 
 def test_fenics_solver_options_parallel_and_iterative_presets() -> None:

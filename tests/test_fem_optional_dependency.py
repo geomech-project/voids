@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from scipy import sparse
 
 from voids.fem.singlephase import FEMMapProblem, _common
 from voids.fem.singlephase import solve_brinkman_usfem
@@ -73,6 +74,11 @@ def test_fem_auto_linear_backend_uses_scipy_when_windows_lacks_petsc(
 def test_fem_linear_backend_rejects_unknown_name() -> None:
     with pytest.raises(ValueError, match="linear_backend must be one of"):
         _common._resolve_linear_backend("not-a-backend", SimpleNamespace())  # type: ignore[arg-type]
+
+
+def test_fem_linear_system_dtype_rejects_unknown_value() -> None:
+    with pytest.raises(ValueError, match="linear_system_dtype"):
+        _common._resolve_fem_linear_system_dtype("float16")
 
 
 def test_fem_thread_environment_metadata_reports_solver_relevant_vars(
@@ -525,6 +531,72 @@ def test_superlu_fem_backend_dispatches_tuned_controls(
         "options": {"Equil": False},
     }
     assert np.array_equal(calls["rhs"], np.array([1.0]))
+
+
+def test_superlu_fem_backend_casts_serial_system_to_float32() -> None:
+    class FakeMatrix:
+        def scatter_reverse(self) -> None:
+            return None
+
+        def to_scipy(self) -> Any:
+            return sparse.csr_matrix(np.array([[2.0]], dtype=np.float64))
+
+    vector = SimpleNamespace(
+        array=np.array([4.0], dtype=np.float64),
+        scatter_reverse=lambda _mode: None,
+    )
+    solution = SimpleNamespace(
+        x=SimpleNamespace(
+            array=np.zeros(1, dtype=np.float64),
+            scatter_forward=lambda: None,
+        )
+    )
+    fem = SimpleNamespace(
+        form=lambda value: value,
+        assemble_matrix=lambda _form, bcs: FakeMatrix(),
+        assemble_vector=lambda _rhs: vector,
+        apply_lifting=lambda _array, _forms, _bcs: None,
+        set_bc=lambda _array, _bcs: None,
+        Function=lambda _space: solution,
+    )
+    la = SimpleNamespace(InsertMode=SimpleNamespace(add="add"))
+    context = SimpleNamespace(
+        mesh=SimpleNamespace(comm=SimpleNamespace(size=1)),
+        api=SimpleNamespace(fem=fem, la=la),
+    )
+
+    _, _, metadata = _common._solve_mixed_problem_serial_direct(
+        context,
+        mixed_space=None,
+        form=None,
+        rhs=None,
+        bcs=[],
+        linear_backend="superlu",
+        linear_system_dtype="float32",
+    )
+
+    assert solution.x.array[0] == pytest.approx(2.0)
+    assert metadata["serial_sparse_linear_system_dtype"] == "float32"
+    assert metadata["serial_sparse_matrix_value_dtype"] == "float32"
+    assert metadata["serial_sparse_rhs_dtype"] == "float32"
+
+
+@pytest.mark.parametrize("linear_backend", ["umfpack", "pardiso"])
+def test_serial_fem_backend_rejects_float32_for_double_only_wrappers(
+    linear_backend: str,
+) -> None:
+    context = SimpleNamespace(mesh=SimpleNamespace(comm=SimpleNamespace(size=1)))
+
+    with pytest.raises(ValueError, match="supports float64 only"):
+        _common._solve_mixed_problem_serial_direct(
+            context,
+            mixed_space=None,
+            form=None,
+            rhs=None,
+            bcs=[],
+            linear_backend=linear_backend,  # type: ignore[arg-type]
+            linear_system_dtype="float32",
+        )
 
 
 @pytest.mark.parametrize(
