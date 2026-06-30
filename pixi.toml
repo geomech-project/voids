@@ -91,6 +91,9 @@ scikit-umfpack = "*"
 [feature.solvers.pypi-dependencies]
 pyamg = ">=5.3"
 
+[feature.solvers.target.linux-64.pypi-dependencies]
+torch-sla = {version = "*", extras = ["all"]}
+
 [feature.docs.dependencies]
 ruff = ">=0.6"
 
