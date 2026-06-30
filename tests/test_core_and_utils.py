@@ -103,7 +103,7 @@ def test_scipy_backend_exports_expected_callables() -> None:
     assert SCIPY.gmres is not None
 
 
-@pytest.mark.parametrize("method", ["direct", "cg", "gmres"])
+@pytest.mark.parametrize("method", ["direct", "superlu", "cg", "gmres"])
 def test_solve_linear_system_supports_all_methods(method: str) -> None:
     """Test all supported linear-solver backends on an identity system."""
 
@@ -115,6 +115,39 @@ def test_solve_linear_system_supports_all_methods(method: str) -> None:
     assert np.allclose(x, b)
     assert info["method"] == method
     assert info["info"] == 0
+    assert info["linear_system_dtype"] == "float64"
+
+
+@pytest.mark.parametrize("method", ["direct", "superlu", "cg", "gmres"])
+def test_solve_linear_system_supports_cpu_single_precision(method: str) -> None:
+    """Portable CPU sparse backends can factor or iterate on float32 values."""
+
+    A = sparse.csr_matrix(np.array([[3.0, -1.0], [-1.0, 3.0]], dtype=np.float64))
+    b = np.array([2.0, 4.0], dtype=np.float64)
+
+    x, info = solve_linear_system(
+        A,
+        b,
+        method=method,
+        solver_parameters={"dtype": "float32"},
+    )
+
+    assert x.dtype == np.dtype("float32")
+    assert np.allclose(A @ x, b, rtol=5.0e-6, atol=5.0e-7)
+    assert info["method"] == method
+    assert info["info"] == 0
+    assert info["linear_system_dtype"] == "float32"
+
+
+def test_solve_linear_system_rejects_unsupported_dtype() -> None:
+    """Precision selection is intentionally limited to real single/double values."""
+
+    with pytest.raises(ValueError, match="dtype must be 'float32' or 'float64'"):
+        solve_linear_system(
+            sparse.csr_matrix(np.eye(2)),
+            np.array([1.0, 2.0]),
+            solver_parameters={"dtype": "float16"},
+        )
 
 
 def test_solve_linear_system_umfpack_available_or_raises_import_error() -> None:
@@ -317,7 +350,25 @@ def test_solve_linear_system_pardiso_success_metadata_with_fake_backend(
     x, info = solve_linear_system(A, b, method="pardiso")
 
     assert np.allclose(A @ x, b)
-    assert info == {"method": "pardiso", "backend": "pypardiso", "info": 0}
+    assert info == {
+        "method": "pardiso",
+        "backend": "pypardiso",
+        "info": 0,
+        "linear_system_dtype": "float64",
+    }
+
+
+@pytest.mark.parametrize("method", ["umfpack", "pardiso"])
+def test_solve_linear_system_rejects_float32_for_double_only_wrappers(method: str) -> None:
+    """Some optional CPU wrappers expose only double precision at runtime."""
+
+    with pytest.raises(ValueError, match="supports float64 only"):
+        solve_linear_system(
+            sparse.csr_matrix(np.eye(2)),
+            np.array([1.0, 2.0]),
+            method=method,
+            solver_parameters={"dtype": "float32"},
+        )
 
 
 def test_solve_linear_system_nvmath_cudss_dispatches_shared_backend(
