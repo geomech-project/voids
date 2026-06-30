@@ -320,6 +320,47 @@ def test_solve_linear_system_pardiso_success_metadata_with_fake_backend(
     assert info == {"method": "pardiso", "backend": "pypardiso", "info": 0}
 
 
+def test_solve_linear_system_nvmath_cudss_dispatches_shared_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CUDA direct backend is exposed through the shared sparse solver API."""
+
+    calls: dict[str, object] = {}
+
+    def fake_solve_nvmath_cudss(
+        matrix: sparse.spmatrix,
+        rhs: np.ndarray,
+        *,
+        controls: object = None,
+    ) -> tuple[np.ndarray, dict[str, object]]:
+        calls["matrix_format"] = matrix.getformat()
+        calls["rhs"] = rhs.copy()
+        calls["controls"] = dict(controls or {})
+        return np.asarray(sparse.linalg.spsolve(matrix, rhs), dtype=float), {
+            "serial_sparse_nvmath_cudss_relative_residual": 0.0,
+        }
+
+    monkeypatch.setattr(solve_mod, "solve_nvmath_cudss", fake_solve_nvmath_cudss)
+
+    A = sparse.csr_matrix(np.array([[3.0, -1.0], [-1.0, 3.0]]))
+    b = np.array([2.0, 4.0])
+    x, info = solve_linear_system(
+        A,
+        b,
+        method="nvmath_cudss",
+        solver_parameters={"device_ids": (0,), "dtype": "float64"},
+    )
+
+    assert np.allclose(A @ x, b)
+    assert calls["matrix_format"] == "csr"
+    assert np.array_equal(calls["rhs"], b)
+    assert calls["controls"] == {"device_ids": (0,), "dtype": "float64"}
+    assert info["method"] == "nvmath_cudss"
+    assert info["backend"] == "nvmath.bindings.cudss"
+    assert info["info"] == 0
+    assert info["serial_sparse_nvmath_cudss_relative_residual"] == 0.0
+
+
 def test_solve_linear_system_umfpack_produces_same_result_as_direct() -> None:
     """UMFPACK matches the default direct sparse solve on a small SPD system."""
 

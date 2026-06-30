@@ -6,6 +6,8 @@ import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import LinearOperator, cg, gmres, spsolve
 
+from voids.linalg.cudss import solve_nvmath_cudss
+
 
 class _PyAMGHierarchy(Protocol):
     """Minimal typed surface used from a PyAMG multilevel hierarchy."""
@@ -59,7 +61,15 @@ class _UmfpackSolver(Protocol):
 
 
 SolverParameterValue: TypeAlias = (
-    str | float | int | bool | dict[str, object] | LinearOperator[np.float64]
+    str
+    | float
+    | int
+    | bool
+    | None
+    | tuple[int, ...]
+    | list[int]
+    | dict[str, object]
+    | LinearOperator[np.float64]
 )
 SolverParameters: TypeAlias = dict[str, SolverParameterValue]
 
@@ -162,7 +172,7 @@ def solve_linear_system(
         Right-hand-side vector.
     method :
         Solver backend. Supported values are ``"direct"``, ``"umfpack"``,
-        ``"pardiso"``, ``"cg"``, and ``"gmres"``.
+        ``"pardiso"``, ``"nvmath_cudss"``, ``"cg"``, and ``"gmres"``.
     solver_parameters :
         Optional backend-specific solver options. For SciPy Krylov methods this
         maps directly to supported keyword arguments such as ``rtol``,
@@ -188,7 +198,10 @@ def solve_linear_system(
     The ``"direct"`` method uses :func:`scipy.sparse.linalg.spsolve`. The
     ``"umfpack"`` method requests SuiteSparse/UMFPACK explicitly through
     ``scikit-umfpack``. The ``"pardiso"`` method uses Intel MKL PARDISO through
-    ``pypardiso``; this is typically only available on Linux systems.
+    ``pypardiso``; this is typically only available on Linux systems. The
+    ``"nvmath_cudss"`` method uses the optional nvmath/cuDSS CUDA direct solver
+    and accepts controls such as ``{"device_ids": 0, "dtype": "float64"}`` or
+    ``{"device_ids": (0, 1), "dtype": "float64"}``.
     """
 
     if method == "direct":
@@ -213,6 +226,18 @@ def solve_linear_system(
         pardiso_spsolve = _import_pypardiso()
         x = pardiso_spsolve(A, b)
         return np.asarray(x, dtype=float), {"method": method, "backend": "pypardiso", "info": 0}
+    if method == "nvmath_cudss":
+        x, metadata = solve_nvmath_cudss(
+            A,
+            np.ascontiguousarray(np.asarray(b, dtype=float)),
+            controls=dict(solver_parameters or {}),
+        )
+        return np.asarray(x, dtype=float), {
+            "method": method,
+            "backend": "nvmath.bindings.cudss",
+            "info": 0,
+            **metadata,
+        }
     if method == "cg":
         parameters = dict(solver_parameters or {})
         preconditioner, preconditioner_info = _build_preconditioner(A, solver_parameters=parameters)
