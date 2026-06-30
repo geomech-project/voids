@@ -28,10 +28,13 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.spatial import cKDTree
 
 try:
+    from IPython.display import Image as IPythonImage
     from IPython.display import display
 except ImportError:  # pragma: no cover - notebook convenience fallback
+    IPythonImage = None
     display = print
 
 benchmark_thread_count = int(
@@ -71,8 +74,35 @@ from voids.physics.singlephase import (
     SinglePhaseOptions,
     solve as solve_pnm_singlephase,
 )
+from voids.visualization.fields import (
+    reconstruct_tpfa_cell_velocity,
+    sample_dolfinx_function_on_grid,
+)
 
 plt.ioff()
+
+
+def save_and_display_figure(fig, figure_path) -> None:
+    fig.savefig(figure_path, dpi=180)
+    if IPythonImage is None:
+        display(fig)
+    else:
+        display(IPythonImage(filename=str(figure_path)))
+    plt.close(fig)
+
+
+midplane_specs = [
+    ("x-mid", 0, ("y", "z")),
+    ("y-mid", 1, ("x", "z")),
+    ("z-mid", 2, ("x", "y")),
+]
+
+
+def midplane(values: np.ndarray, plane_axis: int) -> np.ndarray:
+    selector: list[slice | int] = [slice(None)] * values.ndim
+    selector[plane_axis] = values.shape[plane_axis] // 2
+    return np.asarray(values[tuple(selector)], dtype=float)
+
 
 # %%
 # User-editable inputs
@@ -81,7 +111,8 @@ output_dir = (
 )
 output_dir.mkdir(parents=True, exist_ok=True)
 output_prefix = (
-    "gpu_sparse_solver_comparison_image300_block10_map30_extracted_pnm_cudss_all_gpus"
+    "gpu_sparse_solver_comparison_image300_phi025_voxel5um_block10_map30_"
+    "extracted_pnm_cudss_all_gpus"
 )
 
 run_benchmark = True
@@ -90,9 +121,10 @@ pressure_inlet = 1.0
 pressure_outlet = 0.0
 viscosity = 1.0
 
-# Default to a 300^3 synthetic binary image, block-averaged with 10^3 voxel
-# blocks into a 30^3 continuum map. The pore network is extracted from the
-# original 300^3 binary image, not from the coarse continuum map.
+# Default to a 300^3 synthetic binary image at 5 um voxel spacing,
+# block-averaged with 10^3 voxel blocks into a 30^3 continuum map. The pore
+# network is extracted from the original 300^3 binary image, not from the coarse
+# continuum map.
 image_shape = (300, 300, 300)
 map_shape = (30, 30, 30)
 fine_voxels_per_cell = tuple(
@@ -103,16 +135,17 @@ if any(
     image_cells % map_cells for image_cells, map_cells in zip(image_shape, map_shape)
 ):
     raise ValueError("image_shape entries must be divisible by map_shape entries")
-synthetic_porosity = 0.35
+synthetic_porosity = 0.25
 synthetic_blobiness_primary = 1.0
 synthetic_blobiness_secondary = 3.0
 synthetic_primary_weight = 0.65
 synthetic_seed_start = 47_000
 synthetic_max_tries = 64
-cell_size = 1.0
+fine_voxel_size = 5.0e-6
+cell_size = fine_voxel_size * float(fine_voxels_per_cell[0])
 kozeny_constant = 180.0
-permeability_floor = 1.0e-6
-permeability_cap = 5.0e-2
+permeability_floor = 1.0e-6 * cell_size**2
+permeability_cap = 5.0e-2 * cell_size**2
 porosity_floor = 5.0e-2
 gpu_device_ids: int | tuple[int, ...] | str = "all"
 gpu_dtypes = ("float64", "float32")
@@ -177,7 +210,7 @@ def make_synthetic_inputs(
         primary_weight=synthetic_primary_weight,
         periodic=True,
     )
-    voxel_size = tuple(float(cell_size) / v for v in fine_voxels_per_cell)
+    voxel_size = (float(fine_voxel_size),) * len(fine_voxels_per_cell)
     porosity_map = porosity_map_from_binary(
         void_image,
         block_shape=fine_voxels_per_cell,
@@ -192,6 +225,8 @@ def make_synthetic_inputs(
             "blobiness_secondary": float(synthetic_blobiness_secondary),
             "primary_weight": float(synthetic_primary_weight),
             "fine_voxels_per_cell": fine_voxels_per_cell,
+            "fine_voxel_size_m": float(fine_voxel_size),
+            "map_cell_size_m": float(cell_size),
         },
     )
     raw_permeability_map = permeability_map_from_porosity(
@@ -224,6 +259,10 @@ def make_synthetic_inputs(
         "synthetic_seed_used": int(seed_used),
         "synthetic_target_porosity": float(synthetic_porosity),
         "synthetic_binary_porosity": float(np.mean(void_image)),
+        "fine_voxel_size_m": float(fine_voxel_size),
+        "fine_voxel_size_um": float(fine_voxel_size * 1.0e6),
+        "map_cell_size_m": float(cell_size),
+        "map_cell_size_um": float(cell_size * 1.0e6),
         "map_mean_porosity": float(porosity_map.mean_porosity),
         "map_min_porosity": float(np.min(porosity_map.values)),
         "map_max_porosity": float(np.max(porosity_map.values)),
@@ -260,6 +299,86 @@ print(
     flush=True,
 )
 tpfa_permeability_map = fem_problem.permeability_map
+
+
+# %% [markdown]
+# ## Synthetic Medium And Maps
+#
+# The original binary image is shown before network extraction or continuum
+# solves. The porosity and permeability maps are the 30³ block-averaged fields
+# used by TPFA/FEM.
+
+# %%
+def plot_synthetic_medium_mid_slices() -> None:
+    porosity_values = np.asarray(fem_problem.porosity_map.values, dtype=float)
+    permeability_values = np.asarray(tpfa_permeability_map.values, dtype=float)
+    log_permeability = np.log10(np.maximum(permeability_values, permeability_floor))
+    fine_voxel_label = f"{fine_voxel_size * 1.0e6:.3g} um"
+    map_cell_label = f"{cell_size * 1.0e6:.3g} um"
+    rows = [
+        (
+            f"binary void image\n300^3 voxels, {fine_voxel_label}",
+            np.asarray(synthetic_void_image, dtype=float),
+            "gray_r",
+            0.0,
+            1.0,
+        ),
+        (
+            f"porosity map\n30^3 cells, {map_cell_label}",
+            porosity_values,
+            "viridis",
+            0.0,
+            1.0,
+        ),
+        (
+            "log10 permeability map\n30^3 cells, m^2",
+            log_permeability,
+            "magma",
+            float(np.min(log_permeability)),
+            float(np.max(log_permeability)),
+        ),
+    ]
+    fig, axes = plt.subplots(
+        len(rows),
+        len(midplane_specs),
+        figsize=(12.0, 8.2),
+        constrained_layout=True,
+        squeeze=False,
+    )
+    for row_index, (row_label, values, cmap, vmin, vmax) in enumerate(rows):
+        images = []
+        for column_index, (plane_label, plane_axis, in_plane_axes) in enumerate(
+            midplane_specs
+        ):
+            ax = axes[row_index, column_index]
+            image = midplane(values, plane_axis).T
+            im = ax.imshow(
+                image,
+                origin="lower",
+                cmap=cmap,
+                vmin=vmin,
+                vmax=vmax,
+                interpolation="nearest",
+            )
+            images.append(im)
+            if row_index == 0:
+                ax.set_title(plane_label)
+            ax.set_xlabel(in_plane_axes[0])
+            ax.set_ylabel(
+                f"{row_label}\n{in_plane_axes[1]}"
+                if column_index == 0
+                else in_plane_axes[1]
+            )
+        fig.colorbar(images[-1], ax=axes[row_index, :].tolist(), shrink=0.85)
+    fig.suptitle("Synthetic porous medium and continuum maps")
+    figure_path = output_dir / f"{output_prefix}_synthetic_medium_mid_slices.png"
+    save_and_display_figure(fig, figure_path)
+    print(f"Saved synthetic medium plot: {figure_path}")
+
+
+plot_synthetic_medium_mid_slices()
+
+# %%
 print(
     f"Extracting PNM network from original image {image_shape} "
     f"with backend={pnm_extraction_backend!r}...",
@@ -268,7 +387,7 @@ print(
 pnm_extraction_start = time.perf_counter()
 pnm_extraction = extract_spanning_pore_network(
     synthetic_void_image,
-    voxel_size=float(cell_size) / float(fine_voxels_per_cell[0]),
+    voxel_size=float(fine_voxel_size),
     backend=pnm_extraction_backend,
     flow_axis=flow_axis,
     extraction_kwargs=dict(pnm_extraction_kwargs),
@@ -334,6 +453,122 @@ def metadata_value(metadata: dict[str, Any], key: str) -> object:
     return metadata.get(key, "")
 
 
+def grid_cell_center_points(
+    shape: tuple[int, ...],
+    cell_size_values: tuple[float, ...],
+    origin_values: tuple[float, ...],
+) -> np.ndarray:
+    axes = [
+        origin_values[axis]
+        + (np.arange(shape[axis], dtype=float) + 0.5) * cell_size_values[axis]
+        for axis in range(len(shape))
+    ]
+    meshgrid = np.meshgrid(*axes, indexing="ij")
+    return np.column_stack([component.reshape(-1, order="C") for component in meshgrid])
+
+
+field_grid_shape = tuple(int(value) for value in tpfa_permeability_map.shape)
+field_grid_cell_size = tuple(float(value) for value in tpfa_permeability_map.cell_size)
+field_grid_origin = tuple(float(value) for value in tpfa_permeability_map.origin)
+field_grid_points = grid_cell_center_points(
+    field_grid_shape,
+    field_grid_cell_size,
+    field_grid_origin,
+)
+flow_axis_index = axis_index(flow_axis)
+solution_fields: dict[tuple[str, str, str], dict[str, np.ndarray | str]] = {}
+
+
+def store_solution_field(
+    *,
+    method_family: str,
+    formulation: str,
+    backend_label: str,
+    pressure: np.ndarray,
+    velocity: np.ndarray | None = None,
+    note: str = "",
+) -> None:
+    stored: dict[str, np.ndarray | str] = {
+        "pressure": np.asarray(pressure, dtype=float).copy(),
+        "note": note,
+    }
+    if velocity is not None:
+        velocity_values = np.asarray(velocity, dtype=float)
+        stored["velocity_vector"] = velocity_values.copy()
+        stored["velocity_x"] = velocity_values[flow_axis_index].copy()
+    solution_fields[(method_family, formulation, backend_label)] = stored
+
+
+def pnm_pressure_on_common_grid(pore_pressure: np.ndarray) -> np.ndarray:
+    tree = cKDTree(np.asarray(network.pore_coords, dtype=float))
+    _, nearest = tree.query(field_grid_points)
+    return np.asarray(pore_pressure, dtype=float)[nearest].reshape(
+        field_grid_shape, order="C"
+    )
+
+
+def capture_pnm_fields(label: str, result: Any) -> str:
+    store_solution_field(
+        method_family="PNM",
+        formulation="pore_network",
+        backend_label=label,
+        pressure=pnm_pressure_on_common_grid(result.pore_pressure),
+        note="nearest-pore projection to the common continuum grid",
+    )
+    return "ok"
+
+
+def capture_tpfa_fields(label: str, result: Any) -> str:
+    velocity = reconstruct_tpfa_cell_velocity(
+        result.pressure,
+        tpfa_permeability_map,
+        flow_axis=flow_axis,
+        viscosity=viscosity,
+        pressure_inlet=pressure_inlet,
+        pressure_outlet=pressure_outlet,
+    )
+    store_solution_field(
+        method_family="TPFA",
+        formulation="tpfa_darcy",
+        backend_label=label,
+        pressure=result.pressure,
+        velocity=velocity,
+    )
+    return "ok"
+
+
+def capture_fem_fields(
+    formulation: str, label: str, result: FEMSinglePhaseResult
+) -> str:
+    pressure = sample_dolfinx_function_on_grid(
+        result.pressure,
+        shape=field_grid_shape,
+        cell_size=field_grid_cell_size,
+        origin=field_grid_origin,
+    )
+    velocity = sample_dolfinx_function_on_grid(
+        result.velocity,
+        shape=field_grid_shape,
+        cell_size=field_grid_cell_size,
+        origin=field_grid_origin,
+    )
+    store_solution_field(
+        method_family="FEM",
+        formulation=formulation,
+        backend_label=label,
+        pressure=pressure,
+        velocity=velocity,
+    )
+    return "ok"
+
+
+def capture_field_status(capture: Callable[[], str]) -> str:
+    try:
+        return capture()
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
+
+
 def run_pnm_case(
     label: str, solver: str, solver_parameters: dict[str, object]
 ) -> dict[str, object]:
@@ -364,6 +599,7 @@ def run_pnm_case(
                 "warnings": "; ".join(str(item.message) for item in caught),
             }
     solver_info = dict(result.solver_info)
+    field_capture = capture_field_status(lambda: capture_pnm_fields(label, result))
     return {
         "method_family": "PNM",
         "formulation": "pore_network",
@@ -389,6 +625,7 @@ def run_pnm_case(
             "serial_sparse_nvmath_cudss_device_names", ""
         ),
         "metadata_json": json.dumps(solver_info, sort_keys=True, default=str),
+        "field_capture": field_capture,
         "warning_count": len(caught),
         "warnings": "; ".join(str(item.message) for item in caught),
     }
@@ -424,6 +661,7 @@ def run_tpfa_case(
                 "warnings": "; ".join(str(item.message) for item in caught),
             }
     solver_info = dict(result.solver_info)
+    field_capture = capture_field_status(lambda: capture_tpfa_fields(label, result))
     return {
         "method_family": "TPFA",
         "formulation": "tpfa_darcy",
@@ -450,6 +688,7 @@ def run_tpfa_case(
             "serial_sparse_nvmath_cudss_device_names", ""
         ),
         "metadata_json": json.dumps(solver_info, sort_keys=True, default=str),
+        "field_capture": field_capture,
         "warning_count": len(caught),
         "warnings": "; ".join(str(item.message) for item in caught),
     }
@@ -490,6 +729,9 @@ def run_fem_case(
                 "warnings": "; ".join(str(item.message) for item in caught),
             }
     metadata = dict(result.metadata)
+    field_capture = capture_field_status(
+        lambda: capture_fem_fields(formulation, label, result)
+    )
     return {
         "method_family": "FEM",
         "formulation": formulation,
@@ -518,6 +760,7 @@ def run_fem_case(
             "serial_sparse_nvmath_cudss_device_names", ""
         ),
         "metadata_json": json.dumps(metadata, sort_keys=True, default=str),
+        "field_capture": field_capture,
         "warning_count": len(caught),
         "warnings": "; ".join(str(item.message) for item in caught),
     }
@@ -796,8 +1039,7 @@ else:
     ax.set_xticklabels(plot_df["label"], rotation=70, ha="right")
     ax.grid(axis="y", which="both", alpha=0.25)
     timing_plot_path = output_dir / f"{output_prefix}_wall_time.png"
-    fig.savefig(timing_plot_path, dpi=180)
-    plt.close(fig)
+    save_and_display_figure(fig, timing_plot_path)
     print(f"Saved wall-time plot: {timing_plot_path}")
 
 # %%
@@ -825,6 +1067,393 @@ else:
     ax.set_xticklabels(accuracy_df["label"], rotation=70, ha="right")
     ax.grid(axis="y", which="both", alpha=0.25)
     accuracy_plot_path = output_dir / f"{output_prefix}_k_relative_error.png"
-    fig.savefig(accuracy_plot_path, dpi=180)
-    plt.close(fig)
+    save_and_display_figure(fig, accuracy_plot_path)
     print(f"Saved K parity plot: {accuracy_plot_path}")
+
+# %% [markdown]
+# ## Field Comparisons
+#
+# Successful rows are also sampled onto the common 30³ cell-centered grid. TPFA
+# pressure already lives on that grid, FEM pressure and velocity are sampled at
+# cell centers, and PNM pore pressures are projected to the grid by nearest pore.
+# Each comparison plot shows the CPU reference, cuDSS float64, cuDSS float32,
+# the absolute float32 error, and the signed float32-reference difference.
+
+# %%
+field_plot_dir = output_dir / f"{output_prefix}_field_plots"
+field_plot_dir.mkdir(parents=True, exist_ok=True)
+field_names = ("pressure", "velocity_x")
+field_titles = {
+    "pressure": "pressure",
+    "velocity_x": f"{flow_axis}-velocity component",
+}
+
+
+def finite_values(values: np.ndarray) -> np.ndarray:
+    flat = np.asarray(values, dtype=float).ravel()
+    return flat[np.isfinite(flat)]
+
+
+def robust_limits(arrays: list[np.ndarray]) -> tuple[float, float]:
+    finite_parts = [finite_values(array) for array in arrays]
+    finite_parts = [part for part in finite_parts if part.size]
+    if not finite_parts:
+        return 0.0, 1.0
+    values = np.concatenate(finite_parts)
+    if values.size == 0:
+        return 0.0, 1.0
+    vmin = float(np.min(values))
+    vmax = float(np.max(values))
+    if vmin == vmax:
+        pad = max(abs(vmin), 1.0) * 1.0e-12
+        return vmin - pad, vmax + pad
+    return vmin, vmax
+
+
+def positive_limit(arrays: list[np.ndarray]) -> float:
+    finite_parts = [finite_values(array) for array in arrays]
+    finite_parts = [part for part in finite_parts if part.size]
+    if not finite_parts:
+        return 1.0
+    vmax = float(np.max(np.concatenate(finite_parts)))
+    return vmax if vmax > 0.0 else 1.0e-30
+
+
+def symmetric_abs_limit(arrays: list[np.ndarray]) -> float:
+    finite_parts = [finite_values(array) for array in arrays]
+    finite_parts = [part for part in finite_parts if part.size]
+    if not finite_parts:
+        return 1.0
+    vmax = float(np.max(np.abs(np.concatenate(finite_parts))))
+    return vmax if vmax > 0.0 else 1.0e-30
+
+
+def captured_field_arrays(field_name: str) -> list[np.ndarray]:
+    return [
+        np.asarray(fields[field_name], dtype=float)
+        for fields in solution_fields.values()
+        if field_name in fields
+    ]
+
+
+def float32_difference_arrays(field_name: str) -> list[np.ndarray]:
+    difference_arrays: list[np.ndarray] = []
+    for (
+        method_family,
+        formulation,
+    ), reference_label in reference_label_by_formulation.items():
+        reference_key = (method_family, formulation, reference_label)
+        candidate_key = (method_family, formulation, "nvmath_cudss_float32")
+        if reference_key not in solution_fields or candidate_key not in solution_fields:
+            continue
+        if (
+            field_name not in solution_fields[reference_key]
+            or field_name not in solution_fields[candidate_key]
+        ):
+            continue
+        reference = np.asarray(solution_fields[reference_key][field_name], dtype=float)
+        candidate = np.asarray(solution_fields[candidate_key][field_name], dtype=float)
+        difference_arrays.append(candidate - reference)
+    return difference_arrays
+
+
+global_field_limits = {
+    field_name: robust_limits(captured_field_arrays(field_name))
+    for field_name in field_names
+}
+global_abs_error_limits = {
+    field_name: positive_limit(
+        [np.abs(array) for array in float32_difference_arrays(field_name)]
+    )
+    for field_name in field_names
+}
+global_signed_diff_limits = {
+    field_name: symmetric_abs_limit(float32_difference_arrays(field_name))
+    for field_name in field_names
+}
+
+field_color_scale_rows = [
+    {
+        "field": field_name,
+        "field_vmin": global_field_limits[field_name][0],
+        "field_vmax": global_field_limits[field_name][1],
+        "abs_error_vmin": 0.0,
+        "abs_error_vmax": global_abs_error_limits[field_name],
+        "signed_diff_vmin": -global_signed_diff_limits[field_name],
+        "signed_diff_vmax": global_signed_diff_limits[field_name],
+    }
+    for field_name in field_names
+]
+field_color_scales = pd.DataFrame(field_color_scale_rows)
+field_color_scale_path = output_dir / f"{output_prefix}_field_color_scales.csv"
+field_color_scales.to_csv(field_color_scale_path, index=False)
+display(field_color_scales)
+print(f"Saved field color scales: {field_color_scale_path}")
+
+
+def relative_l2(candidate: np.ndarray, reference: np.ndarray) -> float:
+    mask = np.isfinite(candidate) & np.isfinite(reference)
+    if not np.any(mask):
+        return np.nan
+    numerator = float(np.linalg.norm(candidate[mask] - reference[mask]))
+    denominator = float(np.linalg.norm(reference[mask]))
+    return numerator / max(denominator, 1.0e-300)
+
+
+def relative_linf(candidate: np.ndarray, reference: np.ndarray) -> float:
+    mask = np.isfinite(candidate) & np.isfinite(reference)
+    if not np.any(mask):
+        return np.nan
+    numerator = float(np.max(np.abs(candidate[mask] - reference[mask])))
+    denominator = float(np.max(np.abs(reference[mask])))
+    return numerator / max(denominator, 1.0e-300)
+
+
+def overlay_velocity_streamlines(
+    ax,
+    fields: dict[str, np.ndarray | str],
+    *,
+    plane_axis: int,
+    in_plane_axes: tuple[str, str],
+) -> None:
+    velocity = fields.get("velocity_vector")
+    if not isinstance(velocity, np.ndarray):
+        return
+    velocity_values = np.asarray(velocity, dtype=float)
+    if velocity_values.ndim != len(field_grid_shape) + 1:
+        return
+    if velocity_values.shape[0] < len(field_grid_shape):
+        return
+
+    u_axis = axis_index(in_plane_axes[0])
+    v_axis = axis_index(in_plane_axes[1])
+    u = midplane(velocity_values[u_axis], plane_axis).T
+    v = midplane(velocity_values[v_axis], plane_axis).T
+    finite = np.isfinite(u) & np.isfinite(v)
+    if not np.any(finite):
+        return
+    u = np.where(finite, u, 0.0)
+    v = np.where(finite, v, 0.0)
+    if not np.any(np.hypot(u, v) > 0.0):
+        return
+
+    x_coords = np.arange(u.shape[1], dtype=float)
+    y_coords = np.arange(u.shape[0], dtype=float)
+    try:
+        ax.streamplot(
+            x_coords,
+            y_coords,
+            u,
+            v,
+            density=0.7,
+            color="black",
+            linewidth=0.45,
+            arrowsize=0.55,
+            minlength=0.2,
+        )
+    except ValueError:
+        return
+
+
+def plot_field_comparison(
+    *,
+    method_family: str,
+    formulation: str,
+    reference_label: str,
+    field_name: str,
+) -> None:
+    reference_key = (method_family, formulation, reference_label)
+    if reference_key not in solution_fields:
+        return
+    reference_fields = solution_fields[reference_key]
+    if field_name not in reference_fields:
+        return
+    reference = np.asarray(reference_fields[field_name], dtype=float)
+
+    candidate_rows: list[tuple[str, np.ndarray, str, tuple[str, str, str] | None]] = [
+        (f"reference\n{reference_label}", reference, "field", reference_key)
+    ]
+    for backend_label in ("nvmath_cudss_float64", "nvmath_cudss_float32"):
+        key = (method_family, formulation, backend_label)
+        if key in solution_fields and field_name in solution_fields[key]:
+            candidate_rows.append(
+                (
+                    backend_label.replace("nvmath_cudss_", "cuDSS "),
+                    np.asarray(solution_fields[key][field_name], dtype=float),
+                    "field",
+                    key,
+                )
+            )
+
+    float32_key = (method_family, formulation, "nvmath_cudss_float32")
+    if float32_key in solution_fields and field_name in solution_fields[float32_key]:
+        float32_values = np.asarray(
+            solution_fields[float32_key][field_name], dtype=float
+        )
+        candidate_rows.extend(
+            [
+                (
+                    "|cuDSS float32 - ref|",
+                    np.abs(float32_values - reference),
+                    "error",
+                    None,
+                ),
+                ("cuDSS float32 - ref", float32_values - reference, "diff", None),
+            ]
+        )
+
+    if len(candidate_rows) == 1:
+        return
+
+    field_vmin, field_vmax = global_field_limits[field_name]
+    nrows = len(candidate_rows)
+    fig, axes = plt.subplots(
+        nrows,
+        len(midplane_specs),
+        figsize=(4.0 * len(midplane_specs), 2.9 * nrows),
+        constrained_layout=True,
+        squeeze=False,
+    )
+    for row_index, (row_label, values, row_kind, source_key) in enumerate(
+        candidate_rows
+    ):
+        if row_kind == "field":
+            cmap = "viridis" if field_name == "pressure" else "coolwarm"
+            vmin, vmax = field_vmin, field_vmax
+        elif row_kind == "error":
+            cmap = "magma"
+            vmin = 0.0
+            vmax = global_abs_error_limits[field_name]
+        else:
+            cmap = "coolwarm"
+            max_abs = global_signed_diff_limits[field_name]
+            vmin, vmax = -max_abs, max_abs
+
+        images = []
+        for column_index, (plane_label, plane_axis, in_plane_axes) in enumerate(
+            midplane_specs
+        ):
+            ax = axes[row_index, column_index]
+            image = midplane(values, plane_axis).T
+            im = ax.imshow(image, origin="lower", cmap=cmap, vmin=vmin, vmax=vmax)
+            if (
+                field_name == "velocity_x"
+                and row_kind == "field"
+                and source_key is not None
+            ):
+                overlay_velocity_streamlines(
+                    ax,
+                    solution_fields[source_key],
+                    plane_axis=plane_axis,
+                    in_plane_axes=in_plane_axes,
+                )
+            images.append(im)
+            if row_index == 0:
+                ax.set_title(plane_label)
+            if column_index == 0:
+                ax.set_ylabel(row_label)
+            ax.set_xlabel(in_plane_axes[0])
+            ax.set_ylabel(
+                f"{row_label}\n{in_plane_axes[1]}"
+                if column_index == 0
+                else in_plane_axes[1]
+            )
+        fig.colorbar(images[-1], ax=axes[row_index, :].tolist(), shrink=0.85)
+
+    fig.suptitle(
+        f"{method_family} {formulation}: {field_titles[field_name]} mid-slices"
+    )
+    safe_field = field_name.replace("_", "-")
+    figure_path = (
+        field_plot_dir
+        / f"{method_family}_{formulation}_{safe_field}_field_comparison.png"
+    )
+    save_and_display_figure(fig, figure_path)
+    print(f"Saved field comparison plot: {figure_path}")
+
+
+field_error_rows: list[dict[str, object]] = []
+for (
+    method_family,
+    formulation,
+), reference_label in reference_label_by_formulation.items():
+    reference_key = (method_family, formulation, reference_label)
+    if reference_key not in solution_fields:
+        continue
+    for backend_label in ("nvmath_cudss_float64", "nvmath_cudss_float32"):
+        candidate_key = (method_family, formulation, backend_label)
+        if candidate_key not in solution_fields:
+            continue
+        for field_name in field_names:
+            if (
+                field_name not in solution_fields[reference_key]
+                or field_name not in solution_fields[candidate_key]
+            ):
+                continue
+            reference = np.asarray(
+                solution_fields[reference_key][field_name], dtype=float
+            )
+            candidate = np.asarray(
+                solution_fields[candidate_key][field_name], dtype=float
+            )
+            field_error_rows.append(
+                {
+                    "method_family": method_family,
+                    "formulation": formulation,
+                    "backend_label": backend_label,
+                    "field": field_name,
+                    "reference_backend": reference_label,
+                    "relative_l2": relative_l2(candidate, reference),
+                    "relative_linf": relative_linf(candidate, reference),
+                    "absolute_linf": float(np.nanmax(np.abs(candidate - reference))),
+                }
+            )
+
+field_errors = pd.DataFrame(field_error_rows)
+field_error_path = output_dir / f"{output_prefix}_field_error_metrics.csv"
+field_errors.to_csv(field_error_path, index=False)
+display(field_errors)
+print(f"Saved field error metrics: {field_error_path}")
+
+if field_errors.empty:
+    print("No solution fields were captured for visual comparison.")
+else:
+    plot_errors = field_errors.copy()
+    plot_errors["label"] = (
+        plot_errors["method_family"].astype(str)
+        + "\n"
+        + plot_errors["formulation"].astype(str)
+        + "\n"
+        + plot_errors["backend_label"].astype(str)
+        + "\n"
+        + plot_errors["field"].astype(str)
+    )
+    x = np.arange(len(plot_errors), dtype=float)
+    fig, ax = plt.subplots(figsize=(14.0, 5.8), constrained_layout=True)
+    ax.bar(
+        x,
+        np.maximum(plot_errors["relative_l2"], 1.0e-18),
+        color="tab:purple",
+        alpha=0.75,
+    )
+    ax.set_yscale("log")
+    ax.set_ylabel("relative L2 field error")
+    ax.set_title("Solution-field errors vs selected CPU reference")
+    ax.set_xticks(x)
+    ax.set_xticklabels(plot_errors["label"], rotation=70, ha="right")
+    ax.grid(axis="y", which="both", alpha=0.25)
+    field_error_plot_path = output_dir / f"{output_prefix}_field_relative_l2_error.png"
+    save_and_display_figure(fig, field_error_plot_path)
+    print(f"Saved field error plot: {field_error_plot_path}")
+
+    for (
+        method_family,
+        formulation,
+    ), reference_label in reference_label_by_formulation.items():
+        for field_name in field_names:
+            plot_field_comparison(
+                method_family=method_family,
+                formulation=formulation,
+                reference_label=reference_label,
+                field_name=field_name,
+            )
