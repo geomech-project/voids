@@ -3,15 +3,20 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from voids.fem.singlephase._common import (
+    BrinkmanNondimensionalization,
     FEMMapProblem,
     FEMSinglePhaseResult,
     FEniCSSolverOptions,
     _build_context,
+    _brinkman_nondimensional_coefficients,
+    _brinkman_nondimensional_scales,
     _mpi_metadata,
+    _nondimensional_metadata,
     _pressure_boundary_load,
     _require_dolfinx_core,
     _require_dolfinx_petsc,
     _resolve_linear_backend,
+    _resolve_brinkman_nondimensionalization,
     _result_from_velocity_pressure,
     _solve_block_problem_petsc,
     _solve_with_form_builder,
@@ -85,11 +90,13 @@ def _usfem_stabilization_terms(
     tau_factor: float,
     m_t: float,
     alpha_edge: float,
+    gamma: Any | None = None,
+    nu_eff: Any | None = None,
 ) -> tuple[Any, Any, Any, Any]:
     ufl = context.api.ufl
     fem = context.api.fem
-    gamma = context.coefficients["gamma"]
-    nu_eff = context.coefficients["nu_eff"]
+    gamma = context.coefficients["gamma"] if gamma is None else gamma
+    nu_eff = context.coefficients["nu_eff"] if nu_eff is None else nu_eff
     h = ufl.CellDiameter(context.mesh)
     h_f = ufl.avg(h)
     tau = fem.Constant(context.mesh, float(tau_factor)) * _paper_tau(
@@ -119,6 +126,7 @@ def solve_brinkman_usfem(
     m_t: float = 1.0 / 3.0,
     alpha_edge: float = 1.0,
     options: FEniCSSolverOptions | None = None,
+    nondimensional: bool | BrinkmanNondimensionalization = False,
 ) -> FEMSinglePhaseResult:
     """Solve a stabilized Darcy-Brinkman micro-continuum model.
 
@@ -129,14 +137,35 @@ def solve_brinkman_usfem(
     """
 
     _validate_usfem_controls(tau_factor=tau_factor, m_t=m_t, alpha_edge=alpha_edge)
+    nondimensional_options = _resolve_brinkman_nondimensionalization(nondimensional)
+    scales = None
+    if nondimensional_options is not None:
+        _validate_pressure_drop(pressure_inlet, pressure_outlet)
+        context_for_scales = _build_context(
+            problem,
+            flow_axis=flow_axis,
+            api=_require_dolfinx_core(),
+        )
+        scales = _brinkman_nondimensional_scales(
+            context_for_scales,
+            problem,
+            pressure_inlet=pressure_inlet,
+            pressure_outlet=pressure_outlet,
+            velocity_scale=nondimensional_options.velocity_scale,
+        )
 
     def form_builder(context, u, p, v, q):
         ufl = context.api.ufl
+        coefficient_kwargs: dict[str, Any] = {}
+        if scales is not None:
+            gamma, nu_eff = _brinkman_nondimensional_coefficients(context, problem, scales)
+            coefficient_kwargs = {"gamma": gamma, "nu_eff": nu_eff}
         gamma, nu_eff, tau, tau_f = _usfem_stabilization_terms(
             context,
             tau_factor=tau_factor,
             m_t=m_t,
             alpha_edge=alpha_edge,
+            **coefficient_kwargs,
         )
         residual_u = gamma * u + ufl.grad(p) - nu_eff * ufl.div(ufl.grad(u))
         residual_vq = gamma * v - ufl.grad(q) - nu_eff * ufl.div(ufl.grad(v))
@@ -161,6 +190,11 @@ def solve_brinkman_usfem(
         formulation="brinkman_usfem_p1dg1",
         prefix_suffix=f"brinkman_usfem_{flow_axis}",
         form_builder=form_builder,
+        boundary_pressure_inlet=None if scales is None else 1.0,
+        boundary_pressure_outlet=None if scales is None else 0.0,
+        velocity_scale=1.0 if scales is None else scales.velocity_scale,
+        pressure_scale=1.0 if scales is None else scales.pressure_scale,
+        extra_metadata=_nondimensional_metadata(scales),
     )
     result.metadata.update(
         {
@@ -184,6 +218,7 @@ def solve_brinkman_usfem_block(
     options: FEniCSSolverOptions | None = None,
     matrix_kind: Literal["mpi", "nest"] = "mpi",
     preconditioner: Literal["none", "diagonal"] = "none",
+    nondimensional: bool | BrinkmanNondimensionalization = False,
 ) -> FEMSinglePhaseResult:
     """Solve USFEM through explicit velocity/pressure block forms.
 
@@ -204,6 +239,7 @@ def solve_brinkman_usfem_block(
         raise ValueError("preconditioner must be either 'none' or 'diagonal'")
     _validate_pressure_drop(pressure_inlet, pressure_outlet)
     _validate_usfem_controls(tau_factor=tau_factor, m_t=m_t, alpha_edge=alpha_edge)
+    nondimensional_options = _resolve_brinkman_nondimensionalization(nondimensional)
 
     solver_options = options or FEniCSSolverOptions()
     api = _require_dolfinx_core()
@@ -215,6 +251,15 @@ def solve_brinkman_usfem_block(
         )
     api = _require_dolfinx_petsc(api)
     context = _build_context(problem, flow_axis=flow_axis, api=api)
+    scales = None
+    if nondimensional_options is not None:
+        scales = _brinkman_nondimensional_scales(
+            context,
+            problem,
+            pressure_inlet=pressure_inlet,
+            pressure_outlet=pressure_outlet,
+            velocity_scale=nondimensional_options.velocity_scale,
+        )
 
     ufl = context.api.ufl
     fem = context.api.fem
@@ -236,11 +281,20 @@ def solve_brinkman_usfem_block(
     p = ufl.TrialFunction(pressure_space)
     v = ufl.TestFunction(velocity_space)
     q = ufl.TestFunction(pressure_space)
+    coefficient_kwargs: dict[str, Any] = {}
+    if scales is not None:
+        gamma_scaled, nu_eff_scaled = _brinkman_nondimensional_coefficients(
+            context,
+            problem,
+            scales,
+        )
+        coefficient_kwargs = {"gamma": gamma_scaled, "nu_eff": nu_eff_scaled}
     gamma, nu_eff, tau, tau_f = _usfem_stabilization_terms(
         context,
         tau_factor=tau_factor,
         m_t=m_t,
         alpha_edge=alpha_edge,
+        **coefficient_kwargs,
     )
 
     def residual_velocity_part(w):
@@ -272,8 +326,8 @@ def solve_brinkman_usfem_block(
         context,
         v,
         flow_axis=flow_axis,
-        pressure_inlet=pressure_inlet,
-        pressure_outlet=pressure_outlet,
+        pressure_inlet=pressure_inlet if scales is None else 1.0,
+        pressure_outlet=pressure_outlet if scales is None else 0.0,
     )
     rhs_pressure = fem.Constant(context.mesh, 0.0) * q * context.dx
 
@@ -294,6 +348,11 @@ def solve_brinkman_usfem_block(
         matrix_kind=matrix_kind,
         preconditioner_forms=preconditioner_forms,
     )
+    if scales is not None:
+        solution[0].x.array[:] *= scales.velocity_scale
+        solution[0].x.scatter_forward()
+        solution[1].x.array[:] *= scales.pressure_scale
+        solution[1].x.scatter_forward()
     result = _result_from_velocity_pressure(
         context,
         solution[0],
@@ -317,6 +376,7 @@ def solve_brinkman_usfem_block(
             "block_matrix_kind": matrix_kind,
             "block_preconditioner": preconditioner,
             "thread_environment": _thread_environment_metadata(),
+            **_nondimensional_metadata(scales),
             **_mpi_metadata(context),
             **solver_metadata,
         },
