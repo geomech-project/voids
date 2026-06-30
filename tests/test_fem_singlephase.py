@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import numpy as np
 import pytest
 
 from voids.fem.singlephase import (  # noqa: E402
+    BrinkmanNondimensionalization,
     FEMMapProblem,
     FEniCSSolverOptions,
     solve_brinkman_taylor_hood,
@@ -19,7 +21,10 @@ from voids.fem.singlephase import (  # noqa: E402
 from voids.fem.singlephase._common import (  # noqa: E402
     _FEM_THREAD_ENV_DEFAULTS,
     _apply_fem_thread_defaults,
+    _brinkman_nondimensional_scales,
+    _constant_permeability_value,
     _require_dolfinx_core,
+    _resolve_brinkman_nondimensionalization,
 )
 import voids.fem.singlephase.usfem as usfem_module  # noqa: E402
 from voids.image.porosity import PermeabilityMap, PorosityMap  # noqa: E402
@@ -36,6 +41,30 @@ def _constant_problem(shape: tuple[int, ...], permeability: float = 2.0) -> FEMM
     return FEMMapProblem(
         permeability_map=PermeabilityMap(np.full(shape, permeability), cell_size=1.0),
         porosity_map=PorosityMap(np.ones(shape), cell_size=1.0),
+        viscosity=1.0,
+    )
+
+
+def _heterogeneous_problem() -> FEMMapProblem:
+    permeability = np.array(
+        [
+            [1.0, 2.0, 4.0],
+            [3.0, 5.0, 7.0],
+            [2.5, 4.5, 6.5],
+        ],
+        dtype=float,
+    )
+    porosity = np.array(
+        [
+            [0.45, 0.55, 0.70],
+            [0.60, 0.80, 0.65],
+            [0.50, 0.75, 0.85],
+        ],
+        dtype=float,
+    )
+    return FEMMapProblem(
+        permeability_map=PermeabilityMap(permeability, cell_size=1.0),
+        porosity_map=PorosityMap(porosity, cell_size=1.0),
         viscosity=1.0,
     )
 
@@ -80,6 +109,21 @@ def test_fenics_solver_options_direct_lu_builder() -> None:
     assert FEniCSSolverOptions.scipy_direct().solver_preset == "direct_reference"
     assert FEniCSSolverOptions.superlu_direct().linear_backend == "superlu"
     assert FEniCSSolverOptions.superlu_direct().solver_preset == "direct_reference"
+    tuned_superlu = FEniCSSolverOptions.superlu_direct(
+        permc_spec="COLAMD",
+        diag_pivot_thresh=0.0,
+    )
+    assert tuned_superlu.superlu_controls == {
+        "permc_spec": "COLAMD",
+        "diag_pivot_thresh": 0.0,
+    }
+    tuned_scipy_alias = FEniCSSolverOptions.scipy_direct(
+        controls={"permc-spec": "MMD_ATA", "equil": False},
+    )
+    assert tuned_scipy_alias.superlu_controls == {
+        "permc_spec": "MMD_ATA",
+        "equil": False,
+    }
     assert FEniCSSolverOptions.umfpack_direct().linear_backend == "umfpack"
     assert FEniCSSolverOptions.umfpack_direct().solver_preset == "direct_reference"
     tuned_umfpack = FEniCSSolverOptions.umfpack_direct(
@@ -138,6 +182,65 @@ def test_fenics_solver_options_parallel_and_iterative_presets() -> None:
     assert block_iterative.petsc_options["fieldsplit_u_0_pc_factor_mat_solver_type"] == "mumps"
     assert block_iterative.petsc_options["fieldsplit_p_1_pc_type"] == "lu"
     assert block_iterative.petsc_options["fieldsplit_p_1_pc_factor_mat_solver_type"] == "mumps"
+
+
+def test_brinkman_nondimensional_constant_permeability_resolution() -> None:
+    assert _constant_permeability_value(np.array([2.0, 2.0, 2.0])) == pytest.approx(2.0)
+    with pytest.raises(ValueError, match="at least one"):
+        _constant_permeability_value(np.array([], dtype=float))
+    with pytest.raises(ValueError, match="positive and finite"):
+        _constant_permeability_value(np.array([0.0, 1.0]))
+    with pytest.raises(ValueError, match="globally constant floored permeability"):
+        _constant_permeability_value(np.array([1.0, 2.0]))
+
+
+def test_brinkman_nondimensional_option_resolution() -> None:
+    assert _resolve_brinkman_nondimensionalization(False) is None
+    assert isinstance(_resolve_brinkman_nondimensionalization(True), BrinkmanNondimensionalization)
+    options = BrinkmanNondimensionalization(velocity_scale="unit_darcy")
+    assert _resolve_brinkman_nondimensionalization(options) is options
+
+    with pytest.raises(TypeError, match="nondimensional"):
+        _resolve_brinkman_nondimensionalization("yes")  # type: ignore[arg-type]
+
+
+def test_brinkman_nondimensional_scales_validate_pressure_and_velocity_scale() -> None:
+    problem = _constant_problem((2, 2), permeability=2.0)
+    context = SimpleNamespace(
+        coefficients={"permeability_values": np.array([2.0])},
+        domain_length=2.0,
+    )
+
+    with pytest.raises(ValueError, match="pressure scale"):
+        _brinkman_nondimensional_scales(
+            context,
+            problem,
+            pressure_inlet=0.0,
+            pressure_outlet=1.0,
+            velocity_scale="viscous",
+        )
+
+    context_with_bad_length = SimpleNamespace(
+        coefficients={"permeability_values": np.array([2.0])},
+        domain_length=-1.0,
+    )
+    with pytest.raises(ValueError, match="length scale"):
+        _brinkman_nondimensional_scales(
+            context_with_bad_length,
+            problem,
+            pressure_inlet=1.0,
+            pressure_outlet=0.0,
+            velocity_scale="viscous",
+        )
+
+    with pytest.raises(ValueError, match="velocity_scale"):
+        _brinkman_nondimensional_scales(
+            context,
+            problem,
+            pressure_inlet=1.0,
+            pressure_outlet=0.0,
+            velocity_scale="bad",  # type: ignore[arg-type]
+        )
 
 
 def test_usfem_block_rejects_unknown_matrix_kind_before_backend_import() -> None:
@@ -280,6 +383,135 @@ def test_fem_taylor_hood_brinkman_supports_3d_constant_map() -> None:
     assert result.flow_axis == "z"
 
 
+@pytest.mark.parametrize(
+    "solver",
+    [
+        solve_brinkman_taylor_hood,
+        solve_brinkman_usfem,
+    ],
+)
+@requires_fem_stack
+def test_fem_brinkman_nondimensional_recovers_constant_permeability(
+    solver: Callable[..., Any],
+) -> None:
+    result = solver(
+        _constant_problem((3, 3), permeability=2.0),
+        flow_axis="x",
+        options=FEniCSSolverOptions.scipy_direct(),
+        nondimensional=True,
+    )
+
+    assert result.permeability == pytest.approx(2.0, rel=5.0e-4)
+    assert result.metadata["nondimensional"] is True
+    assert result.metadata["nondimensional_velocity_scale_type"] == "viscous"
+    assert result.metadata["nondimensional_pressure_scale"] == pytest.approx(1.0)
+    assert result.metadata["nondimensional_velocity_scale"] == pytest.approx(3.0)
+    assert result.metadata["nondimensional_constant_permeability"] is None
+    assert np.all(np.isfinite(result.velocity.x.array))
+    assert np.all(np.isfinite(result.pressure.x.array))
+
+
+@pytest.mark.parametrize(
+    "solver",
+    [
+        solve_brinkman_taylor_hood,
+        solve_brinkman_usfem,
+    ],
+)
+@requires_fem_stack
+def test_fem_brinkman_unit_darcy_nondimensional_recovers_constant_permeability(
+    solver: Callable[..., Any],
+) -> None:
+    result = solver(
+        _constant_problem((3, 3), permeability=2.0),
+        flow_axis="x",
+        options=FEniCSSolverOptions.scipy_direct(),
+        nondimensional=BrinkmanNondimensionalization(velocity_scale="unit_darcy"),
+    )
+
+    assert result.permeability == pytest.approx(2.0, rel=5.0e-4)
+    assert result.metadata["nondimensional_velocity_scale_type"] == "unit_darcy"
+    assert result.metadata["nondimensional_velocity_scale"] == pytest.approx(2.0 / 3.0)
+    assert result.metadata["nondimensional_constant_permeability"] == pytest.approx(2.0)
+    assert result.metadata["nondimensional_darcy_number"] == pytest.approx(2.0 / 9.0)
+
+
+@requires_fem_stack
+def test_fem_brinkman_nondimensional_recovers_nonunit_pressure_drop() -> None:
+    result = solve_brinkman_taylor_hood(
+        _constant_problem((3, 3), permeability=2.0),
+        flow_axis="x",
+        pressure_inlet=2.0,
+        pressure_outlet=0.0,
+        options=FEniCSSolverOptions.scipy_direct(),
+        nondimensional=True,
+    )
+
+    assert result.permeability == pytest.approx(2.0, rel=5.0e-4)
+    assert result.metadata["nondimensional_pressure_scale"] == pytest.approx(2.0)
+    assert result.metadata["nondimensional_velocity_scale"] == pytest.approx(6.0)
+    assert np.max(np.abs(result.pressure.x.array)) > 1.0
+
+
+@pytest.mark.parametrize(
+    "solver",
+    [
+        solve_brinkman_taylor_hood,
+        solve_brinkman_usfem,
+    ],
+)
+@requires_fem_stack
+def test_fem_brinkman_nondimensional_matches_dimensional_heterogeneous_map(
+    solver: Callable[..., Any],
+) -> None:
+    problem = _heterogeneous_problem()
+    options = FEniCSSolverOptions.scipy_direct()
+
+    dimensional = solver(problem, flow_axis="x", options=options)
+    nondimensional = solver(
+        problem,
+        flow_axis="x",
+        options=options,
+        nondimensional=True,
+    )
+
+    assert nondimensional.permeability == pytest.approx(dimensional.permeability, rel=1.0e-9)
+    assert nondimensional.flow_rate == pytest.approx(dimensional.flow_rate, rel=1.0e-9)
+    np.testing.assert_allclose(
+        nondimensional.velocity.x.array,
+        dimensional.velocity.x.array,
+        rtol=1.0e-9,
+        atol=1.0e-12,
+    )
+    np.testing.assert_allclose(
+        nondimensional.pressure.x.array,
+        dimensional.pressure.x.array,
+        rtol=1.0e-9,
+        atol=1.0e-12,
+    )
+    assert nondimensional.metadata["nondimensional_velocity_scale_type"] == "viscous"
+
+
+@pytest.mark.parametrize(
+    "solver",
+    [
+        solve_brinkman_taylor_hood,
+        solve_brinkman_usfem,
+    ],
+)
+@requires_fem_stack
+def test_fem_brinkman_unit_darcy_nondimensional_rejects_heterogeneous_map(
+    solver: Callable[..., Any],
+) -> None:
+    with pytest.raises(ValueError, match="globally constant floored permeability"):
+        solver(
+            _heterogeneous_problem(),
+            flow_axis="x",
+            options=FEniCSSolverOptions.scipy_direct(),
+            nondimensional=BrinkmanNondimensionalization(velocity_scale="unit_darcy"),
+        )
+
+
 @requires_fem_stack
 def test_fem_usfem_block_mpi_matches_monolithic_usfem_constant_3d() -> None:
     problem = _constant_problem((2, 2, 2), permeability=1.5)
@@ -309,6 +541,39 @@ def test_fem_usfem_block_mpi_matches_monolithic_usfem_constant_3d() -> None:
     assert block.metadata["block_matrix_kind"] == "mpi"
     assert block.metadata["block_preconditioner"] == "none"
     assert block.metadata["petsc_matrix_kind"] == "mpi"
+
+
+@requires_fem_stack
+def test_fem_usfem_block_nondimensional_matches_monolithic_constant_3d() -> None:
+    problem = _constant_problem((2, 2, 2), permeability=1.5)
+    options = FEniCSSolverOptions.direct_parallel(
+        "superlu_dist",
+        petsc_options_prefix="test_usfem_block_nondim_superlu_",
+    )
+
+    monolithic = solve_brinkman_usfem(
+        problem,
+        flow_axis="x",
+        options=FEniCSSolverOptions.direct_parallel(
+            "superlu_dist",
+            petsc_options_prefix="test_usfem_monolithic_nondim_superlu_",
+        ),
+        nondimensional=BrinkmanNondimensionalization(velocity_scale="unit_darcy"),
+    )
+    block = solve_brinkman_usfem_block(
+        problem,
+        flow_axis="x",
+        options=options,
+        matrix_kind="mpi",
+        preconditioner="none",
+        nondimensional=BrinkmanNondimensionalization(velocity_scale="unit_darcy"),
+    )
+
+    assert block.permeability == pytest.approx(monolithic.permeability, rel=1.0e-10)
+    assert block.permeability == pytest.approx(1.5, rel=5.0e-4)
+    assert block.metadata["nondimensional"] is True
+    assert block.metadata["nondimensional_velocity_scale_type"] == "unit_darcy"
+    assert block.metadata["block_matrix_kind"] == "mpi"
 
 
 @requires_fem_stack

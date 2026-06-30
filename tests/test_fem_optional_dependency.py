@@ -348,7 +348,21 @@ def test_standalone_pressure_gauge_requires_petsc() -> None:
 
 def test_standalone_pressure_gauge_falls_back_to_first_dof_when_origin_not_found() -> None:
     captured: dict[str, Any] = {}
-    comm = SimpleNamespace(allreduce=lambda value, op=None: value)
+
+    class FakeComm:
+        def allreduce(self, value: Any, op: Any = None) -> Any:
+            return value
+
+        def Allreduce(self, send: Any, receive: Any, op: Any = None) -> None:
+            receive[:] = send
+
+    comm = FakeComm()
+    pressure_space = SimpleNamespace(
+        dofmap=SimpleNamespace(
+            index_map=SimpleNamespace(size_local=1, local_range=(0, 1)),
+            index_map_bs=1,
+        )
+    )
     context = SimpleNamespace(
         mesh=SimpleNamespace(
             geometry=SimpleNamespace(x=np.array([[0.0, 0.0], [1.0, 1.0]]), dim=2),
@@ -371,9 +385,9 @@ def test_standalone_pressure_gauge_falls_back_to_first_dof_when_origin_not_found
         ),
     )
 
-    assert _common._standalone_pressure_gauge_bc(context, pressure_space="Q") == "bc"
+    assert _common._standalone_pressure_gauge_bc(context, pressure_space=pressure_space) == "bc"
     assert np.array_equal(captured["dofs"], np.array([0], dtype=np.int32))
-    assert captured["space"] == "Q"
+    assert captured["space"] is pressure_space
 
 
 def test_serial_direct_fem_backend_rejects_distributed_mesh() -> None:
@@ -424,6 +438,108 @@ def test_fem_dirichlet_bc_values_fall_back_for_older_dolfinx() -> None:
 
     assert calls == [1]
     assert np.array_equal(array, np.array([0.0, 0.0]))
+
+
+def test_superlu_fem_backend_dispatches_tuned_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSparseMatrix:
+        nnz = 3
+
+        def tocsc(self) -> FakeSparseMatrix:
+            return self
+
+        def tocsr(self) -> FakeSparseMatrix:
+            return self
+
+        def copy(self) -> FakeSparseMatrix:
+            return self
+
+    class FakeMatrix:
+        def scatter_reverse(self) -> None:
+            return None
+
+        def to_scipy(self) -> Any:
+            return FakeSparseMatrix()
+
+    vector = SimpleNamespace(
+        array=np.array([1.0]),
+        scatter_reverse=lambda _mode: None,
+    )
+    solution = SimpleNamespace(
+        x=SimpleNamespace(
+            array=np.zeros(2),
+            scatter_forward=lambda: None,
+        )
+    )
+    fem = SimpleNamespace(
+        form=lambda value: value,
+        assemble_matrix=lambda _form, bcs: FakeMatrix(),
+        assemble_vector=lambda _rhs: vector,
+        apply_lifting=lambda _array, _forms, _bcs: None,
+        set_bc=lambda _array, _bcs: None,
+        Function=lambda _space: solution,
+    )
+    la = SimpleNamespace(InsertMode=SimpleNamespace(add="add"))
+    context = SimpleNamespace(
+        mesh=SimpleNamespace(comm=SimpleNamespace(size=1)),
+        api=SimpleNamespace(fem=fem, la=la),
+    )
+    calls: dict[str, Any] = {}
+
+    class FakeLU:
+        L = SimpleNamespace(nnz=5)
+        U = SimpleNamespace(nnz=7)
+
+        def solve(self, rhs: Any) -> np.ndarray:
+            calls["rhs"] = rhs.copy()
+            return np.array([2.0])
+
+    def fake_splu(matrix: Any, **kwargs: Any) -> FakeLU:
+        calls["matrix"] = matrix
+        calls["kwargs"] = kwargs
+        return FakeLU()
+
+    import scipy.sparse.linalg as scipy_sparse_linalg
+
+    monkeypatch.setattr(scipy_sparse_linalg, "splu", fake_splu)
+
+    with pytest.raises(RuntimeError, match="incompatible size"):
+        _common._solve_mixed_problem_serial_direct(
+            context,
+            mixed_space=None,
+            form=None,
+            rhs=None,
+            bcs=[],
+            linear_backend="superlu",
+            superlu_controls={
+                "permc_spec": "colamd",
+                "diag_pivot_thresh": 0.0,
+                "equil": False,
+            },
+        )
+    assert calls["kwargs"] == {
+        "permc_spec": "COLAMD",
+        "diag_pivot_thresh": 0.0,
+        "options": {"Equil": False},
+    }
+    assert np.array_equal(calls["rhs"], np.array([1.0]))
+
+
+@pytest.mark.parametrize(
+    ("controls", "message"),
+    [
+        ({"permc_spec": "bad"}, "Unsupported SuperLU permc_spec"),
+        ({"diag_pivot_thresh": 2.0}, "diag_pivot_thresh"),
+        ({"relax": 0}, "relax"),
+    ],
+)
+def test_superlu_controls_reject_invalid_values(
+    controls: dict[str, Any],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _common._resolve_superlu_controls(controls)
 
 
 def test_umfpack_fem_backend_dispatches_optional_solver(
