@@ -40,14 +40,35 @@ sparse systems.
 
 | Method | Backend | Typical use | Main caveat |
 |---|---|---|---|
-| `"direct"` | `scipy.sparse.linalg.spsolve` | default sparse direct solve | SciPy may use UMFPACK internally when configured that way |
-| `"umfpack"` | `scikits.umfpack.spsolve` | explicit SuiteSparse/UMFPACK direct solve, including Windows fallback studies | requires `scikit-umfpack` and UMFPACK libraries |
-| `"pardiso"` | `pypardiso.spsolve` | Linux MKL/PARDISO direct solve | not a portable Windows fallback |
+| `"direct"` | `scipy.sparse.linalg.spsolve` | default sparse direct solve | with `dtype="float32"`, `voids` disables SciPy's optional UMFPACK dispatch so the solve can stay single precision |
+| `"superlu"` | `scipy.sparse.linalg.splu` | explicit portable CPU direct solve; useful for comparing `float64` and `float32` | serial sparse factorization |
+| `"umfpack"` | `scikits.umfpack.spsolve` | explicit SuiteSparse/UMFPACK direct solve, including Windows fallback studies | requires `scikit-umfpack` and UMFPACK libraries; currently double precision only through the Python wrapper |
+| `"pardiso"` | `pypardiso.spsolve` | Linux MKL/PARDISO direct solve | not a portable Windows fallback; currently double precision only through `pypardiso` |
 | `"nvmath_cudss"` | CSR matrix copied to CUDA tensors and solved with `nvmath.bindings.cudss` | experimental GPU direct path for CUDA workstations | requires PyTorch with CUDA and nvmath/cuDSS at runtime; optional single-node multi-GPU cuDSS handle |
 | `"cg"` | SciPy conjugate gradient | symmetric positive systems | convergence depends on conditioning and tolerances |
 | `"gmres"` | SciPy GMRES | nonsymmetric or harder systems | restart and tolerance choices matter |
 
-`cg` and `gmres` accept optional PyAMG preconditioning:
+Backends that support runtime value precision selection accept
+`solver_parameters={"dtype": "float64"}` or
+`solver_parameters={"dtype": "float32"}`. For portable CPU direct
+single-precision tests, prefer the explicit `"superlu"` method:
+
+```python
+from voids.physics.singlephase import SinglePhaseOptions
+from voids.fvm.singlephase import solve_tpfa
+
+network_options = SinglePhaseOptions(
+    solver="superlu",
+    solver_parameters={"dtype": "float32"},
+)
+tpfa_result = solve_tpfa(
+    permeability_map,
+    solver_method="superlu",
+    solver_parameters={"dtype": "float32"},
+)
+```
+
+`cg` and `gmres` also accept optional PyAMG preconditioning:
 
 ```python
 from voids.physics.singlephase import SinglePhaseOptions
@@ -111,11 +132,11 @@ the linear solve path:
 | `linear_backend` | Linear algebra path | Platform role | Main caveat |
 |---|---|---|---|
 | `"auto"` | PETSc when available; SciPy/SuperLU fallback on native Windows when PETSc is missing | recommended default for portable scripts | resolved backend can differ by platform |
-| `"petsc"` | DOLFINx PETSc `LinearProblem` with PETSc options from `FEniCSSolverOptions` | production Linux/macOS path; supports PETSc/MPI workflows | unavailable in native Windows conda-forge DOLFINx stack used by `voids` |
-| `"superlu"` | DOLFINx assembly converted to SciPy CSC format and solved with SciPy's SuperLU wrapper | preferred explicit serial SuperLU backend | serial-only |
-| `"scipy"` | Backward-compatible alias for the SciPy/SuperLU path | serial direct fallback and comparison backend | serial-only |
-| `"umfpack"` | DOLFINx assembly converted to SciPy CSC format and solved with the 64-bit-index `scikits.umfpack.UmfpackContext("dl")` path | explicit serial SuiteSparse/UMFPACK path | requires `scikit-umfpack`; serial-only and can be much slower than PARDISO on large mixed FEM systems |
-| `"pardiso"` | DOLFINx assembly converted to SciPy CSR format and solved with `pypardiso.spsolve` | Linux MKL/PARDISO direct path | Linux-only optional dependency; serial-only |
+| `"petsc"` | DOLFINx PETSc `LinearProblem` with PETSc options from `FEniCSSolverOptions` | production Linux/macOS path; supports PETSc/MPI workflows | unavailable in native Windows conda-forge DOLFINx stack used by `voids`; precision follows the installed PETSc/DOLFINx scalar type |
+| `"superlu"` | DOLFINx assembly converted to SciPy CSC format and solved with SciPy's SuperLU wrapper | preferred explicit serial SuperLU backend; supports `linear_system_dtype="float64"` and `"float32"` | serial-only |
+| `"scipy"` | Backward-compatible alias for the SciPy/SuperLU path | serial direct fallback and comparison backend; supports `linear_system_dtype="float64"` and `"float32"` | serial-only |
+| `"umfpack"` | DOLFINx assembly converted to SciPy CSC format and solved with the 64-bit-index `scikits.umfpack.UmfpackContext("dl")` path | explicit serial SuiteSparse/UMFPACK path | requires `scikit-umfpack`; serial-only; currently double precision only |
+| `"pardiso"` | DOLFINx assembly converted to SciPy CSR format and solved with `pypardiso.spsolve` | Linux MKL/PARDISO direct path | Linux-only optional dependency; serial-only; currently double precision only |
 | `"nvmath_cudss"` | DOLFINx assembly converted to SciPy CSR format, copied to CUDA tensors, and solved with `nvmath.bindings.cudss` | experimental GPU direct path for CUDA workstations | requires PyTorch with CUDA and nvmath/cuDSS at runtime; serial assembly; not a portable default |
 
 Default portable behavior:
@@ -134,6 +155,9 @@ from voids.fem.singlephase import FEniCSSolverOptions
 
 petsc_options = FEniCSSolverOptions.direct_lu("mumps")
 superlu_options = FEniCSSolverOptions.superlu_direct()
+superlu_float32_options = FEniCSSolverOptions.superlu_direct(
+    linear_system_dtype="float32"
+)
 scipy_alias_options = FEniCSSolverOptions.scipy_direct()
 umfpack_options = FEniCSSolverOptions.umfpack_direct()
 ```
@@ -145,9 +169,12 @@ On CUDA workstations with a compatible nvmath/cuDSS runtime, the same optional
 cudss_options = FEniCSSolverOptions.nvmath_cudss_direct(device_ids=0)
 ```
 
-The default cuDSS controls use `dtype="float64"`, matching, and five
-iterative-refinement steps. The backend also checks the assembled-system
-relative residual before accepting the solution. Pass one `device_ids` value to
+The `voids` default controls for this cuDSS backend use `dtype="float64"`,
+matching, and five iterative-refinement steps. A fresh cuDSS configuration in
+the tested nvmath/cuDSS stack reports `IR_N_STEPS = 0`; `voids` sets
+`ir_steps=5` explicitly unless the caller overrides it. The backend also checks
+the assembled-system relative residual before accepting the solution. Pass one
+`device_ids` value to
 select a CUDA device, pass a sequence such as `(0, 1)` to request a single-node
 multi-GPU cuDSS handle, or pass `"all"` to use all CUDA devices visible to
 PyTorch. The path still performs serial DOLFINx assembly, builds one SciPy CSR
@@ -155,6 +182,36 @@ system on the host, and copies the input matrix/vector to the first requested
 CUDA device; cuDSS then manages the internal multi-GPU direct factorization.
 This backend is intentionally optional and should be compared against a
 same-map direct reference before using it for scientific claims.
+
+cuDSS exposes several numerical controls that can be useful for single
+precision experiments on ill-conditioned maps. `voids` forwards
+`ir_steps`, `use_matching`, `matching_alg`, `pivot_type`,
+`pivot_threshold`, `pivot_epsilon`, `pivot_epsilon_alg`, `reordering_alg`,
+`factorization_alg`, `solve_alg`, `nd_nlevels`, `use_superpanels`, and
+`deterministic_mode` when the installed cuDSS runtime supports them. For
+example, a more conservative single-precision USFEM trial can increase
+iterative refinement and perturb very small pivots:
+
+```python
+cudss_float32_usfem_trial = FEniCSSolverOptions.nvmath_cudss_direct(
+    dtype="float32",
+    device_ids=0,
+    ir_steps=20,
+    pivot_epsilon=1.0e-4,
+)
+```
+
+This is still a trial configuration, not a portable default. On a 300^3
+synthetic image block-averaged to a 30^3 map with porosity floor `1.0e-3`,
+permeability floor `1.0e-20`, and permeability cap `1.0e-8`, this
+single-GPU setting passed the USFEM residual check in repeated local probes
+while retaining a substantial speedup. The same controls did not rescue TPFA
+cuDSS `float32`, which produced near-unit residuals and zero effective
+permeability; TPFA at that contrast should use `float64` or a separately
+validated scaled formulation. Some cuDSS controls are version/backend
+dependent: in the tested nvmath/cuDSS stack, explicit `reordering_alg` values
+`ALG_1`/`ALG_2` and `deterministic_mode=True` raised cuDSS
+`NOT_SUPPORTED`.
 
 For USFEM mixed Brinkman systems, the serial SciPy/SuperLU path can sometimes
 reduce fill by disabling diagonal pivoting after the standard COLAMD
@@ -174,7 +231,8 @@ SuperLU_DIST on large USFEM maps.
 
 For reproducible reports, store the requested backend, the resolved backend from
 result metadata, the formulation name, pressure drop, map shape, permeability
-and porosity floors, and the numerical thread environment.
+and porosity floors, `serial_sparse_linear_system_dtype` when present, and the
+numerical thread environment.
 
 Taylor-Hood Brinkman and USFEM Brinkman also accept `nondimensional=True`, or a
 `BrinkmanNondimensionalization` object, to assemble a coefficient-scaled
@@ -278,7 +336,9 @@ backend.
   workstations, start with `device_ids=(0, 1)` or `device_ids="all"` for large
   double-precision mixed FEM systems that do not fit on one GPU. Keep
   `dtype="float64"` unless a same-map direct reference and the residual check
-  justify a lower precision.
+  justify a lower precision. For single precision USFEM experiments, prefer a
+  residual-checked trial such as `ir_steps=20, pivot_epsilon=1.0e-4`; do not
+  disable the residual check to accept a solve.
 - Use Krylov methods with PyAMG when direct factorizations become too expensive,
   but record convergence tolerances and residuals.
 - Use FEM `"petsc"` for PETSc/MPI or heavily configured production runs.
