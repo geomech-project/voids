@@ -112,9 +112,35 @@ scipy_alias_options = FEniCSSolverOptions.scipy_direct()
 umfpack_options = FEniCSSolverOptions.umfpack_direct()
 ```
 
+For USFEM mixed Brinkman systems, the serial SciPy/SuperLU path can sometimes
+reduce fill by disabling diagonal pivoting after the standard COLAMD
+preordering:
+
+```python
+tuned_superlu = FEniCSSolverOptions.superlu_direct(
+    permc_spec="COLAMD",
+    diag_pivot_thresh=0.0,
+)
+```
+
+Accept this only after comparison against an untuned direct reference on the
+same coefficient map. This remains a serial SuperLU factorization; it is a
+portable reference/medium-size backend, not a replacement for PETSc
+SuperLU_DIST on large USFEM maps.
+
 For reproducible reports, store the requested backend, the resolved backend from
 result metadata, the formulation name, pressure drop, map shape, permeability
 and porosity floors, and the numerical thread environment.
+
+Taylor-Hood Brinkman and USFEM Brinkman also accept `nondimensional=True`, or a
+`BrinkmanNondimensionalization` object, to assemble a coefficient-scaled
+equivalent system. The default uses the viscous scale
+\(U=\Delta P L/\mu\); constant-permeability maps can also use
+`velocity_scale="unit_darcy"` for \(U=\Delta P K/(\mu L)\). The returned
+velocity, pressure, flow rate, and permeability remain in physical units; the
+scale choices are recorded in result metadata. Use this as a conditioning and
+solver-experiment control, and still compare any iterative result against a
+direct reference on the same map.
 
 ## Benchmark Design
 
@@ -202,7 +228,10 @@ backend.
 - Use FEM `"petsc"` for PETSc/MPI or heavily configured production runs.
 - Use FEM `"superlu"` or `"umfpack"` for serial Windows-compatible FEM solves
   when DOLFINx core is available but PETSc is not. The older FEM `"scipy"`
-  name remains accepted as an alias for the SuperLU path.
+  name remains accepted as an alias for the SuperLU path. For USFEM, try
+  `FEniCSSolverOptions.superlu_direct(permc_spec="COLAMD",
+  diag_pivot_thresh=0.0)` when the default SuperLU pivoting creates excessive
+  fill, and keep the result tied to a same-map reference comparison.
 
 ## Scientific Caveats
 
