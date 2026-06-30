@@ -17,6 +17,12 @@ boundary-condition imposition, and solver diagnostics.
 
 ---
 
+## Optional CUDA cuDSS
+
+::: voids.linalg.cudss
+
+---
+
 ## Boundary Conditions
 
 ::: voids.linalg.bc

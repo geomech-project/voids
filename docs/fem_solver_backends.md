@@ -43,6 +43,7 @@ sparse systems.
 | `"direct"` | `scipy.sparse.linalg.spsolve` | default sparse direct solve | SciPy may use UMFPACK internally when configured that way |
 | `"umfpack"` | `scikits.umfpack.spsolve` | explicit SuiteSparse/UMFPACK direct solve, including Windows fallback studies | requires `scikit-umfpack` and UMFPACK libraries |
 | `"pardiso"` | `pypardiso.spsolve` | Linux MKL/PARDISO direct solve | not a portable Windows fallback |
+| `"nvmath_cudss"` | CSR matrix copied to CUDA tensors and solved with `nvmath.bindings.cudss` | experimental GPU direct path for CUDA workstations | requires PyTorch with CUDA and nvmath/cuDSS at runtime; optional single-node multi-GPU cuDSS handle |
 | `"cg"` | SciPy conjugate gradient | symmetric positive systems | convergence depends on conditioning and tolerances |
 | `"gmres"` | SciPy GMRES | nonsymmetric or harder systems | restart and tolerance choices matter |
 
@@ -78,6 +79,30 @@ from voids.fvm.singlephase import solve_tpfa
 result = solve_tpfa(permeability_map, solver_method="umfpack")
 ```
 
+Experimental cuDSS for PNM or TPFA:
+
+```python
+from voids.physics.singlephase import SinglePhaseOptions
+from voids.fvm.singlephase import solve_tpfa
+
+network_options = SinglePhaseOptions(
+    solver="nvmath_cudss",
+    solver_parameters={"device_ids": 0, "dtype": "float64"},
+)
+tpfa_result = solve_tpfa(
+    permeability_map,
+    solver_method="nvmath_cudss",
+    solver_parameters={"device_ids": 0, "dtype": "float64"},
+)
+```
+
+On a workstation with multiple compatible CUDA devices, pass a sequence or
+`"all"` to request a cuDSS multi-GPU handle:
+
+```python
+gpu_options = {"device_ids": (0, 1), "dtype": "float64"}
+```
+
 ## FEM Backends
 
 FEM backends use the same DOLFINx/UFL forms and coefficient maps, then select
@@ -91,6 +116,7 @@ the linear solve path:
 | `"scipy"` | Backward-compatible alias for the SciPy/SuperLU path | serial direct fallback and comparison backend | serial-only |
 | `"umfpack"` | DOLFINx assembly converted to SciPy CSC format and solved with the 64-bit-index `scikits.umfpack.UmfpackContext("dl")` path | explicit serial SuiteSparse/UMFPACK path | requires `scikit-umfpack`; serial-only and can be much slower than PARDISO on large mixed FEM systems |
 | `"pardiso"` | DOLFINx assembly converted to SciPy CSR format and solved with `pypardiso.spsolve` | Linux MKL/PARDISO direct path | Linux-only optional dependency; serial-only |
+| `"nvmath_cudss"` | DOLFINx assembly converted to SciPy CSR format, copied to CUDA tensors, and solved with `nvmath.bindings.cudss` | experimental GPU direct path for CUDA workstations | requires PyTorch with CUDA and nvmath/cuDSS at runtime; serial assembly; not a portable default |
 
 Default portable behavior:
 
@@ -111,6 +137,24 @@ superlu_options = FEniCSSolverOptions.superlu_direct()
 scipy_alias_options = FEniCSSolverOptions.scipy_direct()
 umfpack_options = FEniCSSolverOptions.umfpack_direct()
 ```
+
+On CUDA workstations with a compatible nvmath/cuDSS runtime, the same optional
+`"nvmath_cudss"` backend can be requested explicitly for FEM:
+
+```python
+cudss_options = FEniCSSolverOptions.nvmath_cudss_direct(device_ids=0)
+```
+
+The default cuDSS controls use `dtype="float64"`, matching, and five
+iterative-refinement steps. The backend also checks the assembled-system
+relative residual before accepting the solution. Pass one `device_ids` value to
+select a CUDA device, pass a sequence such as `(0, 1)` to request a single-node
+multi-GPU cuDSS handle, or pass `"all"` to use all CUDA devices visible to
+PyTorch. The path still performs serial DOLFINx assembly, builds one SciPy CSR
+system on the host, and copies the input matrix/vector to the first requested
+CUDA device; cuDSS then manages the internal multi-GPU direct factorization.
+This backend is intentionally optional and should be compared against a
+same-map direct reference before using it for scientific claims.
 
 For USFEM mixed Brinkman systems, the serial SciPy/SuperLU path can sometimes
 reduce fill by disabling diagonal pivoting after the standard COLAMD
@@ -147,6 +191,11 @@ direct reference on the same map.
 The executable benchmark is
 [`17_mwe_solver_options_benchmark`](notebook_reports/17_mwe_solver_options_benchmark.md).
 It writes stable plots and CSV tables under `docs/assets/solver_backends/`.
+The GPU-focused notebook source
+`notebooks/47_mwe_gpu_solver_backend_comparison.py` compares the optional
+`"nvmath_cudss"` backend against CPU direct references for PNM, TPFA, and the
+serial FEM formulations. It is not rendered into the public docs because the
+CUDA runtime is optional and machine-specific.
 
 The PNM section compares:
 
@@ -223,6 +272,13 @@ backend.
   comparison against a direct reference on the same coefficient map.
 - Use `"pardiso"` only when the Linux MKL/PARDISO stack is available and has
   been checked against the same system.
+- Use `"nvmath_cudss"` only on CUDA machines with the optional nvmath/cuDSS
+  runtime installed. It is available for PNM, TPFA, and serial FEM direct
+  solves; LBM does not use this sparse direct backend. On multi-GPU
+  workstations, start with `device_ids=(0, 1)` or `device_ids="all"` for large
+  double-precision mixed FEM systems that do not fit on one GPU. Keep
+  `dtype="float64"` unless a same-map direct reference and the residual check
+  justify a lower precision.
 - Use Krylov methods with PyAMG when direct factorizations become too expensive,
   but record convergence tolerances and residuals.
 - Use FEM `"petsc"` for PETSc/MPI or heavily configured production runs.
