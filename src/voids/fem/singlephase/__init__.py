@@ -8,6 +8,7 @@ from voids.fem.singlephase._common import (
     FEniCSSolverOptions,
     BrinkmanVelocityScale,
     LinearSolverBackend,
+    LinearSystemDType,
 )
 from voids.fem.singlephase.taylorhood import (
     solve_brinkman_taylor_hood,
@@ -29,6 +30,7 @@ __all__ = [
     "BrinkmanNondimensionalization",
     "BrinkmanVelocityScale",
     "LinearSolverBackend",
+    "LinearSystemDType",
     "solve_brinkman_taylor_hood",
     "solve_brinkman_usfem",
     "solve_brinkman_usfem_block",

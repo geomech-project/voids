@@ -48,6 +48,7 @@ LinearSolverBackend = Literal[
     "pardiso",
     "nvmath_cudss",
 ]
+LinearSystemDType = Literal["float32", "float64"]
 BrinkmanVelocityScale = Literal["viscous", "unit_darcy"]
 FEMSolverPreset = Literal[
     "custom",
@@ -64,6 +65,26 @@ _SUPERLU_CONTROL_KEYS = {
     "panel_size",
     "equil",
 }
+_FEM_LINEAR_SYSTEM_DTYPES: dict[LinearSystemDType, np.dtype[Any]] = {
+    "float32": np.dtype("float32"),
+    "float64": np.dtype("float64"),
+}
+
+
+def _resolve_fem_linear_system_dtype(value: object) -> LinearSystemDType:
+    normalized = str(value).strip().lower()
+    if normalized not in _FEM_LINEAR_SYSTEM_DTYPES:
+        raise ValueError("linear_system_dtype must be either 'float32' or 'float64'")
+    return normalized
+
+
+def _copy_sparse_matrix_with_value_dtype(matrix: Any, dtype: np.dtype[Any]) -> Any:
+    if hasattr(matrix, "astype"):
+        return matrix.astype(dtype, copy=False)
+    copied = matrix.copy() if hasattr(matrix, "copy") else matrix
+    if hasattr(copied, "data"):
+        copied.data = np.asarray(copied.data, dtype=dtype)
+    return copied
 
 
 def _superlu_controls_from_arguments(
@@ -114,11 +135,15 @@ class FEniCSSolverOptions:
     SciPy/SuperLU path. ``"umfpack"`` requires the optional
     ``scikits.umfpack`` package, ``"pardiso"`` requires the optional
     ``pypardiso`` package, and ``"nvmath_cudss"`` requires a CUDA-capable
-    PyTorch/nvmath cuDSS runtime.
+    PyTorch/nvmath cuDSS runtime. ``linear_system_dtype`` selects the assembled
+    value dtype for serial sparse backends. PETSc backends use the scalar type
+    of the installed PETSc/DOLFINx stack and are therefore double precision in
+    the supported Pixi FEM environment.
     """
 
     linear_backend: LinearSolverBackend = "auto"
     solver_preset: FEMSolverPreset = "direct_reference"
+    linear_system_dtype: LinearSystemDType = "float64"
     superlu_controls: dict[str, Any] = field(default_factory=dict)
     umfpack_controls: dict[str, Any] = field(default_factory=dict)
     nvmath_cudss_controls: dict[str, Any] = field(default_factory=dict)
@@ -325,6 +350,7 @@ class FEniCSSolverOptions:
     def scipy_direct(
         cls,
         *,
+        linear_system_dtype: LinearSystemDType = "float64",
         permc_spec: str | None = None,
         diag_pivot_thresh: float | None = None,
         relax: int | None = None,
@@ -337,6 +363,7 @@ class FEniCSSolverOptions:
         return cls(
             linear_backend="scipy",
             solver_preset="direct_reference",
+            linear_system_dtype=linear_system_dtype,
             superlu_controls=_superlu_controls_from_arguments(
                 permc_spec=permc_spec,
                 diag_pivot_thresh=diag_pivot_thresh,
@@ -351,6 +378,7 @@ class FEniCSSolverOptions:
     def superlu_direct(
         cls,
         *,
+        linear_system_dtype: LinearSystemDType = "float64",
         permc_spec: str | None = None,
         diag_pivot_thresh: float | None = None,
         relax: int | None = None,
@@ -363,6 +391,7 @@ class FEniCSSolverOptions:
         return cls(
             linear_backend="superlu",
             solver_preset="direct_reference",
+            linear_system_dtype=linear_system_dtype,
             superlu_controls=_superlu_controls_from_arguments(
                 permc_spec=permc_spec,
                 diag_pivot_thresh=diag_pivot_thresh,
@@ -377,6 +406,7 @@ class FEniCSSolverOptions:
     def umfpack_direct(
         cls,
         *,
+        linear_system_dtype: LinearSystemDType = "float64",
         ordering: str | int | float | None = None,
         strategy: str | int | float | None = None,
         pivot_tolerance: float | None = None,
@@ -403,6 +433,7 @@ class FEniCSSolverOptions:
         return cls(
             linear_backend="umfpack",
             solver_preset="direct_reference",
+            linear_system_dtype=linear_system_dtype,
             umfpack_controls=umfpack_controls,
         )
 
@@ -430,26 +461,36 @@ class FEniCSSolverOptions:
         conservative defaults for mixed Brinkman systems.
         """
 
+        resolved_controls = _nvmath_cudss_controls_from_arguments(
+            dtype=dtype,
+            device_ids=device_ids,
+            ir_steps=ir_steps,
+            use_matching=use_matching,
+            pivot_type=pivot_type,
+            check_residual=check_residual,
+            residual_rtol=residual_rtol,
+            controls=controls,
+        )
         return cls(
             linear_backend="nvmath_cudss",
             solver_preset="direct_reference",
-            nvmath_cudss_controls=_nvmath_cudss_controls_from_arguments(
-                dtype=dtype,
-                device_ids=device_ids,
-                ir_steps=ir_steps,
-                use_matching=use_matching,
-                pivot_type=pivot_type,
-                check_residual=check_residual,
-                residual_rtol=residual_rtol,
-                controls=controls,
-            ),
+            linear_system_dtype=cast(LinearSystemDType, resolved_controls["dtype"]),
+            nvmath_cudss_controls=resolved_controls,
         )
 
     @classmethod
-    def pardiso_direct(cls) -> FEniCSSolverOptions:
+    def pardiso_direct(
+        cls,
+        *,
+        linear_system_dtype: LinearSystemDType = "float64",
+    ) -> FEniCSSolverOptions:
         """Create options for the serial DOLFINx-assembly/PARDISO backend."""
 
-        return cls(linear_backend="pardiso", solver_preset="direct_reference")
+        return cls(
+            linear_backend="pardiso",
+            solver_preset="direct_reference",
+            linear_system_dtype=linear_system_dtype,
+        )
 
 
 @dataclass(slots=True)
@@ -1454,6 +1495,7 @@ def _solve_mixed_problem_serial_direct(
     rhs: Any,
     bcs: list[Any],
     linear_backend: Literal["scipy", "superlu", "umfpack", "pardiso", "nvmath_cudss"],
+    linear_system_dtype: LinearSystemDType = "float64",
     superlu_controls: Mapping[str, Any] | None = None,
     umfpack_controls: Mapping[str, Any] | None = None,
     nvmath_cudss_controls: Mapping[str, Any] | None = None,
@@ -1466,6 +1508,16 @@ def _solve_mixed_problem_serial_direct(
             "serial-only; use linear_backend='petsc' for MPI-distributed FEM "
             "solves."
         )
+
+    resolved_linear_system_dtype = _resolve_fem_linear_system_dtype(linear_system_dtype)
+    if resolved_linear_system_dtype == "float32" and linear_backend in {"umfpack", "pardiso"}:
+        backend_name = "scikit-umfpack" if linear_backend == "umfpack" else "pypardiso"
+        raise ValueError(
+            f"linear_backend={linear_backend!r} currently supports float64 only through "
+            f"{backend_name}; use linear_backend='superlu' or linear_backend='scipy' for "
+            "CPU single-precision FEM sparse solves."
+        )
+    value_dtype = _FEM_LINEAR_SYSTEM_DTYPES[resolved_linear_system_dtype]
 
     solve_linear_system: Callable[[Any, Any], Any]
     sparse_matrix_format = "csr"
@@ -1494,7 +1546,20 @@ def _solve_mixed_problem_serial_direct(
         sparse_matrix_format = "csc"
         serial_solver_backend = "scikits.umfpack.UmfpackContext(dl)"
     elif linear_backend == "nvmath_cudss":
-        resolved_nvmath_cudss_controls = _resolve_nvmath_cudss_controls(nvmath_cudss_controls or {})
+        nvmath_cudss_controls_with_dtype = dict(nvmath_cudss_controls or {})
+        has_explicit_cudss_dtype = any(
+            str(key).strip().lower().replace("-", "_") in {"dtype", "value_dtype"}
+            for key in nvmath_cudss_controls_with_dtype
+        )
+        if not has_explicit_cudss_dtype:
+            nvmath_cudss_controls_with_dtype["dtype"] = resolved_linear_system_dtype
+        resolved_nvmath_cudss_controls = _resolve_nvmath_cudss_controls(
+            nvmath_cudss_controls_with_dtype
+        )
+        resolved_linear_system_dtype = cast(
+            LinearSystemDType, resolved_nvmath_cudss_controls["dtype"]
+        )
+        value_dtype = _FEM_LINEAR_SYSTEM_DTYPES[resolved_linear_system_dtype]
 
         def solve_nvmath_cudss(matrix: Any, rhs_array: Any) -> Any:
             solution, metadata = _solve_nvmath_cudss(
@@ -1566,9 +1631,9 @@ def _solve_mixed_problem_serial_direct(
     vector.scatter_reverse(la.InsertMode.add)
     _set_dirichlet_bc_values(fem, vector.array, bcs)
     sparse_matrix = getattr(matrix.to_scipy(), f"to{sparse_matrix_format}")().copy()
-    solution_array = np.asarray(
-        solve_linear_system(sparse_matrix, np.ascontiguousarray(vector.array.copy(), dtype=float))
-    )
+    sparse_matrix = _copy_sparse_matrix_with_value_dtype(sparse_matrix, value_dtype)
+    rhs_array = np.ascontiguousarray(vector.array.copy(), dtype=value_dtype)
+    solution_array = np.asarray(solve_linear_system(sparse_matrix, rhs_array))
     solve_seconds = perf_counter() - start
 
     solution = fem.Function(mixed_space)
@@ -1583,6 +1648,11 @@ def _solve_mixed_problem_serial_direct(
         solution,
         solve_seconds,
         {
+            "serial_sparse_linear_system_dtype": resolved_linear_system_dtype,
+            "serial_sparse_matrix_value_dtype": str(
+                getattr(sparse_matrix, "dtype", getattr(value_dtype, "name", value_dtype))
+            ),
+            "serial_sparse_rhs_dtype": str(rhs_array.dtype),
             "serial_sparse_matrix_nnz": int(sparse_matrix.nnz),
             "serial_sparse_matrix_format": sparse_matrix_format,
             "serial_sparse_solver_backend": serial_solver_backend,
@@ -1716,8 +1786,17 @@ def _solve_with_form_builder(
 ) -> FEMSinglePhaseResult:
     _validate_pressure_drop(pressure_inlet, pressure_outlet)
     solver_options = options or FEniCSSolverOptions()
+    requested_linear_system_dtype = _resolve_fem_linear_system_dtype(
+        solver_options.linear_system_dtype
+    )
     api = _require_dolfinx_core()
     selected_linear_backend = _resolve_linear_backend(solver_options.linear_backend, api)
+    if selected_linear_backend == "petsc" and requested_linear_system_dtype != "float64":
+        raise ValueError(
+            "linear_system_dtype='float32' is available for serial sparse FEM "
+            "backends such as 'superlu'/'scipy' and for 'nvmath_cudss'. The PETSc "
+            "backend uses the scalar type of the installed PETSc/DOLFINx build."
+        )
     if selected_linear_backend == "petsc":
         api = _require_dolfinx_petsc(api)
     context = _build_context(problem, flow_axis=flow_axis, api=api)
@@ -1763,6 +1842,7 @@ def _solve_with_form_builder(
                 Literal["scipy", "superlu", "umfpack", "pardiso", "nvmath_cudss"],
                 selected_linear_backend,
             ),
+            linear_system_dtype=requested_linear_system_dtype,
             superlu_controls=solver_options.superlu_controls,
             umfpack_controls=solver_options.umfpack_controls,
             nvmath_cudss_controls=solver_options.nvmath_cudss_controls,
@@ -1782,6 +1862,7 @@ def _solve_with_form_builder(
         metadata={
             "linear_backend": selected_linear_backend,
             "solver_preset": solver_options.solver_preset,
+            "linear_system_dtype": requested_linear_system_dtype,
             "velocity_degree": velocity_degree,
             "pressure_family": pressure_family,
             "porosity_floor": problem.porosity_floor,
@@ -1806,6 +1887,7 @@ __all__ = [
     "FEMSinglePhaseResult",
     "FEniCSSolverOptions",
     "LinearSolverBackend",
+    "LinearSystemDType",
     "BrinkmanVelocityScale",
     "_brinkman_nondimensional_coefficients",
     "_brinkman_nondimensional_scales",
