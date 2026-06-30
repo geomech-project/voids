@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from importlib import import_module
 from time import perf_counter
@@ -28,12 +29,25 @@ _apply_fem_thread_defaults()
 import numpy as np  # noqa: E402
 
 from voids.image.porosity import PermeabilityMap, PorosityMap  # noqa: E402
+from voids.linalg.cudss import (  # noqa: E402
+    nvmath_cudss_controls_from_arguments as _nvmath_cudss_controls_from_arguments,
+    resolve_nvmath_cudss_controls as _resolve_nvmath_cudss_controls,
+    solve_nvmath_cudss as _solve_nvmath_cudss,
+)
 
 
 _AXIS_NAMES = ("x", "y", "z")
 _MIN_MARKER = {"x": 1, "y": 3, "z": 5}
 _MAX_MARKER = {"x": 2, "y": 4, "z": 6}
-LinearSolverBackend = Literal["auto", "petsc", "scipy", "superlu", "umfpack", "pardiso"]
+LinearSolverBackend = Literal[
+    "auto",
+    "petsc",
+    "scipy",
+    "superlu",
+    "umfpack",
+    "pardiso",
+    "nvmath_cudss",
+]
 BrinkmanVelocityScale = Literal["viscous", "unit_darcy"]
 FEMSolverPreset = Literal[
     "custom",
@@ -92,19 +106,22 @@ class FEniCSSolverOptions:
     PETSc stack is not available in the conda-forge FEniCSx packages used by
     ``voids``, ``auto`` uses DOLFINx assembly plus SciPy/SuperLU.
 
-    Use ``linear_backend="superlu"``, ``"scipy"``, ``"umfpack"``, or
-    ``"pardiso"`` to request the serial DOLFINx-assembly/direct-sparse path
-    explicitly. These paths use the same weak form and boundary conditions as
-    PETSc; only the linear algebra backend changes. ``"scipy"`` is kept as a
-    backward-compatible alias for the SciPy/SuperLU path. ``"umfpack"``
-    requires the optional ``scikits.umfpack`` package, and ``"pardiso"``
-    requires the optional ``pypardiso`` package.
+    Use ``linear_backend="superlu"``, ``"scipy"``, ``"umfpack"``,
+    ``"pardiso"``, or ``"nvmath_cudss"`` to request the serial
+    DOLFINx-assembly/direct-sparse path explicitly. These paths use the same
+    weak form and boundary conditions as PETSc; only the linear algebra backend
+    changes. ``"scipy"`` is kept as a backward-compatible alias for the
+    SciPy/SuperLU path. ``"umfpack"`` requires the optional
+    ``scikits.umfpack`` package, ``"pardiso"`` requires the optional
+    ``pypardiso`` package, and ``"nvmath_cudss"`` requires a CUDA-capable
+    PyTorch/nvmath cuDSS runtime.
     """
 
     linear_backend: LinearSolverBackend = "auto"
     solver_preset: FEMSolverPreset = "direct_reference"
     superlu_controls: dict[str, Any] = field(default_factory=dict)
     umfpack_controls: dict[str, Any] = field(default_factory=dict)
+    nvmath_cudss_controls: dict[str, Any] = field(default_factory=dict)
     petsc_options: dict[str, Any] = field(
         default_factory=lambda: {
             "ksp_type": "preonly",
@@ -390,6 +407,45 @@ class FEniCSSolverOptions:
         )
 
     @classmethod
+    def nvmath_cudss_direct(
+        cls,
+        *,
+        dtype: Literal["float32", "float64"] = "float64",
+        device_ids: int | Sequence[int] | Literal["all"] | None = None,
+        ir_steps: int = 5,
+        use_matching: bool = True,
+        pivot_type: Literal["col", "row", "none"] | None = None,
+        check_residual: bool = True,
+        residual_rtol: float | None = None,
+        controls: Mapping[str, Any] | None = None,
+    ) -> FEniCSSolverOptions:
+        """Create options for the optional CUDA cuDSS direct-solver backend.
+
+        The backend uses serial DOLFINx assembly, transfers the assembled sparse
+        system to CUDA tensors, and solves it through ``nvmath.bindings.cudss``.
+        It requires a CUDA-capable PyTorch/nvmath cuDSS runtime at solve time.
+        Pass ``device_ids=(0, 1)`` or ``device_ids="all"`` to request a
+        single-node multi-GPU cuDSS handle.
+        ``dtype="float64"``, matching, and iterative refinement are the
+        conservative defaults for mixed Brinkman systems.
+        """
+
+        return cls(
+            linear_backend="nvmath_cudss",
+            solver_preset="direct_reference",
+            nvmath_cudss_controls=_nvmath_cudss_controls_from_arguments(
+                dtype=dtype,
+                device_ids=device_ids,
+                ir_steps=ir_steps,
+                use_matching=use_matching,
+                pivot_type=pivot_type,
+                check_residual=check_residual,
+                residual_rtol=residual_rtol,
+                controls=controls,
+            ),
+        )
+
+    @classmethod
     def pardiso_direct(cls) -> FEniCSSolverOptions:
         """Create options for the serial DOLFINx-assembly/PARDISO backend."""
 
@@ -572,10 +628,18 @@ def _require_dolfinx() -> _DolfinxAPI:
 
 
 def _resolve_linear_backend(requested: LinearSolverBackend, api: _DolfinxAPI) -> str:
-    if requested not in {"auto", "petsc", "scipy", "superlu", "umfpack", "pardiso"}:
+    if requested not in {
+        "auto",
+        "petsc",
+        "scipy",
+        "superlu",
+        "umfpack",
+        "pardiso",
+        "nvmath_cudss",
+    }:
         raise ValueError(
             "linear_backend must be one of 'auto', 'petsc', 'scipy', 'superlu', "
-            "'umfpack', or 'pardiso'"
+            "'umfpack', 'pardiso', or 'nvmath_cudss'"
         )
     if requested != "auto":
         return requested
@@ -1389,14 +1453,16 @@ def _solve_mixed_problem_serial_direct(
     form: Any,
     rhs: Any,
     bcs: list[Any],
-    linear_backend: Literal["scipy", "superlu", "umfpack", "pardiso"],
+    linear_backend: Literal["scipy", "superlu", "umfpack", "pardiso", "nvmath_cudss"],
     superlu_controls: Mapping[str, Any] | None = None,
     umfpack_controls: Mapping[str, Any] | None = None,
+    nvmath_cudss_controls: Mapping[str, Any] | None = None,
 ) -> tuple[Any, float, dict[str, Any]]:
     if context.mesh.comm.size != 1:
         raise NotImplementedError(
             "linear_backend='scipy', linear_backend='superlu', "
-            "linear_backend='umfpack', and linear_backend='pardiso' are "
+            "linear_backend='umfpack', linear_backend='pardiso', and "
+            "linear_backend='nvmath_cudss' are "
             "serial-only; use linear_backend='petsc' for MPI-distributed FEM "
             "solves."
         )
@@ -1427,6 +1493,21 @@ def _solve_mixed_problem_serial_direct(
         solve_linear_system = solve_umfpack
         sparse_matrix_format = "csc"
         serial_solver_backend = "scikits.umfpack.UmfpackContext(dl)"
+    elif linear_backend == "nvmath_cudss":
+        resolved_nvmath_cudss_controls = _resolve_nvmath_cudss_controls(nvmath_cudss_controls or {})
+
+        def solve_nvmath_cudss(matrix: Any, rhs_array: Any) -> Any:
+            solution, metadata = _solve_nvmath_cudss(
+                matrix,
+                rhs_array,
+                controls=resolved_nvmath_cudss_controls,
+            )
+            serial_solver_metadata.update(metadata)
+            return solution
+
+        solve_linear_system = solve_nvmath_cudss
+        sparse_matrix_format = "csr"
+        serial_solver_backend = "nvmath.bindings.cudss"
     elif linear_backend == "pardiso":
         try:
             pypardiso = import_module("pypardiso")
@@ -1679,11 +1760,12 @@ def _solve_with_form_builder(
             rhs=rhs,
             bcs=bcs,
             linear_backend=cast(
-                Literal["scipy", "superlu", "umfpack", "pardiso"],
+                Literal["scipy", "superlu", "umfpack", "pardiso", "nvmath_cudss"],
                 selected_linear_backend,
             ),
             superlu_controls=solver_options.superlu_controls,
             umfpack_controls=solver_options.umfpack_controls,
+            nvmath_cudss_controls=solver_options.nvmath_cudss_controls,
         )
     return _result_from_solution(
         context,
@@ -1708,6 +1790,7 @@ def _solve_with_form_builder(
             "petsc_options_prefix": solver_options.petsc_options_prefix,
             "superlu_controls": dict(solver_options.superlu_controls),
             "umfpack_controls": dict(solver_options.umfpack_controls),
+            "nvmath_cudss_controls": dict(solver_options.nvmath_cudss_controls),
             "thread_environment": _thread_environment_metadata(),
             **dict(extra_metadata or {}),
             **_mpi_metadata(context),
