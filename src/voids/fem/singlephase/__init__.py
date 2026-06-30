@@ -1,10 +1,12 @@
 """Single-phase finite-element Darcy and Brinkman backends."""
 
 from voids.fem.singlephase._common import (
+    BrinkmanNondimensionalization,
     FEMMapProblem,
     FEMSolverPreset,
     FEMSinglePhaseResult,
     FEniCSSolverOptions,
+    BrinkmanVelocityScale,
     LinearSolverBackend,
 )
 from voids.fem.singlephase.taylorhood import (
@@ -24,6 +26,8 @@ __all__ = [
     "FEMSinglePhaseResult",
     "FEMUpscalingResult",
     "FEniCSSolverOptions",
+    "BrinkmanNondimensionalization",
+    "BrinkmanVelocityScale",
     "LinearSolverBackend",
     "solve_brinkman_taylor_hood",
     "solve_brinkman_usfem",

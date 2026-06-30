@@ -34,6 +34,7 @@ _AXIS_NAMES = ("x", "y", "z")
 _MIN_MARKER = {"x": 1, "y": 3, "z": 5}
 _MAX_MARKER = {"x": 2, "y": 4, "z": 6}
 LinearSolverBackend = Literal["auto", "petsc", "scipy", "superlu", "umfpack", "pardiso"]
+BrinkmanVelocityScale = Literal["viscous", "unit_darcy"]
 FEMSolverPreset = Literal[
     "custom",
     "direct_reference",
@@ -41,6 +42,45 @@ FEMSolverPreset = Literal[
     "iterative_block_lgmres_experimental",
     "iterative_fieldsplit_experimental",
 ]
+_SUPERLU_PERMC_SPECS = {"NATURAL", "MMD_ATA", "MMD_AT_PLUS_A", "COLAMD"}
+_SUPERLU_CONTROL_KEYS = {
+    "permc_spec",
+    "diag_pivot_thresh",
+    "relax",
+    "panel_size",
+    "equil",
+}
+
+
+def _superlu_controls_from_arguments(
+    *,
+    permc_spec: str | None = None,
+    diag_pivot_thresh: float | None = None,
+    relax: int | None = None,
+    panel_size: int | None = None,
+    equil: bool | None = None,
+    controls: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    superlu_controls: dict[str, Any] = {}
+    for key, value in (controls or {}).items():
+        normalized_key = str(key).strip().lower().replace("-", "_")
+        if normalized_key not in _SUPERLU_CONTROL_KEYS:
+            supported = ", ".join(sorted(_SUPERLU_CONTROL_KEYS))
+            raise ValueError(
+                f"Unsupported SuperLU control {key!r}; supported controls: {supported}"
+            )
+        superlu_controls[normalized_key] = value
+    if permc_spec is not None:
+        superlu_controls["permc_spec"] = permc_spec
+    if diag_pivot_thresh is not None:
+        superlu_controls["diag_pivot_thresh"] = float(diag_pivot_thresh)
+    if relax is not None:
+        superlu_controls["relax"] = int(relax)
+    if panel_size is not None:
+        superlu_controls["panel_size"] = int(panel_size)
+    if equil is not None:
+        superlu_controls["equil"] = bool(equil)
+    return superlu_controls
 
 
 @dataclass(slots=True)
@@ -63,6 +103,7 @@ class FEniCSSolverOptions:
 
     linear_backend: LinearSolverBackend = "auto"
     solver_preset: FEMSolverPreset = "direct_reference"
+    superlu_controls: dict[str, Any] = field(default_factory=dict)
     umfpack_controls: dict[str, Any] = field(default_factory=dict)
     petsc_options: dict[str, Any] = field(
         default_factory=lambda: {
@@ -264,16 +305,56 @@ class FEniCSSolverOptions:
         )
 
     @classmethod
-    def scipy_direct(cls) -> FEniCSSolverOptions:
+    def scipy_direct(
+        cls,
+        *,
+        permc_spec: str | None = None,
+        diag_pivot_thresh: float | None = None,
+        relax: int | None = None,
+        panel_size: int | None = None,
+        equil: bool | None = None,
+        controls: Mapping[str, Any] | None = None,
+    ) -> FEniCSSolverOptions:
         """Create options for the serial DOLFINx-assembly/SciPy SuperLU backend."""
 
-        return cls(linear_backend="scipy", solver_preset="direct_reference")
+        return cls(
+            linear_backend="scipy",
+            solver_preset="direct_reference",
+            superlu_controls=_superlu_controls_from_arguments(
+                permc_spec=permc_spec,
+                diag_pivot_thresh=diag_pivot_thresh,
+                relax=relax,
+                panel_size=panel_size,
+                equil=equil,
+                controls=controls,
+            ),
+        )
 
     @classmethod
-    def superlu_direct(cls) -> FEniCSSolverOptions:
+    def superlu_direct(
+        cls,
+        *,
+        permc_spec: str | None = None,
+        diag_pivot_thresh: float | None = None,
+        relax: int | None = None,
+        panel_size: int | None = None,
+        equil: bool | None = None,
+        controls: Mapping[str, Any] | None = None,
+    ) -> FEniCSSolverOptions:
         """Create options for the serial DOLFINx-assembly/SuperLU backend."""
 
-        return cls(linear_backend="superlu", solver_preset="direct_reference")
+        return cls(
+            linear_backend="superlu",
+            solver_preset="direct_reference",
+            superlu_controls=_superlu_controls_from_arguments(
+                permc_spec=permc_spec,
+                diag_pivot_thresh=diag_pivot_thresh,
+                relax=relax,
+                panel_size=panel_size,
+                equil=equil,
+                controls=controls,
+            ),
+        )
 
     @classmethod
     def umfpack_direct(
@@ -358,6 +439,31 @@ class FEMMapProblem:
             )
             if porosity_cell_size != _cell_size_tuple(self.permeability_map):
                 raise ValueError("porosity_map and permeability_map must have the same cell_size")
+
+
+@dataclass(frozen=True, slots=True)
+class BrinkmanNondimensionalization:
+    """Velocity scaling choice for Brinkman nondimensional forms.
+
+    The internal unknowns are ``u* = u / U`` and ``p* = p / DeltaP``. Use
+    ``velocity_scale="viscous"`` for ``U = DeltaP L / mu``. Use
+    ``velocity_scale="unit_darcy"`` for ``U = DeltaP K / (mu L)`` on constant
+    permeability maps. Results are converted back to physical velocity and
+    pressure before permeability is reported.
+    """
+
+    velocity_scale: BrinkmanVelocityScale = "viscous"
+
+
+@dataclass(frozen=True, slots=True)
+class _BrinkmanNondimensionalScales:
+    velocity_scale_type: BrinkmanVelocityScale
+    length_scale: float
+    pressure_scale: float
+    velocity_scale: float
+    coefficient_scale: float
+    constant_permeability: float | None = None
+    darcy_number: float | None = None
 
 
 @dataclass(slots=True)
@@ -689,16 +795,20 @@ def _mixed_space(
 
 
 def _boundary_geometry(context: _FEMContext) -> tuple[np.ndarray, np.ndarray, float]:
-    local_origin = np.min(context.mesh.geometry.x[:, : context.mesh.geometry.dim], axis=0)
-    local_upper = np.max(context.mesh.geometry.x[:, : context.mesh.geometry.dim], axis=0)
-    problem_origin = np.asarray(
-        context.mesh.comm.allreduce(local_origin, op=context.api.MPI.MIN),
+    local_coordinates = np.asarray(
+        context.mesh.geometry.x[:, : context.mesh.geometry.dim],
         dtype=float,
     )
-    problem_upper = np.asarray(
-        context.mesh.comm.allreduce(local_upper, op=context.api.MPI.MAX),
-        dtype=float,
-    )
+    if local_coordinates.size == 0:
+        local_origin = np.full(context.mesh.geometry.dim, np.inf, dtype=float)
+        local_upper = np.full(context.mesh.geometry.dim, -np.inf, dtype=float)
+    else:
+        local_origin = np.min(local_coordinates, axis=0)
+        local_upper = np.max(local_coordinates, axis=0)
+    problem_origin = np.empty_like(local_origin)
+    problem_upper = np.empty_like(local_upper)
+    context.mesh.comm.Allreduce(local_origin, problem_origin, op=context.api.MPI.MIN)
+    context.mesh.comm.Allreduce(local_upper, problem_upper, op=context.api.MPI.MAX)
     extent = float(np.max(problem_upper - problem_origin))
     atol = max(extent * 1.0e-10, float(np.finfo(float).eps))
     return problem_origin, problem_upper, atol
@@ -778,7 +888,16 @@ def _standalone_pressure_gauge_bc(context: _FEMContext, pressure_space: Any) -> 
         lambda x: _match_point(x, problem_origin, ndim=context.mesh.geometry.dim, atol=atol),
     )
     if dofs.size == 0:
-        dofs = np.asarray([0], dtype=np.int32)
+        index_map = pressure_space.dofmap.index_map
+        block_size = int(pressure_space.dofmap.index_map_bs)
+        local_size = int(index_map.size_local) * block_size
+        local_start, _ = index_map.local_range
+        local_candidate = int(local_start) * block_size if local_size > 0 else sys.maxsize
+        owner_candidate = int(context.mesh.comm.allreduce(local_candidate, op=context.api.MPI.MIN))
+        if local_candidate == owner_candidate:
+            dofs = np.asarray([0], dtype=np.int32)
+        else:
+            dofs = np.asarray([], dtype=np.int32)
     else:
         dofs = dofs[:1]
     return context.api.fem.dirichletbc(
@@ -812,6 +931,103 @@ def _assemble_scalar(context: _FEMContext, expression: Any) -> float:
 
 def _thread_environment_metadata() -> dict[str, str | None]:
     return {name: os.environ.get(name) for name in sorted(_FEM_THREAD_ENV_DEFAULTS)}
+
+
+def _constant_permeability_value(values: np.ndarray) -> float:
+    permeability_values = np.asarray(values, dtype=float)
+    if permeability_values.size == 0:
+        raise ValueError("permeability map must contain at least one value")
+    if not np.all(np.isfinite(permeability_values)) or np.any(permeability_values <= 0.0):
+        raise ValueError("permeability values must be positive and finite")
+    value = float(permeability_values.flat[0])
+    if not np.allclose(permeability_values, value, rtol=1.0e-12, atol=0.0):
+        raise ValueError(
+            "velocity_scale='unit_darcy' follows U = DeltaP K / (mu L) and "
+            "requires a globally constant floored permeability map"
+        )
+    return value
+
+
+def _brinkman_nondimensional_scales(
+    context: _FEMContext,
+    problem: FEMMapProblem,
+    *,
+    pressure_inlet: float,
+    pressure_outlet: float,
+    velocity_scale: BrinkmanVelocityScale,
+) -> _BrinkmanNondimensionalScales:
+    pressure_scale = float(pressure_inlet) - float(pressure_outlet)
+    if pressure_scale <= 0.0 or not np.isfinite(pressure_scale):
+        raise ValueError("pressure scale must be positive and finite")
+    length_scale = float(context.domain_length)
+    if length_scale <= 0.0 or not np.isfinite(length_scale):
+        raise ValueError("length scale must be positive and finite")
+    if velocity_scale == "viscous":
+        velocity_scale_value = pressure_scale * length_scale / float(problem.viscosity)
+        coefficient_scale = length_scale / float(problem.viscosity)
+        constant_permeability = None
+        darcy_number = None
+    elif velocity_scale == "unit_darcy":
+        constant_permeability = _constant_permeability_value(
+            np.asarray(context.coefficients["permeability_values"], dtype=float)
+        )
+        velocity_scale_value = (
+            pressure_scale * constant_permeability / (float(problem.viscosity) * length_scale)
+        )
+        coefficient_scale = constant_permeability / (float(problem.viscosity) * length_scale)
+        darcy_number = constant_permeability / (length_scale * length_scale)
+    else:
+        raise ValueError("velocity_scale must be either 'viscous' or 'unit_darcy'")
+    if velocity_scale_value <= 0.0 or not np.isfinite(velocity_scale_value):
+        raise ValueError("nondimensional velocity scale must be positive and finite")
+    return _BrinkmanNondimensionalScales(
+        velocity_scale_type=velocity_scale,
+        length_scale=length_scale,
+        pressure_scale=pressure_scale,
+        velocity_scale=velocity_scale_value,
+        coefficient_scale=coefficient_scale,
+        constant_permeability=constant_permeability,
+        darcy_number=darcy_number,
+    )
+
+
+def _resolve_brinkman_nondimensionalization(
+    nondimensional: bool | BrinkmanNondimensionalization,
+) -> BrinkmanNondimensionalization | None:
+    if isinstance(nondimensional, bool):
+        return BrinkmanNondimensionalization() if nondimensional else None
+    if isinstance(nondimensional, BrinkmanNondimensionalization):
+        return nondimensional
+    raise TypeError("nondimensional must be a bool or BrinkmanNondimensionalization")
+
+
+def _brinkman_nondimensional_coefficients(
+    context: _FEMContext,
+    problem: FEMMapProblem,
+    scales: _BrinkmanNondimensionalScales,
+) -> tuple[Any, Any]:
+    coefficient_scale = context.api.fem.Constant(
+        context.mesh,
+        float(scales.coefficient_scale),
+    )
+    gamma = coefficient_scale * context.coefficients["gamma"]
+    nu_eff = coefficient_scale * context.coefficients["nu_eff"]
+    return gamma, nu_eff
+
+
+def _nondimensional_metadata(scales: _BrinkmanNondimensionalScales | None) -> dict[str, Any]:
+    if scales is None:
+        return {"nondimensional": False}
+    return {
+        "nondimensional": True,
+        "nondimensional_velocity_scale_type": scales.velocity_scale_type,
+        "nondimensional_length_scale": scales.length_scale,
+        "nondimensional_pressure_scale": scales.pressure_scale,
+        "nondimensional_velocity_scale": scales.velocity_scale,
+        "nondimensional_coefficient_scale": scales.coefficient_scale,
+        "nondimensional_constant_permeability": scales.constant_permeability,
+        "nondimensional_darcy_number": scales.darcy_number,
+    }
 
 
 def _mpi_metadata(context: _FEMContext) -> dict[str, int]:
@@ -1106,6 +1322,38 @@ def _json_safe_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
     return safe
 
 
+def _resolve_superlu_controls(controls: Mapping[str, Any]) -> dict[str, Any]:
+    resolved: dict[str, Any] = {}
+    for key, value in controls.items():
+        normalized_key = str(key).strip().lower().replace("-", "_")
+        if normalized_key not in _SUPERLU_CONTROL_KEYS:
+            supported = ", ".join(sorted(_SUPERLU_CONTROL_KEYS))
+            raise ValueError(
+                f"Unsupported SuperLU control {key!r}; supported controls: {supported}"
+            )
+        if normalized_key == "permc_spec":
+            permc_spec = str(value).strip().upper()
+            if permc_spec not in _SUPERLU_PERMC_SPECS:
+                supported = ", ".join(sorted(_SUPERLU_PERMC_SPECS))
+                raise ValueError(
+                    f"Unsupported SuperLU permc_spec {value!r}; supported: {supported}"
+                )
+            resolved[normalized_key] = permc_spec
+        elif normalized_key == "diag_pivot_thresh":
+            pivot = float(value)
+            if pivot < 0.0 or pivot > 1.0:
+                raise ValueError("SuperLU diag_pivot_thresh must be between 0 and 1")
+            resolved[normalized_key] = pivot
+        elif normalized_key in {"relax", "panel_size"}:
+            integer_value = int(value)
+            if integer_value <= 0:
+                raise ValueError(f"SuperLU {normalized_key} must be positive")
+            resolved[normalized_key] = integer_value
+        elif normalized_key == "equil":
+            resolved[normalized_key] = bool(value)
+    return resolved
+
+
 def _solve_umfpack_int64(
     umfpack: Any,
     matrix: Any,
@@ -1142,6 +1390,7 @@ def _solve_mixed_problem_serial_direct(
     rhs: Any,
     bcs: list[Any],
     linear_backend: Literal["scipy", "superlu", "umfpack", "pardiso"],
+    superlu_controls: Mapping[str, Any] | None = None,
     umfpack_controls: Mapping[str, Any] | None = None,
 ) -> tuple[Any, float, dict[str, Any]]:
     if context.mesh.comm.size != 1:
@@ -1191,10 +1440,35 @@ def _solve_mixed_problem_serial_direct(
     else:
         from scipy.sparse.linalg import splu
 
+        resolved_superlu_controls = _resolve_superlu_controls(superlu_controls or {})
         sparse_matrix_format = "csc"
 
         def solve_superlu(matrix: Any, rhs_array: Any) -> Any:
-            return splu(matrix).solve(rhs_array)
+            kwargs: dict[str, Any] = {}
+            if "permc_spec" in resolved_superlu_controls:
+                kwargs["permc_spec"] = resolved_superlu_controls["permc_spec"]
+            if "diag_pivot_thresh" in resolved_superlu_controls:
+                kwargs["diag_pivot_thresh"] = resolved_superlu_controls["diag_pivot_thresh"]
+            if "relax" in resolved_superlu_controls:
+                kwargs["relax"] = resolved_superlu_controls["relax"]
+            if "panel_size" in resolved_superlu_controls:
+                kwargs["panel_size"] = resolved_superlu_controls["panel_size"]
+            if "equil" in resolved_superlu_controls:
+                kwargs["options"] = {"Equil": resolved_superlu_controls["equil"]}
+            lu = splu(matrix, **kwargs)
+            serial_solver_metadata.update(
+                {
+                    "serial_sparse_superlu_requested_controls": _json_safe_mapping(
+                        superlu_controls or {}
+                    ),
+                    "serial_sparse_superlu_resolved_controls": _json_safe_mapping(
+                        resolved_superlu_controls
+                    ),
+                    "serial_sparse_superlu_l_nnz": int(lu.L.nnz),
+                    "serial_sparse_superlu_u_nnz": int(lu.U.nnz),
+                }
+            )
+            return lu.solve(rhs_array)
 
         solve_linear_system = solve_superlu
 
@@ -1264,8 +1538,16 @@ def _result_from_solution(
     viscosity: float,
     solve_seconds: float,
     metadata: dict[str, Any] | None = None,
+    velocity_scale: float = 1.0,
+    pressure_scale: float = 1.0,
 ) -> FEMSinglePhaseResult:
     velocity, pressure = _collapse_solution(solution)
+    if velocity_scale != 1.0:
+        velocity.x.array[:] *= float(velocity_scale)
+        velocity.x.scatter_forward()
+    if pressure_scale != 1.0:
+        pressure.x.array[:] *= float(pressure_scale)
+        pressure.x.scatter_forward()
     return _result_from_velocity_pressure(
         context,
         velocity,
@@ -1345,6 +1627,11 @@ def _solve_with_form_builder(
     formulation: str,
     prefix_suffix: str,
     form_builder: Callable[[_FEMContext, Any, Any, Any, Any], Any],
+    boundary_pressure_inlet: float | None = None,
+    boundary_pressure_outlet: float | None = None,
+    velocity_scale: float = 1.0,
+    pressure_scale: float = 1.0,
+    extra_metadata: Mapping[str, Any] | None = None,
 ) -> FEMSinglePhaseResult:
     _validate_pressure_drop(pressure_inlet, pressure_outlet)
     solver_options = options or FEniCSSolverOptions()
@@ -1366,8 +1653,12 @@ def _solve_with_form_builder(
         context,
         v,
         flow_axis=flow_axis,
-        pressure_inlet=pressure_inlet,
-        pressure_outlet=pressure_outlet,
+        pressure_inlet=pressure_inlet
+        if boundary_pressure_inlet is None
+        else boundary_pressure_inlet,
+        pressure_outlet=pressure_outlet
+        if boundary_pressure_outlet is None
+        else boundary_pressure_outlet,
     )
     bcs = _side_wall_bcs(context, W, flow_axis=flow_axis)
     bcs.append(_pressure_gauge_bc(context, W))
@@ -1391,6 +1682,7 @@ def _solve_with_form_builder(
                 Literal["scipy", "superlu", "umfpack", "pardiso"],
                 selected_linear_backend,
             ),
+            superlu_controls=solver_options.superlu_controls,
             umfpack_controls=solver_options.umfpack_controls,
         )
     return _result_from_solution(
@@ -1403,6 +1695,8 @@ def _solve_with_form_builder(
         pressure_outlet=pressure_outlet,
         viscosity=problem.viscosity,
         solve_seconds=solve_seconds,
+        velocity_scale=velocity_scale,
+        pressure_scale=pressure_scale,
         metadata={
             "linear_backend": selected_linear_backend,
             "solver_preset": solver_options.solver_preset,
@@ -1412,8 +1706,10 @@ def _solve_with_form_builder(
             "permeability_floor": problem.permeability_floor,
             "petsc_options": dict(solver_options.petsc_options),
             "petsc_options_prefix": solver_options.petsc_options_prefix,
+            "superlu_controls": dict(solver_options.superlu_controls),
             "umfpack_controls": dict(solver_options.umfpack_controls),
             "thread_environment": _thread_environment_metadata(),
+            **dict(extra_metadata or {}),
             **_mpi_metadata(context),
             **solver_metadata,
         },
@@ -1422,10 +1718,17 @@ def _solve_with_form_builder(
 
 __all__ = [
     "FEMSolverPreset",
+    "BrinkmanNondimensionalization",
     "FEMMapProblem",
     "FEMSinglePhaseResult",
     "FEniCSSolverOptions",
     "LinearSolverBackend",
+    "BrinkmanVelocityScale",
+    "_brinkman_nondimensional_coefficients",
+    "_brinkman_nondimensional_scales",
+    "_constant_permeability_value",
+    "_nondimensional_metadata",
+    "_resolve_brinkman_nondimensionalization",
     "_build_context",
     "_solve_with_form_builder",
 ]
