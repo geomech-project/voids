@@ -138,6 +138,21 @@ def test_fenics_solver_options_direct_lu_builder() -> None:
     }
     assert FEniCSSolverOptions.pardiso_direct().linear_backend == "pardiso"
     assert FEniCSSolverOptions.pardiso_direct().solver_preset == "direct_reference"
+    assert FEniCSSolverOptions.nvmath_cudss_direct().linear_backend == "nvmath_cudss"
+    assert FEniCSSolverOptions.nvmath_cudss_direct().solver_preset == "direct_reference"
+    cudss_options = FEniCSSolverOptions.nvmath_cudss_direct(
+        device_ids=0,
+        dtype="float64",
+        ir_steps=5,
+    )
+    assert cudss_options.nvmath_cudss_controls == {
+        "dtype": "float64",
+        "ir_steps": 5,
+        "use_matching": True,
+        "check_residual": True,
+        "device_ids": (0,),
+        "residual_rtol": 1.0e-8,
+    }
 
 
 def test_fenics_solver_options_parallel_and_iterative_presets() -> None:

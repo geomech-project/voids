@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy import sparse
 
+import voids.linalg.solve as solve_mod
 from voids.physics.singlephase import FluidSinglePhase, PressureBC, SinglePhaseOptions, solve
 
 
@@ -92,3 +94,49 @@ def test_singlephase_umfpack_solver_matches_direct(line_network):
     assert np.isclose(r_umfpack.total_flow_rate, r_direct.total_flow_rate, rtol=1.0e-12)
     assert np.isclose(r_umfpack.permeability["x"], r_direct.permeability["x"], rtol=1.0e-12)
     assert r_umfpack.solver_info["method"] == "umfpack"
+
+
+def test_singlephase_nvmath_cudss_solver_matches_direct_with_fake_backend(
+    line_network,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The PNM solver can select the shared CUDA direct sparse backend."""
+
+    def fake_solve_nvmath_cudss(
+        matrix: sparse.spmatrix,
+        rhs: np.ndarray,
+        *,
+        controls: object = None,
+    ) -> tuple[np.ndarray, dict[str, object]]:
+        return np.asarray(sparse.linalg.spsolve(matrix, rhs), dtype=float), {
+            "serial_sparse_nvmath_cudss_relative_residual": 0.0,
+        }
+
+    monkeypatch.setattr(solve_mod, "solve_nvmath_cudss", fake_solve_nvmath_cudss)
+
+    bc = PressureBC("inlet_xmin", "outlet_xmax", pin=1.0, pout=0.0)
+    fluid = FluidSinglePhase(viscosity=1.0)
+    r_direct = solve(
+        line_network,
+        fluid=fluid,
+        bc=bc,
+        axis="x",
+        options=SinglePhaseOptions(solver="direct"),
+    )
+    r_cudss = solve(
+        line_network,
+        fluid=fluid,
+        bc=bc,
+        axis="x",
+        options=SinglePhaseOptions(
+            solver="nvmath_cudss",
+            solver_parameters={"device_ids": (0,), "dtype": "float64"},
+        ),
+    )
+
+    assert np.allclose(r_cudss.pore_pressure, r_direct.pore_pressure)
+    assert np.allclose(r_cudss.throat_flux, r_direct.throat_flux)
+    assert np.isclose(r_cudss.total_flow_rate, r_direct.total_flow_rate)
+    assert np.isclose(r_cudss.permeability["x"], r_direct.permeability["x"])
+    assert r_cudss.solver_info["method"] == "nvmath_cudss"
+    assert r_cudss.solver_info["backend"] == "nvmath.bindings.cudss"

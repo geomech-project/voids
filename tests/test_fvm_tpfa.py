@@ -5,6 +5,7 @@ import pytest
 from scipy import sparse
 from scipy.sparse.linalg import MatrixRankWarning
 
+import voids.linalg.solve as solve_mod
 import voids.fvm.singlephase.tpfa as tpfa_mod
 from voids.fvm.singlephase import (
     solve_tpfa,
@@ -207,6 +208,39 @@ def test_tpfa_umfpack_solver_matches_direct() -> None:
     assert umfpack.flow_rate == pytest.approx(direct.flow_rate, rel=1.0e-12)
     assert umfpack.solver_method == "umfpack"
     assert umfpack.solver_info["backend"] == "scikits.umfpack.spsolve"
+
+
+def test_tpfa_nvmath_cudss_solver_matches_direct_with_fake_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TPFA can reuse the shared CUDA direct sparse backend."""
+
+    def fake_solve_nvmath_cudss(
+        matrix: sparse.spmatrix,
+        rhs: np.ndarray,
+        *,
+        controls: object = None,
+    ) -> tuple[np.ndarray, dict[str, object]]:
+        return np.asarray(sparse.linalg.spsolve(matrix, rhs), dtype=float), {
+            "serial_sparse_nvmath_cudss_relative_residual": 0.0,
+        }
+
+    monkeypatch.setattr(solve_mod, "solve_nvmath_cudss", fake_solve_nvmath_cudss)
+
+    permeability = np.full((4, 4), 3.1)
+    direct = solve_tpfa(permeability, flow_axis="y", solver_method="direct")
+    cudss = solve_tpfa(
+        permeability,
+        flow_axis="y",
+        solver_method="nvmath_cudss",
+        solver_parameters={"device_ids": (0,), "dtype": "float64"},
+    )
+
+    assert np.allclose(cudss.pressure, direct.pressure)
+    assert cudss.permeability == pytest.approx(direct.permeability)
+    assert cudss.flow_rate == pytest.approx(direct.flow_rate)
+    assert cudss.solver_method == "nvmath_cudss"
+    assert cudss.solver_info["backend"] == "nvmath.bindings.cudss"
 
 
 def test_tpfa_rejects_nonpositive_pressure_drop() -> None:

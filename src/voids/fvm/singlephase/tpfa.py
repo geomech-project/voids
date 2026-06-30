@@ -254,11 +254,15 @@ def solve_tpfa(
     solver_method :
         Sparse linear solver backend passed to
         :func:`voids.linalg.solve.solve_linear_system`. Supported values include
-        ``"direct"``, ``"pardiso"``, ``"cg"``, and ``"gmres"``.
+        ``"direct"``, ``"pardiso"``, ``"nvmath_cudss"``, ``"cg"``, and
+        ``"gmres"``.
     solver_parameters :
         Optional backend-specific controls. For example,
         ``{"rtol": 1e-10, "preconditioner": "pyamg"}`` uses a PyAMG
         preconditioner with SciPy CG, matching the larger notebook comparisons.
+        For ``solver_method="nvmath_cudss"``, pass cuDSS controls such as
+        ``{"device_ids": 0, "dtype": "float64"}`` or
+        ``{"device_ids": (0, 1), "dtype": "float64"}``.
     """
 
     values, size, metadata = _as_permeability_array(permeability, cell_size=cell_size)

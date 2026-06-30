@@ -138,7 +138,10 @@ class SinglePhaseOptions:
     solver_parameters :
         Optional linear-solver configuration dictionary passed to the inner
         SciPy linear solves. For Krylov methods, this can include
-        ``{"preconditioner": "pyamg"}``.
+        ``{"preconditioner": "pyamg"}``. For the optional
+        ``solver="nvmath_cudss"`` CUDA direct backend, this can include controls
+        such as ``{"device_ids": 0, "dtype": "float64"}`` or
+        ``{"device_ids": (0, 1), "dtype": "float64"}``.
     nonlinear_solver :
         Nonlinear strategy used when viscosity depends on pressure. Supported
         values are ``"picard"`` and ``"newton"``.
