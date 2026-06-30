@@ -445,20 +445,118 @@ class FEniCSSolverOptions:
         device_ids: int | Sequence[int] | Literal["all"] | None = None,
         ir_steps: int = 5,
         use_matching: bool = True,
+        reordering_alg: str | int | None = None,
+        matching_alg: str | int | None = None,
+        factorization_alg: str | int | None = None,
+        solve_alg: str | int | None = None,
         pivot_type: Literal["col", "row", "none"] | None = None,
+        pivot_threshold: float | None = None,
+        pivot_epsilon: float | None = None,
+        pivot_epsilon_alg: str | int | None = None,
+        nd_nlevels: int | None = None,
+        use_superpanels: bool | None = None,
+        deterministic_mode: bool | None = None,
         check_residual: bool = True,
         residual_rtol: float | None = None,
         controls: Mapping[str, Any] | None = None,
     ) -> FEniCSSolverOptions:
         """Create options for the optional CUDA cuDSS direct-solver backend.
 
-        The backend uses serial DOLFINx assembly, transfers the assembled sparse
-        system to CUDA tensors, and solves it through ``nvmath.bindings.cudss``.
-        It requires a CUDA-capable PyTorch/nvmath cuDSS runtime at solve time.
-        Pass ``device_ids=(0, 1)`` or ``device_ids="all"`` to request a
-        single-node multi-GPU cuDSS handle.
-        ``dtype="float64"``, matching, and iterative refinement are the
-        conservative defaults for mixed Brinkman systems.
+        The backend uses serial DOLFINx assembly, converts the assembled system
+        to SciPy CSR format, copies the sparse matrix and right-hand side to
+        CUDA tensors, and solves the system through ``nvmath.bindings.cudss``.
+        It requires PyTorch with CUDA support and the nvmath/cuDSS runtime at
+        solve time. These controls affect only the numerical linear solve; they
+        do not change the Brinkman/Darcy weak form, porosity, permeability,
+        viscosity, pressure drop, or dimensional scaling.
+
+        Parameters
+        ----------
+        dtype :
+            Floating-point value precision used for the cuDSS matrix, right-hand
+            side, and solution. ``"float64"`` is the conservative default.
+            ``"float32"`` can reduce memory use and wall time, but it must be
+            accepted only after the residual check and a same-map reference
+            comparison because high permeability contrasts can be ill-conditioned.
+        device_ids :
+            CUDA device selection. ``None`` uses PyTorch's current CUDA device,
+            an integer selects one device, a sequence such as ``(0, 1)`` requests
+            a single-node multi-GPU cuDSS handle, and ``"all"`` uses all CUDA
+            devices visible to PyTorch. Some cuDSS controls are not supported by
+            all single-GPU and multi-GPU execution paths.
+        ir_steps :
+            cuDSS iterative-refinement step count
+            (``ConfigParam.IR_N_STEPS``). ``voids`` sets this to ``5`` by
+            default, although a fresh cuDSS config in the tested stack reports
+            ``IR_N_STEPS = 0``. Increasing this value can improve single-precision
+            residuals, but the effect is problem-dependent and not guaranteed to
+            be monotonic.
+        use_matching :
+            Whether to request cuDSS matching/scaling
+            (``ConfigParam.USE_MATCHING``). Matching is usually helpful for
+            general sparse matrices because it can reduce pivot perturbations;
+            it is enabled by default.
+        reordering_alg, matching_alg, factorization_alg, solve_alg, pivot_epsilon_alg :
+            Optional cuDSS algorithm selectors for
+            ``REORDERING_ALG``, ``MATCHING_ALG``, ``FACTORIZATION_ALG``,
+            ``SOLVE_ALG``, and ``PIVOT_EPSILON_ALG``. Values may be integers
+            ``0`` through ``5`` or strings such as ``"default"``, ``"alg_1"``,
+            or ``"3"``. Their exact meaning and support are defined by the
+            installed cuDSS version; unsupported combinations raise a cuDSS
+            error during analysis, factorization, or solve.
+        pivot_type :
+            Optional cuDSS pivoting mode (``ConfigParam.PIVOT_TYPE``): ``"col"``
+            for column pivoting, ``"row"`` for row pivoting, or ``"none"`` to
+            request no pivoting. Leave as ``None`` to use the cuDSS default.
+        pivot_threshold :
+            Optional non-negative pivoting threshold
+            (``ConfigParam.PIVOT_THRESHOLD``). Larger values can make pivoting
+            more conservative, but may increase cost or be ignored depending on
+            the selected cuDSS algorithm.
+        pivot_epsilon :
+            Optional non-negative pivot perturbation/floor
+            (``ConfigParam.PIVOT_EPSILON``). This can stabilize factorizations
+            with very small pivots, especially in single precision. For example,
+            local USFEM Brinkman probes on a high-contrast map benefited from
+            ``dtype="float32"``, ``device_ids=0``, ``ir_steps=20``, and
+            ``pivot_epsilon=1.0e-4``; the same kind of tuning did not rescue the
+            TPFA cuDSS single-precision solve on that map.
+        nd_nlevels :
+            Optional non-negative nested-dissection level control
+            (``ConfigParam.ND_NLEVELS``) used by cuDSS reordering algorithms that
+            support it.
+        use_superpanels :
+            Optional flag for cuDSS superpanel optimization
+            (``ConfigParam.USE_SUPERPANELS``). Leave as ``None`` to use the cuDSS
+            default.
+        deterministic_mode :
+            Optional request for deterministic cuDSS execution
+            (``ConfigParam.DETERMINISTIC_MODE``). This is version/backend
+            dependent and may raise ``NOT_SUPPORTED`` in some cuDSS paths.
+        check_residual :
+            If true, ``voids`` computes the assembled-system relative residual
+            after cuDSS returns and raises an error when it exceeds
+            ``residual_rtol``. Keep this enabled for lower-precision studies.
+        residual_rtol :
+            Relative residual acceptance tolerance used when
+            ``check_residual=True``. If omitted, ``voids`` uses ``1.0e-8`` for
+            ``float64`` and ``1.0e-4`` for ``float32``.
+        controls :
+            Optional low-level control mapping. Keys use the same names as the
+            keyword arguments, with hyphens normalized to underscores. Explicit
+            keyword arguments override the same keys in this mapping.
+
+        Returns
+        -------
+        FEniCSSolverOptions
+            Solver options with ``linear_backend="nvmath_cudss"`` and resolved
+            cuDSS controls stored in ``nvmath_cudss_controls``.
+
+        Notes
+        -----
+        This backend is experimental and hardware/runtime dependent. It should
+        be compared against a same-map direct reference before using the result
+        for scientific claims.
         """
 
         resolved_controls = _nvmath_cudss_controls_from_arguments(
@@ -466,7 +564,17 @@ class FEniCSSolverOptions:
             device_ids=device_ids,
             ir_steps=ir_steps,
             use_matching=use_matching,
+            reordering_alg=reordering_alg,
+            matching_alg=matching_alg,
+            factorization_alg=factorization_alg,
+            solve_alg=solve_alg,
             pivot_type=pivot_type,
+            pivot_threshold=pivot_threshold,
+            pivot_epsilon=pivot_epsilon,
+            pivot_epsilon_alg=pivot_epsilon_alg,
+            nd_nlevels=nd_nlevels,
+            use_superpanels=use_superpanels,
+            deterministic_mode=deterministic_mode,
             check_residual=check_residual,
             residual_rtol=residual_rtol,
             controls=controls,

@@ -10,16 +10,48 @@ from scipy import sparse
 
 NVMATH_CUDSS_CONTROL_KEYS = {
     "check_residual",
+    "deterministic_mode",
     "device_ids",
     "dtype",
+    "factorization_alg",
     "ir_steps",
+    "matching_alg",
+    "nd_nlevels",
+    "pivot_epsilon",
+    "pivot_epsilon_alg",
+    "pivot_threshold",
     "pivot_type",
+    "reordering_alg",
     "residual_rtol",
+    "solve_alg",
+    "use_superpanels",
     "use_matching",
     "value_dtype",
 }
 NVMATH_CUDSS_DTYPES = {"float32", "float64"}
 NVMATH_CUDSS_PIVOT_TYPES = {"col", "row", "none"}
+NVMATH_CUDSS_ALGORITHMS = {
+    "default": 0,
+    "alg_default": 0,
+    "alg0": 0,
+    "alg_0": 0,
+    "0": 0,
+    "alg1": 1,
+    "alg_1": 1,
+    "1": 1,
+    "alg2": 2,
+    "alg_2": 2,
+    "2": 2,
+    "alg3": 3,
+    "alg_3": 3,
+    "3": 3,
+    "alg4": 4,
+    "alg_4": 4,
+    "4": 4,
+    "alg5": 5,
+    "alg_5": 5,
+    "5": 5,
+}
 
 
 def json_safe_mapping(mapping: Mapping[str, Any]) -> dict[str, Any]:
@@ -54,6 +86,28 @@ def normalize_nvmath_cudss_device_ids(value: Any) -> tuple[int, ...] | Literal["
     return ids
 
 
+def _resolve_nvmath_cudss_algorithm(value: Any, *, control_name: str) -> int:
+    if isinstance(value, int):
+        algorithm = int(value)
+    else:
+        normalized = str(value).strip().lower().replace("-", "_")
+        if normalized not in NVMATH_CUDSS_ALGORITHMS:
+            supported = ", ".join(sorted(NVMATH_CUDSS_ALGORITHMS))
+            raise ValueError(f"nvmath_cudss {control_name} must be one of: {supported}")
+        algorithm = NVMATH_CUDSS_ALGORITHMS[normalized]
+    if algorithm < 0 or algorithm > 5:
+        raise ValueError(f"nvmath_cudss {control_name} must be in the range 0..5")
+    return algorithm
+
+
+def _resolve_finite_float(value: Any, *, control_name: str, positive: bool = False) -> float:
+    resolved = float(value)
+    if not np.isfinite(resolved) or resolved < 0.0 or (positive and resolved == 0.0):
+        qualifier = "positive" if positive else "non-negative"
+        raise ValueError(f"nvmath_cudss {control_name} must be {qualifier} and finite")
+    return resolved
+
+
 def resolve_nvmath_cudss_controls(controls: Mapping[str, Any]) -> dict[str, Any]:
     """Validate and normalize controls for the optional nvmath/cuDSS backend."""
 
@@ -85,6 +139,17 @@ def resolve_nvmath_cudss_controls(controls: Mapping[str, Any]) -> dict[str, Any]
             resolved["ir_steps"] = ir_steps
         elif normalized_key == "use_matching":
             resolved["use_matching"] = bool(value)
+        elif normalized_key in {
+            "reordering_alg",
+            "matching_alg",
+            "factorization_alg",
+            "solve_alg",
+            "pivot_epsilon_alg",
+        }:
+            resolved[normalized_key] = _resolve_nvmath_cudss_algorithm(
+                value,
+                control_name=normalized_key,
+            )
         elif normalized_key == "pivot_type":
             if value is None:
                 resolved.pop("pivot_type", None)
@@ -94,6 +159,25 @@ def resolve_nvmath_cudss_controls(controls: Mapping[str, Any]) -> dict[str, Any]
                     supported = ", ".join(sorted(NVMATH_CUDSS_PIVOT_TYPES))
                     raise ValueError(f"nvmath_cudss pivot_type must be one of: {supported}")
                 resolved["pivot_type"] = pivot_type
+        elif normalized_key == "pivot_threshold":
+            resolved["pivot_threshold"] = _resolve_finite_float(
+                value,
+                control_name="pivot_threshold",
+            )
+        elif normalized_key == "pivot_epsilon":
+            resolved["pivot_epsilon"] = _resolve_finite_float(
+                value,
+                control_name="pivot_epsilon",
+            )
+        elif normalized_key == "nd_nlevels":
+            nd_nlevels = int(value)
+            if nd_nlevels < 0:
+                raise ValueError("nvmath_cudss nd_nlevels must be non-negative")
+            resolved["nd_nlevels"] = nd_nlevels
+        elif normalized_key == "use_superpanels":
+            resolved["use_superpanels"] = bool(value)
+        elif normalized_key == "deterministic_mode":
+            resolved["deterministic_mode"] = bool(value)
         elif normalized_key == "check_residual":
             resolved["check_residual"] = bool(value)
         elif normalized_key == "residual_rtol":
@@ -112,12 +196,113 @@ def nvmath_cudss_controls_from_arguments(
     device_ids: int | Sequence[int] | Literal["all"] | None = None,
     ir_steps: int = 5,
     use_matching: bool = True,
+    reordering_alg: str | int | None = None,
+    matching_alg: str | int | None = None,
+    factorization_alg: str | int | None = None,
+    solve_alg: str | int | None = None,
     pivot_type: Literal["col", "row", "none"] | None = None,
+    pivot_threshold: float | None = None,
+    pivot_epsilon: float | None = None,
+    pivot_epsilon_alg: str | int | None = None,
+    nd_nlevels: int | None = None,
+    use_superpanels: bool | None = None,
+    deterministic_mode: bool | None = None,
     check_residual: bool = True,
     residual_rtol: float | None = None,
     controls: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build validated cuDSS controls from keyword-style arguments."""
+    """Build validated low-level controls for the optional nvmath/cuDSS backend.
+
+    This helper merges explicit keyword arguments with an optional existing
+    control mapping and then calls :func:`resolve_nvmath_cudss_controls`.
+    The returned dictionary is normalized to the names and value types consumed
+    by :func:`solve_nvmath_cudss`; it is safe to store in solver metadata or
+    pass to the shared sparse solver. These controls affect only the numerical
+    linear solve. They do not change the physical model, boundary conditions,
+    permeability, porosity, viscosity, pressure drop, or nondimensionalization.
+
+    Parameters
+    ----------
+    dtype :
+        Floating-point value precision for cuDSS matrix values, right-hand side,
+        and solution. Supported values are ``"float64"`` and ``"float32"``.
+        The default is ``"float64"``. Single precision should be accepted only
+        with the residual check enabled and a same-problem reference comparison.
+    device_ids :
+        CUDA device selection. ``None`` leaves device choice to PyTorch's
+        current CUDA device at solve time. An integer selects one GPU, a
+        sequence such as ``(0, 1)`` requests a single-node multi-GPU cuDSS
+        handle, and ``"all"`` requests all CUDA devices visible to PyTorch.
+    ir_steps :
+        cuDSS iterative-refinement step count
+        (``ConfigParam.IR_N_STEPS``). ``voids`` sets this to ``5`` by default;
+        a fresh cuDSS config in the tested nvmath/cuDSS stack reports
+        ``IR_N_STEPS = 0``. Larger values can improve lower-precision residuals
+        on some systems, but the effect is not guaranteed to be monotonic.
+    use_matching :
+        Whether to enable cuDSS matching/scaling
+        (``ConfigParam.USE_MATCHING``). Matching is enabled by default because
+        it can reduce pivot perturbations for general sparse matrices.
+    reordering_alg, matching_alg, factorization_alg, solve_alg, pivot_epsilon_alg :
+        Optional cuDSS algorithm selectors for
+        ``REORDERING_ALG``, ``MATCHING_ALG``, ``FACTORIZATION_ALG``,
+        ``SOLVE_ALG``, and ``PIVOT_EPSILON_ALG``. Values may be integers
+        ``0`` through ``5`` or strings such as ``"default"``, ``"alg_1"``, or
+        ``"3"``. Support and exact meaning are defined by the installed cuDSS
+        version.
+    pivot_type :
+        Optional pivoting mode (``ConfigParam.PIVOT_TYPE``): ``"col"``,
+        ``"row"``, or ``"none"``. ``None`` leaves the cuDSS default unchanged.
+    pivot_threshold :
+        Optional non-negative pivoting threshold
+        (``ConfigParam.PIVOT_THRESHOLD``).
+    pivot_epsilon :
+        Optional non-negative pivot perturbation/floor
+        (``ConfigParam.PIVOT_EPSILON``). This can help stabilize very small
+        pivots in ill-conditioned single-precision systems, but should be
+        treated as a solver-stabilization experiment rather than a physics
+        change.
+    nd_nlevels :
+        Optional non-negative nested-dissection level control
+        (``ConfigParam.ND_NLEVELS``) for cuDSS reordering algorithms that support
+        it.
+    use_superpanels :
+        Optional flag for cuDSS superpanel optimization
+        (``ConfigParam.USE_SUPERPANELS``). ``None`` leaves the cuDSS default
+        unchanged.
+    deterministic_mode :
+        Optional request for deterministic cuDSS execution
+        (``ConfigParam.DETERMINISTIC_MODE``). Support is runtime/backend
+        dependent.
+    check_residual :
+        Whether :func:`solve_nvmath_cudss` should verify the assembled-system
+        relative residual after cuDSS returns. Keep this enabled for lower
+        precision and high-contrast systems.
+    residual_rtol :
+        Relative residual tolerance used when ``check_residual`` is enabled.
+        If omitted, ``voids`` uses ``1.0e-8`` for ``float64`` and ``1.0e-4`` for
+        ``float32``.
+    controls :
+        Optional base mapping of cuDSS controls. Control keys are normalized by
+        stripping whitespace, lowercasing, and replacing hyphens with
+        underscores. The always-present keyword arguments ``dtype``,
+        ``ir_steps``, ``use_matching``, and ``check_residual`` override any same
+        keys in this mapping. Optional keyword arguments override matching keys
+        only when they are not ``None``.
+
+    Returns
+    -------
+    dict[str, Any]
+        Validated controls with normalized keys. Algorithm selectors are stored
+        as cuDSS integer algorithm ids, device ids are normalized to a tuple or
+        ``"all"``, and a default ``residual_rtol`` is inserted when omitted.
+
+    Raises
+    ------
+    ValueError
+        If a control name is unsupported or a control value is outside the
+        accepted range.
+    """
 
     nvmath_cudss_controls: dict[str, Any] = dict(controls or {})
     nvmath_cudss_controls["dtype"] = dtype
@@ -126,8 +311,28 @@ def nvmath_cudss_controls_from_arguments(
     nvmath_cudss_controls["check_residual"] = bool(check_residual)
     if device_ids is not None:
         nvmath_cudss_controls["device_ids"] = device_ids
+    if reordering_alg is not None:
+        nvmath_cudss_controls["reordering_alg"] = reordering_alg
+    if matching_alg is not None:
+        nvmath_cudss_controls["matching_alg"] = matching_alg
+    if factorization_alg is not None:
+        nvmath_cudss_controls["factorization_alg"] = factorization_alg
+    if solve_alg is not None:
+        nvmath_cudss_controls["solve_alg"] = solve_alg
     if pivot_type is not None:
         nvmath_cudss_controls["pivot_type"] = pivot_type
+    if pivot_threshold is not None:
+        nvmath_cudss_controls["pivot_threshold"] = pivot_threshold
+    if pivot_epsilon is not None:
+        nvmath_cudss_controls["pivot_epsilon"] = pivot_epsilon
+    if pivot_epsilon_alg is not None:
+        nvmath_cudss_controls["pivot_epsilon_alg"] = pivot_epsilon_alg
+    if nd_nlevels is not None:
+        nvmath_cudss_controls["nd_nlevels"] = int(nd_nlevels)
+    if use_superpanels is not None:
+        nvmath_cudss_controls["use_superpanels"] = bool(use_superpanels)
+    if deterministic_mode is not None:
+        nvmath_cudss_controls["deterministic_mode"] = bool(deterministic_mode)
     if residual_rtol is not None:
         nvmath_cudss_controls["residual_rtol"] = float(residual_rtol)
     return resolve_nvmath_cudss_controls(nvmath_cudss_controls)
@@ -215,11 +420,8 @@ def _nvmath_cudss_memory_estimates(cudss: Any, handle: Any, data: Any) -> dict[s
         size_written.ctypes.data,
     )
     record = estimates.view(np.recarray)
-    return {
-        name: int(getattr(record, name))
-        for name in _NVMATH_CUDSS_MEMORY_ESTIMATES_DTYPE.names
-        if name != "reserved"
-    }
+    names = _NVMATH_CUDSS_MEMORY_ESTIMATES_DTYPE.names or ()
+    return {name: int(getattr(record, name)) for name in names if name != "reserved"}
 
 
 def _nvmath_cudss_relative_residual(
@@ -353,6 +555,34 @@ def solve_nvmath_cudss(
                 cudss.ConfigParam.DEVICE_INDICES,
                 device_ids,
             )
+        if "reordering_alg" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.REORDERING_ALG,
+                int(resolved_controls["reordering_alg"]),
+            )
+        if "matching_alg" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.MATCHING_ALG,
+                int(resolved_controls["matching_alg"]),
+            )
+        if "factorization_alg" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.FACTORIZATION_ALG,
+                int(resolved_controls["factorization_alg"]),
+            )
+        if "solve_alg" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.SOLVE_ALG,
+                int(resolved_controls["solve_alg"]),
+            )
         _set_nvmath_cudss_config_scalar(
             cudss,
             config,
@@ -371,6 +601,48 @@ def solve_nvmath_cudss(
                 config,
                 cudss.ConfigParam.PIVOT_TYPE,
                 pivot_type_map[str(resolved_controls["pivot_type"])].value,
+            )
+        if "pivot_threshold" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.PIVOT_THRESHOLD,
+                float(resolved_controls["pivot_threshold"]),
+            )
+        if "pivot_epsilon" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.PIVOT_EPSILON,
+                float(resolved_controls["pivot_epsilon"]),
+            )
+        if "pivot_epsilon_alg" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.PIVOT_EPSILON_ALG,
+                int(resolved_controls["pivot_epsilon_alg"]),
+            )
+        if "nd_nlevels" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.ND_NLEVELS,
+                int(resolved_controls["nd_nlevels"]),
+            )
+        if "use_superpanels" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.USE_SUPERPANELS,
+                int(bool(resolved_controls["use_superpanels"])),
+            )
+        if "deterministic_mode" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.DETERMINISTIC_MODE,
+                int(bool(resolved_controls["deterministic_mode"])),
             )
         for phase_name, phase in (
             ("analysis", cudss.Phase.ANALYSIS.value),
@@ -462,6 +734,7 @@ def solve_nvmath_cudss(
 
 __all__ = [
     "NVMATH_CUDSS_CONTROL_KEYS",
+    "NVMATH_CUDSS_ALGORITHMS",
     "NVMATH_CUDSS_DTYPES",
     "NVMATH_CUDSS_PIVOT_TYPES",
     "json_safe_mapping",

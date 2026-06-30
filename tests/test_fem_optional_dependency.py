@@ -800,6 +800,54 @@ def test_nvmath_cudss_controls_reject_invalid_values() -> None:
         cudss_linalg.resolve_nvmath_cudss_controls({"pivot_type": "bad"})
     with pytest.raises(ValueError, match="residual_rtol"):
         cudss_linalg.resolve_nvmath_cudss_controls({"residual_rtol": 0.0})
+    with pytest.raises(ValueError, match="reordering_alg"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"reordering_alg": "bad"})
+    with pytest.raises(ValueError, match="pivot_threshold"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"pivot_threshold": -1.0})
+    with pytest.raises(ValueError, match="pivot_epsilon"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"pivot_epsilon": float("nan")})
+    with pytest.raises(ValueError, match="nd_nlevels"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"nd_nlevels": -1})
+
+
+def test_nvmath_cudss_controls_normalize_advanced_options() -> None:
+    controls = cudss_linalg.nvmath_cudss_controls_from_arguments(
+        dtype="float32",
+        device_ids="all",
+        ir_steps=8,
+        reordering_alg="alg_1",
+        matching_alg="2",
+        factorization_alg=3,
+        solve_alg="alg4",
+        pivot_type="row",
+        pivot_threshold=0.2,
+        pivot_epsilon=1.0e-6,
+        pivot_epsilon_alg="alg_5",
+        nd_nlevels=2,
+        use_superpanels=False,
+        deterministic_mode=True,
+        residual_rtol=1.0e-3,
+    )
+
+    assert controls == {
+        "dtype": "float32",
+        "device_ids": "all",
+        "ir_steps": 8,
+        "use_matching": True,
+        "reordering_alg": 1,
+        "matching_alg": 2,
+        "factorization_alg": 3,
+        "solve_alg": 4,
+        "pivot_type": "row",
+        "pivot_threshold": 0.2,
+        "pivot_epsilon": 1.0e-6,
+        "pivot_epsilon_alg": 5,
+        "nd_nlevels": 2,
+        "use_superpanels": False,
+        "deterministic_mode": True,
+        "check_residual": True,
+        "residual_rtol": 1.0e-3,
+    }
 
 
 def test_nvmath_cudss_backend_reports_missing_runtime(

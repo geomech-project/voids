@@ -168,6 +168,29 @@ def test_fenics_solver_options_direct_lu_builder() -> None:
     }
     assert cudss_options.linear_system_dtype == "float64"
     assert FEniCSSolverOptions.nvmath_cudss_direct(dtype="float32").linear_system_dtype == "float32"
+    robust_cudss_options = FEniCSSolverOptions.nvmath_cudss_direct(
+        dtype="float32",
+        reordering_alg="alg_1",
+        matching_alg="alg_2",
+        pivot_type="row",
+        pivot_threshold=0.2,
+        pivot_epsilon=1.0e-6,
+        pivot_epsilon_alg="alg_3",
+        nd_nlevels=2,
+        use_superpanels=False,
+        deterministic_mode=True,
+        residual_rtol=1.0e-3,
+    )
+    assert robust_cudss_options.linear_system_dtype == "float32"
+    assert robust_cudss_options.nvmath_cudss_controls["reordering_alg"] == 1
+    assert robust_cudss_options.nvmath_cudss_controls["matching_alg"] == 2
+    assert robust_cudss_options.nvmath_cudss_controls["pivot_type"] == "row"
+    assert robust_cudss_options.nvmath_cudss_controls["pivot_threshold"] == 0.2
+    assert robust_cudss_options.nvmath_cudss_controls["pivot_epsilon"] == 1.0e-6
+    assert robust_cudss_options.nvmath_cudss_controls["pivot_epsilon_alg"] == 3
+    assert robust_cudss_options.nvmath_cudss_controls["nd_nlevels"] == 2
+    assert robust_cudss_options.nvmath_cudss_controls["use_superpanels"] is False
+    assert robust_cudss_options.nvmath_cudss_controls["deterministic_mode"] is True
 
 
 def test_fenics_solver_options_parallel_and_iterative_presets() -> None:
