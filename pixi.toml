@@ -3,7 +3,19 @@ name = "voids"
 version = "0.1.11"
 description = "Scientific Python package for digital porous media research"
 channels = ["conda-forge"]
-platforms = ["linux-64", "osx-arm64", "win-64"]
+platforms = [
+  "osx-arm64",
+  "linux-64",
+  "win-64",
+  { name = "linux-64-cuda", platform = "linux-64", cuda = "12.0" },
+  { name = "win-64-cuda", platform = "win-64", cuda = "12.0" },
+]
+
+[feature.docs]
+platforms = ["linux-64", "win-64", "osx-arm64"]
+
+[feature.gpu]
+platforms = ["linux-64-cuda", "win-64-cuda"]
 
 ##########################################
 ########## Core dependencies #############
@@ -39,10 +51,19 @@ meshio = ">=5.3"
 [target.linux-64.dependencies]
 mkl = ">=2023"
 
+[target.linux-64-cuda.dependencies]
+mkl = ">=2023"
+
 [target.linux-64.pypi-dependencies]
 pypardiso = ">=0.4"
 
+[target.linux-64-cuda.pypi-dependencies]
+pypardiso = ">=0.4"
+
 [target.linux-64.activation.env]
+UCX_TLS = "tcp,self"
+
+[target.linux-64-cuda.activation.env]
 UCX_TLS = "tcp,self"
 
 ##########################################
@@ -91,7 +112,11 @@ scikit-umfpack = "*"
 [feature.solvers.pypi-dependencies]
 pyamg = ">=5.3"
 
-[feature.solvers.target.linux-64.pypi-dependencies]
+[feature.gpu.dependencies]
+cuda-version = "12.6.*"
+
+[feature.gpu.pypi-dependencies]
+nvmath-python = ">=0.9"
 torch-sla = {version = "*", extras = ["all"]}
 
 [feature.docs.dependencies]
@@ -153,3 +178,4 @@ NO_MKDOCS_2_WARNING = "1"
 default = { features = ["core", "dev", "viz", "notebooks", "thermo", "lbm", "fem", "solvers"], solve-group = "default" }
 test = { features = ["core", "dev", "viz", "thermo", "lbm", "fem", "solvers", "test"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "docs" }
+gpu = { features = ["core", "dev", "viz", "notebooks", "thermo", "lbm", "fem", "solvers", "gpu", "test"], solve-group = "default" }
