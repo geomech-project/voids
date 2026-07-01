@@ -177,6 +177,11 @@ def test_fenics_solver_options_direct_lu_builder() -> None:
         pivot_epsilon=1.0e-6,
         pivot_epsilon_alg="alg_3",
         nd_nlevels=2,
+        host_nthreads=4,
+        hybrid_mode=True,
+        hybrid_device_memory_limit=20_000_000_000,
+        hybrid_execute_mode=False,
+        use_cuda_register_memory=True,
         use_superpanels=False,
         deterministic_mode=True,
         residual_rtol=1.0e-3,
@@ -189,6 +194,13 @@ def test_fenics_solver_options_direct_lu_builder() -> None:
     assert robust_cudss_options.nvmath_cudss_controls["pivot_epsilon"] == 1.0e-6
     assert robust_cudss_options.nvmath_cudss_controls["pivot_epsilon_alg"] == 3
     assert robust_cudss_options.nvmath_cudss_controls["nd_nlevels"] == 2
+    assert robust_cudss_options.nvmath_cudss_controls["host_nthreads"] == 4
+    assert robust_cudss_options.nvmath_cudss_controls["hybrid_mode"] is True
+    assert (
+        robust_cudss_options.nvmath_cudss_controls["hybrid_device_memory_limit"] == 20_000_000_000
+    )
+    assert robust_cudss_options.nvmath_cudss_controls["hybrid_execute_mode"] is False
+    assert robust_cudss_options.nvmath_cudss_controls["use_cuda_register_memory"] is True
     assert robust_cudss_options.nvmath_cudss_controls["use_superpanels"] is False
     assert robust_cudss_options.nvmath_cudss_controls["deterministic_mode"] is True
 
@@ -235,6 +247,31 @@ def test_fenics_solver_options_parallel_and_iterative_presets() -> None:
     assert block_iterative.petsc_options["fieldsplit_u_0_pc_factor_mat_solver_type"] == "mumps"
     assert block_iterative.petsc_options["fieldsplit_p_1_pc_type"] == "lu"
     assert block_iterative.petsc_options["fieldsplit_p_1_pc_factor_mat_solver_type"] == "mumps"
+
+    schurdiag_cudss = FEniCSSolverOptions.usfem_schurdiag_cudss_experimental(
+        device_ids=(0, 1),
+        rtol=1.0e-7,
+        max_it=789,
+        restart=80,
+        velocity_solver="exact",
+        schur_drop_rel=1.0e-4,
+    )
+    assert schurdiag_cudss.linear_backend == "petsc"
+    assert schurdiag_cudss.solver_preset == "iterative_schurdiag_cudss_experimental"
+    assert schurdiag_cudss.petsc_options == {}
+    assert schurdiag_cudss.linear_system_dtype == "float64"
+    assert schurdiag_cudss.nvmath_cudss_controls["device_ids"] == (0, 1)
+    assert schurdiag_cudss.nvmath_cudss_controls["dtype"] == "float64"
+    assert schurdiag_cudss.nvmath_cudss_controls["check_residual"] is False
+    assert schurdiag_cudss.iterative_solver_controls == {
+        "gmres_rtol": 1.0e-7,
+        "gmres_atol": 0.0,
+        "gmres_maxiter": 789,
+        "gmres_restart": 80,
+        "velocity_solver": "exact",
+        "schurdiag_drop_rel": 1.0e-4,
+        "error_if_not_converged": True,
+    }
 
 
 def test_brinkman_nondimensional_constant_permeability_resolution() -> None:
@@ -661,6 +698,55 @@ def test_fem_usfem_block_builds_diagonal_preconditioner_forms(
     assert captured["preconditioner_forms"][1][1] is not None
     assert result.metadata["block_preconditioner"] == "diagonal"
     assert result.metadata["petsc_matrix_kind"] == "nest"
+
+
+@requires_fem_stack
+def test_fem_usfem_block_dispatches_schurdiag_cudss_preset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_solve_usfem_schurdiag_cudss(
+        _context: Any,
+        **kwargs: Any,
+    ) -> tuple[list[Any], float, dict[str, Any]]:
+        captured["forms"] = kwargs["forms"]
+        captured["rhs"] = kwargs["rhs"]
+        captured["bcs"] = kwargs["bcs"]
+        captured["options"] = kwargs["options"]
+        return kwargs["solution_functions"], 0.0, {"usfem_schurdiag_cudss_gmres_info": 0}
+
+    monkeypatch.setattr(
+        usfem_module,
+        "_solve_usfem_schurdiag_cudss",
+        fake_solve_usfem_schurdiag_cudss,
+    )
+
+    options = FEniCSSolverOptions.usfem_schurdiag_cudss_experimental(
+        device_ids=(0, 1),
+    )
+    result = solve_brinkman_usfem_block(
+        _constant_problem((2, 2), permeability=2.0),
+        options=options,
+    )
+
+    assert captured["options"] is options
+    assert len(captured["forms"]) == 2
+    assert len(captured["rhs"]) == 2
+    assert captured["bcs"]
+    assert result.metadata["solver_preset"] == "iterative_schurdiag_cudss_experimental"
+    assert result.metadata["nvmath_cudss_controls"]["device_ids"] == (0, 1)
+    assert result.metadata["usfem_schurdiag_cudss_gmres_info"] == 0
+
+
+@requires_fem_stack
+def test_fem_usfem_block_rejects_external_preconditioner_for_schurdiag_cudss() -> None:
+    with pytest.raises(ValueError, match="lower-Schur preconditioner"):
+        solve_brinkman_usfem_block(
+            _constant_problem((2, 2), permeability=2.0),
+            options=FEniCSSolverOptions.usfem_schurdiag_cudss_experimental(),
+            preconditioner="diagonal",
+        )
 
 
 @requires_fem_stack

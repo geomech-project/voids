@@ -808,6 +808,10 @@ def test_nvmath_cudss_controls_reject_invalid_values() -> None:
         cudss_linalg.resolve_nvmath_cudss_controls({"pivot_epsilon": float("nan")})
     with pytest.raises(ValueError, match="nd_nlevels"):
         cudss_linalg.resolve_nvmath_cudss_controls({"nd_nlevels": -1})
+    with pytest.raises(ValueError, match="host_nthreads"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"host_nthreads": 0})
+    with pytest.raises(ValueError, match="hybrid_device_memory_limit"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"hybrid_device_memory_limit": 0})
 
 
 def test_nvmath_cudss_controls_normalize_advanced_options() -> None:
@@ -824,6 +828,11 @@ def test_nvmath_cudss_controls_normalize_advanced_options() -> None:
         pivot_epsilon=1.0e-6,
         pivot_epsilon_alg="alg_5",
         nd_nlevels=2,
+        host_nthreads=4,
+        hybrid_mode=True,
+        hybrid_device_memory_limit=20_000_000_000,
+        hybrid_execute_mode=False,
+        use_cuda_register_memory=True,
         use_superpanels=False,
         deterministic_mode=True,
         residual_rtol=1.0e-3,
@@ -843,6 +852,11 @@ def test_nvmath_cudss_controls_normalize_advanced_options() -> None:
         "pivot_epsilon": 1.0e-6,
         "pivot_epsilon_alg": 5,
         "nd_nlevels": 2,
+        "host_nthreads": 4,
+        "hybrid_mode": True,
+        "hybrid_device_memory_limit": 20_000_000_000,
+        "hybrid_execute_mode": False,
+        "use_cuda_register_memory": True,
         "use_superpanels": False,
         "deterministic_mode": True,
         "check_residual": True,

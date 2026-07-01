@@ -56,6 +56,7 @@ FEMSolverPreset = Literal[
     "direct_parallel",
     "iterative_block_lgmres_experimental",
     "iterative_fieldsplit_experimental",
+    "iterative_schurdiag_cudss_experimental",
 ]
 _SUPERLU_PERMC_SPECS = {"NATURAL", "MMD_ATA", "MMD_AT_PLUS_A", "COLAMD"}
 _SUPERLU_CONTROL_KEYS = {
@@ -147,6 +148,7 @@ class FEniCSSolverOptions:
     superlu_controls: dict[str, Any] = field(default_factory=dict)
     umfpack_controls: dict[str, Any] = field(default_factory=dict)
     nvmath_cudss_controls: dict[str, Any] = field(default_factory=dict)
+    iterative_solver_controls: dict[str, Any] = field(default_factory=dict)
     petsc_options: dict[str, Any] = field(
         default_factory=lambda: {
             "ksp_type": "preonly",
@@ -347,6 +349,113 @@ class FEniCSSolverOptions:
         )
 
     @classmethod
+    def usfem_schurdiag_cudss_experimental(
+        cls,
+        *,
+        dtype: Literal["float32", "float64"] = "float64",
+        device_ids: int | Sequence[int] | Literal["all"] | None = None,
+        ir_steps: int = 5,
+        use_matching: bool = True,
+        rtol: float = 1.0e-8,
+        atol: float = 0.0,
+        max_it: int = 1000,
+        restart: int = 200,
+        velocity_solver: Literal["amg", "exact"] = "amg",
+        schur_drop_rel: float = 0.0,
+        error_if_not_converged: bool = True,
+        reordering_alg: str | int | None = None,
+        matching_alg: str | int | None = None,
+        factorization_alg: str | int | None = None,
+        solve_alg: str | int | None = None,
+        pivot_type: Literal["col", "row", "none"] | None = None,
+        pivot_threshold: float | None = None,
+        pivot_epsilon: float | None = None,
+        pivot_epsilon_alg: str | int | None = None,
+        nd_nlevels: int | None = None,
+        host_nthreads: int | None = None,
+        hybrid_mode: bool | None = None,
+        hybrid_device_memory_limit: int | None = None,
+        hybrid_execute_mode: bool | None = None,
+        use_cuda_register_memory: bool | None = None,
+        use_superpanels: bool | None = None,
+        deterministic_mode: bool | None = None,
+        residual_rtol: float | None = None,
+        controls: Mapping[str, Any] | None = None,
+    ) -> FEniCSSolverOptions:
+        """Create the experimental USFEM Schurdiag/cuDSS iterative preset.
+
+        This preset is consumed by :func:`solve_brinkman_usfem_block`. It uses
+        PETSc/DOLFINx only to assemble the USFEM velocity/pressure block forms,
+        converts the blocks to SciPy CSR matrices in a single Python process,
+        and solves the coupled system with SciPy GMRES. The preconditioner is a
+        lower-Schur block form: the velocity block is approximately inverted by
+        PyAMG by default, while the diagonal-velocity Schur approximation
+        ``S_hat = A_pp - A_pu diag(A_uu)^-1 A_up`` is factored once with
+        nvmath/cuDSS and reused for every pressure correction.
+
+        The preset is experimental and should be compared against a same-map
+        direct reference before scientific use. Local 3D USFEM Brinkman probes
+        found ``dtype="float64"`` reliable for permeability and field recovery;
+        ``dtype="float32"`` reduced memory but did not reliably preserve the
+        pressure field on high-contrast maps.
+        """
+
+        if velocity_solver not in {"amg", "exact"}:
+            raise ValueError("velocity_solver must be either 'amg' or 'exact'")
+        if rtol <= 0.0 or not np.isfinite(rtol):
+            raise ValueError("rtol must be positive and finite")
+        if atol < 0.0 or not np.isfinite(atol):
+            raise ValueError("atol must be non-negative and finite")
+        if max_it <= 0:
+            raise ValueError("max_it must be positive")
+        if restart <= 0:
+            raise ValueError("restart must be positive")
+        if schur_drop_rel < 0.0 or not np.isfinite(schur_drop_rel):
+            raise ValueError("schur_drop_rel must be non-negative and finite")
+
+        resolved_controls = _nvmath_cudss_controls_from_arguments(
+            dtype=dtype,
+            device_ids=device_ids,
+            ir_steps=ir_steps,
+            use_matching=use_matching,
+            reordering_alg=reordering_alg,
+            matching_alg=matching_alg,
+            factorization_alg=factorization_alg,
+            solve_alg=solve_alg,
+            pivot_type=pivot_type,
+            pivot_threshold=pivot_threshold,
+            pivot_epsilon=pivot_epsilon,
+            pivot_epsilon_alg=pivot_epsilon_alg,
+            nd_nlevels=nd_nlevels,
+            host_nthreads=host_nthreads,
+            hybrid_mode=hybrid_mode,
+            hybrid_device_memory_limit=hybrid_device_memory_limit,
+            hybrid_execute_mode=hybrid_execute_mode,
+            use_cuda_register_memory=use_cuda_register_memory,
+            use_superpanels=use_superpanels,
+            deterministic_mode=deterministic_mode,
+            check_residual=False,
+            residual_rtol=residual_rtol,
+            controls=controls,
+        )
+        return cls(
+            linear_backend="petsc",
+            solver_preset="iterative_schurdiag_cudss_experimental",
+            linear_system_dtype=cast(LinearSystemDType, resolved_controls["dtype"]),
+            nvmath_cudss_controls=resolved_controls,
+            iterative_solver_controls={
+                "gmres_rtol": float(rtol),
+                "gmres_atol": float(atol),
+                "gmres_maxiter": int(max_it),
+                "gmres_restart": int(restart),
+                "velocity_solver": velocity_solver,
+                "schurdiag_drop_rel": float(schur_drop_rel),
+                "error_if_not_converged": bool(error_if_not_converged),
+            },
+            petsc_options={},
+        )
+
+    @classmethod
     def scipy_direct(
         cls,
         *,
@@ -454,6 +563,11 @@ class FEniCSSolverOptions:
         pivot_epsilon: float | None = None,
         pivot_epsilon_alg: str | int | None = None,
         nd_nlevels: int | None = None,
+        host_nthreads: int | None = None,
+        hybrid_mode: bool | None = None,
+        hybrid_device_memory_limit: int | None = None,
+        hybrid_execute_mode: bool | None = None,
+        use_cuda_register_memory: bool | None = None,
         use_superpanels: bool | None = None,
         deterministic_mode: bool | None = None,
         check_residual: bool = True,
@@ -516,15 +630,32 @@ class FEniCSSolverOptions:
         pivot_epsilon :
             Optional non-negative pivot perturbation/floor
             (``ConfigParam.PIVOT_EPSILON``). This can stabilize factorizations
-            with very small pivots, especially in single precision. For example,
-            local USFEM Brinkman probes on a high-contrast map benefited from
-            ``dtype="float32"``, ``device_ids=0``, ``ir_steps=20``, and
-            ``pivot_epsilon=1.0e-4``; the same kind of tuning did not rescue the
-            TPFA cuDSS single-precision solve on that map.
+            with very small pivots, especially in single precision. Treat this
+            as a solver-stabilization experiment: high-contrast FEM and TPFA
+            maps can pass a loose residual check while still failing same-map
+            field comparisons in single precision.
         nd_nlevels :
             Optional non-negative nested-dissection level control
             (``ConfigParam.ND_NLEVELS``) used by cuDSS reordering algorithms that
             support it.
+        host_nthreads :
+            Optional positive host-thread count for cuDSS host-side work
+            (``ConfigParam.HOST_NTHREADS``).
+        hybrid_mode :
+            Optional request to enable cuDSS hybrid memory mode
+            (``ConfigParam.HYBRID_MODE``), which can spill factorization data to
+            host memory when device memory is limiting.
+        hybrid_device_memory_limit :
+            Optional positive device-memory limit in bytes for cuDSS hybrid
+            memory mode (``ConfigParam.HYBRID_DEVICE_MEMORY_LIMIT``). ``voids``
+            applies this after analysis and before factorization.
+        hybrid_execute_mode :
+            Optional request to enable cuDSS hybrid execute mode
+            (``ConfigParam.HYBRID_EXECUTE_MODE``). Support is runtime/backend
+            dependent.
+        use_cuda_register_memory :
+            Optional request to register host memory with CUDA
+            (``ConfigParam.USE_CUDA_REGISTER_MEMORY``) for hybrid-memory runs.
         use_superpanels :
             Optional flag for cuDSS superpanel optimization
             (``ConfigParam.USE_SUPERPANELS``). Leave as ``None`` to use the cuDSS
@@ -573,6 +704,11 @@ class FEniCSSolverOptions:
             pivot_epsilon=pivot_epsilon,
             pivot_epsilon_alg=pivot_epsilon_alg,
             nd_nlevels=nd_nlevels,
+            host_nthreads=host_nthreads,
+            hybrid_mode=hybrid_mode,
+            hybrid_device_memory_limit=hybrid_device_memory_limit,
+            hybrid_execute_mode=hybrid_execute_mode,
+            use_cuda_register_memory=use_cuda_register_memory,
             use_superpanels=use_superpanels,
             deterministic_mode=deterministic_mode,
             check_residual=check_residual,
