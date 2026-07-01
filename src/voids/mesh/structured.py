@@ -3,10 +3,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Literal, cast
 
 import numpy as np
 
+from voids.mesh._typing import MeshIOModule
 from voids.image.porosity import PermeabilityMap, PorosityMap
 
 MapMeshElement = Literal["auto", "quad", "triangle", "hexahedron", "tetra", "tetrahedron"]
@@ -19,18 +20,6 @@ _FORMAT_EXTENSIONS = {
     "netgen": ".vol",
     "vol": ".vol",
 }
-
-
-class _MeshIOModule(Protocol):
-    def Mesh(
-        self,
-        *,
-        points: np.ndarray,
-        cells: list[tuple[str, np.ndarray]],
-        cell_data: dict[str, list[np.ndarray]],
-    ) -> object: ...
-
-    def write(self, path: Path, mesh: object, *, file_format: str | None = None) -> None: ...
 
 
 @dataclass(slots=True)
@@ -320,7 +309,7 @@ def write_structured_map_meshes(
     return paths
 
 
-def _import_meshio() -> _MeshIOModule:
+def _import_meshio() -> MeshIOModule:
     try:
         import meshio  # type: ignore[import-untyped]
     except ImportError as exc:  # pragma: no cover - exercised only without optional dep
@@ -328,7 +317,7 @@ def _import_meshio() -> _MeshIOModule:
             "Structured mesh export requires meshio. Install it with "
             "`pip install meshio` or use the Pixi environment."
         ) from exc
-    return cast(_MeshIOModule, meshio)
+    return cast(MeshIOModule, meshio)
 
 
 def _validate_map_grid(map_obj: PorosityMap | PermeabilityMap) -> None:

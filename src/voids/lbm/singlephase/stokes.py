@@ -5,10 +5,10 @@ import numpy as np
 from voids.lbm.singlephase.xlb import (
     XLBConvergenceWarning,
     XLBDirectSimulationResult,
-    XLBOptionOverride,
     XLBOptions,
     solve_binary_volume_with_xlb,
 )
+from voids.lbm.singlephase._typing import XLBOptionOverride
 
 
 def steady_stokes_options(**overrides: XLBOptionOverride) -> XLBOptions:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, cast
+from typing import cast
 
 import numpy as np
 import porespy as ps
@@ -16,6 +16,7 @@ from voids.core.sample import SampleGeometry
 from voids.core.validation import validate_network
 from voids.geom.hydraulic import DEFAULT_G_REF
 from voids.graph import spanning_subnetwork
+from voids.image._typing import PoreSpyNetworkModule
 from voids.image.maximal_ball import (
     MaximalBallSettings,
     extract_maximal_ball_network_dict,
@@ -31,15 +32,6 @@ _IMPERIAL_SNOW2_DEFAULTS: dict[str, object] = {
 }
 _PORESPY_STYLE_IMAGE_BACKENDS = frozenset({"porespy_snow2", "porespy_snow2_imperial", "prego"})
 _AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
-
-
-class _PoreSpyNetworks(Protocol):
-    def snow2(self, *args: object, **kwargs: object) -> object: ...
-    def regions_to_network(self, regions: object, /) -> object: ...
-
-
-class _PoreSpyModule(Protocol):
-    networks: _PoreSpyNetworks
 
 
 @dataclass(slots=True)
@@ -168,7 +160,7 @@ def _snow2_network_dict(
     phases: np.ndarray,
     *,
     snow2_kwargs: dict[str, object] | None,
-    porespy_module: _PoreSpyModule = ps,
+    porespy_module: PoreSpyNetworkModule = ps,
 ) -> dict[str, object]:
     """Run ``porespy.networks.snow2`` and normalize its network mapping output.
 

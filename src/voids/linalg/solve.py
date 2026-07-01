@@ -1,79 +1,22 @@
 from __future__ import annotations
 
-from typing import Literal, Protocol, TypeAlias, cast
+from typing import cast
 
 import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import LinearOperator, cg, gmres, splu, spsolve
 
 from voids.linalg.cudss import solve_nvmath_cudss
-
-
-class _PyAMGHierarchy(Protocol):
-    """Minimal typed surface used from a PyAMG multilevel hierarchy."""
-
-    levels: list[object]
-
-    def aspreconditioner(self) -> LinearOperator[np.float64]:
-        """Return a SciPy-compatible preconditioner."""
-
-    def operator_complexity(self) -> float:
-        """Return the operator complexity."""
-
-
-class _PyAMGModule(Protocol):
-    """Minimal typed subset of the top-level ``pyamg`` module."""
-
-    def smoothed_aggregation_solver(
-        self, matrix: sparse.csr_matrix, **kwargs: object
-    ) -> _PyAMGHierarchy:
-        """Build a smoothed-aggregation hierarchy."""
-
-    def rootnode_solver(self, matrix: sparse.csr_matrix, **kwargs: object) -> _PyAMGHierarchy:
-        """Build a root-node hierarchy."""
-
-    def ruge_stuben_solver(self, matrix: sparse.csr_matrix, **kwargs: object) -> _PyAMGHierarchy:
-        """Build a classical AMG hierarchy."""
-
-
-class _PyPardisoSolver(Protocol):
-    """Minimal typed surface for pypardiso.spsolve function."""
-
-    def __call__(
-        self,
-        A: sparse.csr_matrix | sparse.csc_matrix,
-        b: np.ndarray,
-        **kwargs: object,
-    ) -> np.ndarray:
-        """Solve sparse linear system using PARDISO."""
-
-
-class _UmfpackSolver(Protocol):
-    """Minimal typed surface for scikits.umfpack.spsolve."""
-
-    def __call__(
-        self,
-        A: sparse.csr_matrix | sparse.csc_matrix,
-        b: np.ndarray,
-        **kwargs: object,
-    ) -> np.ndarray:
-        """Solve sparse linear system using UMFPACK."""
-
-
-SolverParameterValue: TypeAlias = (
-    str
-    | float
-    | int
-    | bool
-    | None
-    | tuple[int, ...]
-    | list[int]
-    | dict[str, object]
-    | LinearOperator[np.float64]
+from voids.linalg._typing import (
+    LinearSystemDType,
+    PyAMGModule,
+    PyPardisoSolver,
+    SolverInfo,
+    SolverParameters,
+    SolverParameterValue,
+    UmfpackSolver,
 )
-SolverParameters: TypeAlias = dict[str, SolverParameterValue]
-LinearSystemDType: TypeAlias = Literal["float32", "float64"]
-SolverInfo: TypeAlias = dict[str, str | float | int | bool]
+
 _SUPPORTED_LINEAR_SYSTEM_DTYPES: dict[np.dtype[np.generic], LinearSystemDType] = {
     np.dtype("float32"): "float32",
     np.dtype("float64"): "float64",
@@ -125,7 +68,7 @@ def _superlu_kwargs(parameters: SolverParameters) -> dict[str, object]:
     return kwargs
 
 
-def _import_pyamg() -> _PyAMGModule:
+def _import_pyamg() -> PyAMGModule:
     """Import PyAMG lazily so the dependency remains easy to diagnose."""
 
     try:
@@ -134,10 +77,10 @@ def _import_pyamg() -> _PyAMGModule:
         raise ImportError(
             "PyAMG preconditioning requires the 'pyamg' package to be installed."
         ) from exc
-    return cast(_PyAMGModule, pyamg)
+    return cast(PyAMGModule, pyamg)
 
 
-def _import_pypardiso() -> _PyPardisoSolver:
+def _import_pypardiso() -> PyPardisoSolver:
     """Import pypardiso lazily so the dependency remains easy to diagnose."""
 
     try:
@@ -147,10 +90,10 @@ def _import_pypardiso() -> _PyPardisoSolver:
             "PARDISO solver requires the 'pypardiso' package to be installed. "
             "This is currently only supported on Linux systems."
         ) from exc
-    return cast(_PyPardisoSolver, pypardiso.spsolve)
+    return cast(PyPardisoSolver, pypardiso.spsolve)
 
 
-def _import_umfpack() -> _UmfpackSolver:
+def _import_umfpack() -> UmfpackSolver:
     """Import scikit-umfpack lazily so missing SuiteSparse support is clear."""
 
     try:
@@ -160,7 +103,7 @@ def _import_umfpack() -> _UmfpackSolver:
             "UMFPACK solver requires the optional 'scikit-umfpack' package and "
             "SuiteSparse/UMFPACK libraries to be installed."
         ) from exc
-    return cast(_UmfpackSolver, umfpack_spsolve)
+    return cast(UmfpackSolver, umfpack_spsolve)
 
 
 def _build_preconditioner(

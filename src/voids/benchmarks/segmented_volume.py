@@ -5,12 +5,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from voids.benchmarks._typing import BenchmarkDetailValue
 from voids.benchmarks._shared import (
     make_benchmark_pressure_bc,
     resolve_benchmark_pressures,
 )
 from voids.benchmarks.crosscheck import (
-    BenchmarkDetailValue,
     SinglePhaseCrosscheckSummary,
     crosscheck_singlephase_with_openpnm,
 )

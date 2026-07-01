@@ -2,32 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias, cast
+from typing import cast
 
 import numpy as np
 import porespy as ps
 from numba import njit  # type: ignore[import-untyped]
 from scipy import ndimage as ndi
 
+from voids.image._typing import PoreSpyModule, SignedIntegerDType
 from voids.image.maximal_ball import compute_void_distance_map
-
-
-SignedIntegerDType: TypeAlias = type[np.int16] | type[np.int32] | type[np.int64]
-
-
-class _PoreSpyFilters(Protocol):
-    def find_peaks(self, *args: object, **kwargs: object) -> np.ndarray: ...
-    def trim_saddle_points(self, *args: object, **kwargs: object) -> np.ndarray: ...
-    def trim_nearby_peaks(self, *args: object, **kwargs: object) -> np.ndarray: ...
-
-
-class _PoreSpyNetworks(Protocol):
-    def regions_to_network(self, regions: np.ndarray, /, **kwargs: object) -> object: ...
-
-
-class _PoreSpyModule(Protocol):
-    filters: _PoreSpyFilters
-    networks: _PoreSpyNetworks
 
 
 @dataclass(slots=True)
@@ -161,7 +144,7 @@ def snow_seed_points(
     peaks: np.ndarray | None = None,
     distance_map_backend: str = "auto",
     edt_parallel_threads: int | None = None,
-    porespy_module: _PoreSpyModule = ps,
+    porespy_module: PoreSpyModule = ps,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Find PREGO seed points using the peak-filtering stages of SNOW.
 
@@ -671,7 +654,7 @@ def prego_partitioning(
     settings: PregoSettings | None = None,
     distance_map: np.ndarray | None = None,
     peaks: np.ndarray | None = None,
-    porespy_module: _PoreSpyModule = ps,
+    porespy_module: PoreSpyModule = ps,
 ) -> PregoSegmentationResult:
     """Partition a binary pore image with PREGO-style region growing.
 
@@ -823,7 +806,7 @@ def extract_prego_network_dict(
     settings: PregoSettings | None = None,
     distance_map: np.ndarray | None = None,
     peaks: np.ndarray | None = None,
-    porespy_module: _PoreSpyModule = ps,
+    porespy_module: PoreSpyModule = ps,
     regions_to_network_kwargs: dict[str, object] | None = None,
 ) -> PregoNetworkDictResult:
     """Run PREGO segmentation and convert regions to a PoreSpy network dict."""

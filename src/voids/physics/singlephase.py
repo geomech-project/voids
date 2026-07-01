@@ -15,7 +15,8 @@ from voids.graph.connectivity import connected_components, induced_subnetwork
 from voids.linalg.assemble import assemble_pressure_system
 from voids.linalg.bc import apply_dirichlet_rowcol
 from voids.linalg.diagnostics import residual_norm
-from voids.linalg.solve import SolverInfo, SolverParameters, solve_linear_system
+from voids.linalg._typing import SolverInfo, SolverParameters
+from voids.linalg.solve import solve_linear_system
 from voids.physics.thermo import TabulatedWaterViscosityModel
 
 

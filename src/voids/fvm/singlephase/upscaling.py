@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from voids.fvm.singlephase.tpfa import TPFAResult, solve_tpfa
 from voids.image.porosity import PermeabilityMap
-from voids.linalg.solve import SolverParameters
+from voids.linalg._typing import SolverParameters
 
 
 @dataclass(slots=True)

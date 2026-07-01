@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import TypeAlias, cast
+from typing import cast
 import warnings
 
 import numpy as np
 
 from voids.image.network_extraction import infer_sample_axes
+from voids.lbm.singlephase._typing import XLBOptionOverride
 from voids.physics.singlephase import FluidSinglePhase
 
 ISOTHERMAL_LATTICE_CS2 = 1.0 / 3.0
@@ -17,7 +18,6 @@ DEFAULT_REFERENCE_DENSITY_LATTICE = 1.0
 DEFAULT_PRESSURE_DROP_LATTICE = ISOTHERMAL_LATTICE_CS2 * 1.0e-3
 DEFAULT_STOKES_PRESSURE_DROP_LATTICE = ISOTHERMAL_LATTICE_CS2 * 2.0e-4
 MAX_RECOMMENDED_DENSITY_DROP_LATTICE = 1.0e-2
-XLBOptionOverride: TypeAlias = float | int | str
 
 
 class XLBConvergenceWarning(RuntimeWarning):

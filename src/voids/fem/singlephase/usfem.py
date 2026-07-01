@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from time import perf_counter
-from typing import Literal, NamedTuple, Protocol, cast
+from typing import Literal, cast
 
 import numpy as np
 from scipy.sparse import bmat, csr_matrix, diags
@@ -32,91 +32,21 @@ from voids.fem.singlephase._common import (
     _validate_pressure_drop,
     _velocity_side_wall_bcs,
 )
+from voids.fem.singlephase._typing import (
+    FEMFunction as _FEMFunction,
+    PETScCSRConvertible as _PETScCSRConvertible,
+    UFLAlgebra as _UFLAlgebra,
+    UFLExpression as _UFLExpression,
+    USFEMBlockCSRSystem as _USFEMBlockCSRSystem,
+)
 from voids.linalg.cudss import NvmathCudssFactor
 
 
 _ControlScalar = str | bytes | int | float | bool
 
 
-class _UFLExpression(Protocol):
-    """Structural type for the symbolic UFL algebra used in local form builders."""
-
-    def __add__(self, other: object, /) -> _UFLExpression: ...
-    def __radd__(self, other: object, /) -> _UFLExpression: ...
-    def __sub__(self, other: object, /) -> _UFLExpression: ...
-    def __rsub__(self, other: object, /) -> _UFLExpression: ...
-    def __mul__(self, other: object, /) -> _UFLExpression: ...
-    def __rmul__(self, other: object, /) -> _UFLExpression: ...
-    def __truediv__(self, other: object, /) -> _UFLExpression: ...
-    def __rtruediv__(self, other: object, /) -> _UFLExpression: ...
-    def __neg__(self) -> _UFLExpression: ...
-    def __call__(self, restriction: str, /) -> _UFLExpression: ...
-
-
-class _UFLAlgebra(Protocol):
-    """Subset of the UFL module operations needed by the USFEM weak form."""
-
-    def grad(self, expression: _UFLExpression, /) -> _UFLExpression: ...
-    def div(self, expression: _UFLExpression, /) -> _UFLExpression: ...
-    def inner(
-        self,
-        left: _UFLExpression,
-        right: _UFLExpression,
-        /,
-    ) -> _UFLExpression: ...
-    def jump(self, expression: _UFLExpression, /) -> _UFLExpression: ...
-    def gt(self, left: _UFLExpression, right: _UFLExpression, /) -> _UFLExpression: ...
-    def conditional(
-        self,
-        condition: _UFLExpression,
-        true_value: _UFLExpression,
-        false_value: _UFLExpression,
-        /,
-    ) -> _UFLExpression: ...
-    def max_value(
-        self,
-        left: _UFLExpression,
-        right: _UFLExpression,
-        /,
-    ) -> _UFLExpression: ...
-    def sqrt(self, expression: _UFLExpression, /) -> _UFLExpression: ...
-    def tanh(self, expression: _UFLExpression, /) -> _UFLExpression: ...
-    def CellDiameter(self, domain: object, /) -> _UFLExpression: ...
-    def avg(self, expression: _UFLExpression, /) -> _UFLExpression: ...
-    def TrialFunction(self, space: object, /) -> _UFLExpression: ...
-    def TestFunction(self, space: object, /) -> _UFLExpression: ...
-
-
-class _FEMFunctionVector(Protocol):
-    array: np.ndarray
-
-    def scatter_forward(self) -> None: ...
-
-
-class _FEMFunction(Protocol):
-    x: _FEMFunctionVector
-
-
 def _ufl_constant(context: _FEMContext, value: float) -> _UFLExpression:
     return cast(_UFLExpression, context.api.fem.Constant(context.mesh, float(value)))
-
-
-class _PETScCSRMatrix(Protocol):
-    def getValuesCSR(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
-    def getSize(self) -> tuple[int, int]: ...
-
-
-class _PETScCSRConvertible(Protocol):
-    def assemble(self) -> None: ...
-    def convert(self, matrix_type: str, /) -> _PETScCSRMatrix: ...
-
-
-class _USFEMBlockCSRSystem(NamedTuple):
-    a00: csr_matrix
-    a01: csr_matrix
-    a10: csr_matrix
-    a11: csr_matrix
-    rhs: np.ndarray
 
 
 def _petsc_mat_to_csr(matrix: _PETScCSRConvertible) -> csr_matrix:

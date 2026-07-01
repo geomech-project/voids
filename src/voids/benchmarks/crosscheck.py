@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.stats import ks_2samp
 
+from voids.benchmarks._typing import BenchmarkDetailValue
 from voids.core.network import Network
 from voids.geom.hydraulic import (
     _conduit_lengths_available,
@@ -24,9 +25,6 @@ from voids.physics.singlephase import (
     SinglePhaseResult,
     solve,
 )
-
-
-BenchmarkDetailValue = str | int | float | bool | None
 
 
 @dataclass(slots=True)

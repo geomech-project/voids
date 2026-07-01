@@ -12,7 +12,8 @@ from scipy import sparse
 from scipy.sparse.linalg import MatrixRankWarning
 
 from voids._typing import JsonObject
-from voids.linalg.solve import SolverInfo, SolverParameters, solve_linear_system
+from voids.linalg._typing import SolverInfo, SolverParameters
+from voids.linalg.solve import solve_linear_system
 
 from voids.image.porosity import PermeabilityMap
 
