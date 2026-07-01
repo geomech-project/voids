@@ -231,15 +231,42 @@ the local two-A5000 workstation, a 300^3 synthetic image reduced to a 30^3 map
 exceeded non-hybrid cuDSS device memory during the Schurdiag pressure
 factorization; enabling hybrid memory avoided that immediate allocation failure
 and entered GMRES, but the run was still too slow for a default benchmark row.
+For monolithic USFEM direct solves, the same workstation solved 10^3, 20^3, and
+30^3 maps in `float64`, but a 500^3 synthetic image reduced to a 50^3 map did
+not produce an accepted direct cuDSS result: non-hybrid `float64` exceeded
+device-memory estimates, hybrid `float64` failed in the installed multi-GPU
+cuDSS path, and hybrid `float32` either failed the residual check or returned
+non-finite permeability/flow values.
+
+NVIDIA documents two separate hybrid concepts: hybrid memory mode stores part
+of cuDSS internal factor data in host memory while GPU kernels still perform
+factorization/solve, whereas hybrid execute mode can place some computation on
+the host. Do not enable both together. NVIDIA also documents
+`CUDSS_CONFIG_USE_CUDA_REGISTER_MEMORY` as an option that controls
+`cudaHostRegister()` use for hybrid-memory transfers; it does not by itself
+enable host-memory factor storage, and the tested cuDSS runtime already enables
+it by default. `host_nthreads` affects cuDSS only when a cuDSS threading-layer
+library is loaded. `voids` can load the packaged `libcudss_mtlayer_gomp`
+library automatically when host threading is requested, and callers can pass
+`threading_lib=...` to override discovery; however, the tested nvmath/cuDSS
+multi-GPU handle rejected host-threaded runs with `CUDSS_STATUS_INVALID_VALUE`,
+so `voids` blocks `host_nthreads`/`threading_lib` for multi-GPU cuDSS solves in
+that runtime.
+See the NVIDIA cuDSS
+[hybrid memory documentation](https://docs.nvidia.com/cuda/cudss/advanced_features.html#hybrid-host-device-memory-mode),
+[configuration parameter documentation](https://docs.nvidia.com/cuda/cudss/types.html#cudssconfigparam-t),
+and nvmath-python
+[`DirectSolverOptions`](https://docs.nvidia.com/cuda/nvmath-python/0.9.0/host-apis/sparse/generated/nvmath.sparse.advanced.DirectSolverOptions.html)
+for the corresponding upstream controls.
 
 cuDSS exposes several numerical controls that can be useful for single
 precision experiments on ill-conditioned maps. `voids` forwards
 `ir_steps`, `use_matching`, `matching_alg`, `pivot_type`,
 `pivot_threshold`, `pivot_epsilon`, `pivot_epsilon_alg`, `reordering_alg`,
 `factorization_alg`, `solve_alg`, `nd_nlevels`, `host_nthreads`,
-`hybrid_mode`, `hybrid_device_memory_limit`, `hybrid_execute_mode`,
-`use_cuda_register_memory`, `use_superpanels`, and `deterministic_mode` when
-the installed cuDSS runtime supports them. For
+`threading_lib`, `hybrid_mode`, `hybrid_device_memory_limit`,
+`hybrid_execute_mode`, `use_cuda_register_memory`, `use_superpanels`, and
+`deterministic_mode` when the installed cuDSS runtime supports them. For
 example, a more conservative single-precision USFEM trial can increase
 iterative refinement and perturb very small pivots, but this should be treated
 as a diagnostic run rather than an accepted accuracy setting:

@@ -810,8 +810,14 @@ def test_nvmath_cudss_controls_reject_invalid_values() -> None:
         cudss_linalg.resolve_nvmath_cudss_controls({"nd_nlevels": -1})
     with pytest.raises(ValueError, match="host_nthreads"):
         cudss_linalg.resolve_nvmath_cudss_controls({"host_nthreads": 0})
+    with pytest.raises(ValueError, match="threading_lib"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"threading_lib": ""})
     with pytest.raises(ValueError, match="hybrid_device_memory_limit"):
         cudss_linalg.resolve_nvmath_cudss_controls({"hybrid_device_memory_limit": 0})
+    with pytest.raises(ValueError, match="hybrid_mode and hybrid_execute_mode"):
+        cudss_linalg.resolve_nvmath_cudss_controls(
+            {"hybrid_mode": True, "hybrid_execute_mode": True}
+        )
 
 
 def test_nvmath_cudss_controls_normalize_advanced_options() -> None:
@@ -829,6 +835,7 @@ def test_nvmath_cudss_controls_normalize_advanced_options() -> None:
         pivot_epsilon_alg="alg_5",
         nd_nlevels=2,
         host_nthreads=4,
+        threading_lib="auto",
         hybrid_mode=True,
         hybrid_device_memory_limit=20_000_000_000,
         hybrid_execute_mode=False,
@@ -853,6 +860,7 @@ def test_nvmath_cudss_controls_normalize_advanced_options() -> None:
         "pivot_epsilon_alg": 5,
         "nd_nlevels": 2,
         "host_nthreads": 4,
+        "threading_lib": "auto",
         "hybrid_mode": True,
         "hybrid_device_memory_limit": 20_000_000_000,
         "hybrid_execute_mode": False,
@@ -911,6 +919,54 @@ def test_nvmath_cudss_device_ids_accept_multiple_devices() -> None:
     assert cudss_linalg.nvmath_cudss_device_ids(fake_torch, (1,)) == (1,)
     with pytest.raises(ValueError, match="unavailable CUDA device"):
         cudss_linalg.nvmath_cudss_device_ids(fake_torch, (2,))
+
+
+def test_nvmath_cudss_auto_threading_layer_for_host_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, str]] = []
+
+    fake_cudss = SimpleNamespace(
+        set_threading_layer=lambda handle, path: calls.append((handle, path)),
+    )
+    monkeypatch.setattr(
+        cudss_linalg,
+        "_find_nvmath_cudss_threading_lib",
+        lambda _cudss: "/tmp/libcudss_mtlayer_gomp.so.0",
+    )
+
+    handle = object()
+    threading_lib = cudss_linalg._set_nvmath_cudss_threading_layer(
+        fake_cudss,
+        handle=handle,
+        controls={"host_nthreads": 4},
+    )
+
+    assert threading_lib == "/tmp/libcudss_mtlayer_gomp.so.0"
+    assert calls == [(handle, "/tmp/libcudss_mtlayer_gomp.so.0")]
+
+    assert (
+        cudss_linalg._set_nvmath_cudss_threading_layer(
+            fake_cudss,
+            handle=object(),
+            controls={},
+        )
+        is None
+    )
+    assert calls == [(handle, "/tmp/libcudss_mtlayer_gomp.so.0")]
+
+
+def test_nvmath_cudss_rejects_host_threading_with_multi_gpu_runtime() -> None:
+    with pytest.raises(RuntimeError, match="host threading controls"):
+        cudss_linalg._validate_nvmath_cudss_runtime_controls(
+            {"host_nthreads": 4},
+            (0, 1),
+        )
+
+    cudss_linalg._validate_nvmath_cudss_runtime_controls(
+        {"host_nthreads": 4},
+        (0,),
+    )
 
 
 def test_nvmath_cudss_fem_backend_dispatches_optional_solver(

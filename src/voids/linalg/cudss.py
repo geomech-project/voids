@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from importlib import import_module
+from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal, cast
 
@@ -28,6 +30,7 @@ NVMATH_CUDSS_CONTROL_KEYS = {
     "reordering_alg",
     "residual_rtol",
     "solve_alg",
+    "threading_lib",
     "use_cuda_register_memory",
     "use_superpanels",
     "use_matching",
@@ -184,6 +187,14 @@ def resolve_nvmath_cudss_controls(controls: Mapping[str, Any]) -> dict[str, Any]
             if host_nthreads <= 0:
                 raise ValueError("nvmath_cudss host_nthreads must be positive")
             resolved["host_nthreads"] = host_nthreads
+        elif normalized_key == "threading_lib":
+            if value is None:
+                resolved.pop("threading_lib", None)
+            else:
+                threading_lib = str(value).strip()
+                if not threading_lib:
+                    raise ValueError("nvmath_cudss threading_lib must be a path or 'auto'")
+                resolved["threading_lib"] = threading_lib
         elif normalized_key == "hybrid_device_memory_limit":
             memory_limit = int(value)
             if memory_limit <= 0:
@@ -208,6 +219,13 @@ def resolve_nvmath_cudss_controls(controls: Mapping[str, Any]) -> dict[str, Any]
             resolved["residual_rtol"] = residual_rtol
     if "residual_rtol" not in resolved:
         resolved["residual_rtol"] = 1.0e-8 if resolved["dtype"] == "float64" else 1.0e-4
+    if bool(resolved.get("hybrid_mode", False)) and bool(
+        resolved.get("hybrid_execute_mode", False)
+    ):
+        raise ValueError(
+            "nvmath_cudss hybrid_mode and hybrid_execute_mode cannot both be enabled "
+            "in the tested cuDSS runtime"
+        )
     return resolved
 
 
@@ -227,6 +245,7 @@ def nvmath_cudss_controls_from_arguments(
     pivot_epsilon_alg: str | int | None = None,
     nd_nlevels: int | None = None,
     host_nthreads: int | None = None,
+    threading_lib: str | None = None,
     hybrid_mode: bool | None = None,
     hybrid_device_memory_limit: int | None = None,
     hybrid_execute_mode: bool | None = None,
@@ -294,7 +313,15 @@ def nvmath_cudss_controls_from_arguments(
         it.
     host_nthreads :
         Optional positive host-thread count for cuDSS host-side work
-        (``ConfigParam.HOST_NTHREADS``).
+        (``ConfigParam.HOST_NTHREADS``). This affects execution only when a
+        cuDSS threading-layer library is loaded.
+    threading_lib :
+        Optional path to a cuDSS threading-layer library. Use ``"auto"`` to
+        request the packaged ``libcudss_mtlayer_gomp`` library when available.
+        If host threading is requested and this is omitted, ``voids`` uses
+        ``CUDSS_THREADING_LIB`` when set and otherwise auto-loads the packaged
+        threading layer when ``host_nthreads`` or ``hybrid_execute_mode=True`` is
+        requested.
     hybrid_mode :
         Optional request to enable cuDSS hybrid memory mode
         (``ConfigParam.HYBRID_MODE``). This must be applied before the analysis
@@ -303,7 +330,9 @@ def nvmath_cudss_controls_from_arguments(
         Optional positive device-memory limit in bytes
         (``ConfigParam.HYBRID_DEVICE_MEMORY_LIMIT``). ``voids`` applies this
         after analysis and before factorization, following cuDSS' phase
-        ordering for manual hybrid-memory control.
+        ordering for manual hybrid-memory control. Multi-GPU hybrid-memory
+        limit handling is runtime dependent in the low-level nvmath binding;
+        compare against a small same-configuration probe before relying on it.
     hybrid_execute_mode :
         Optional request to enable cuDSS hybrid execute mode
         (``ConfigParam.HYBRID_EXECUTE_MODE``). This must be applied before the
@@ -376,6 +405,8 @@ def nvmath_cudss_controls_from_arguments(
         nvmath_cudss_controls["nd_nlevels"] = int(nd_nlevels)
     if host_nthreads is not None:
         nvmath_cudss_controls["host_nthreads"] = int(host_nthreads)
+    if threading_lib is not None:
+        nvmath_cudss_controls["threading_lib"] = threading_lib
     if hybrid_mode is not None:
         nvmath_cudss_controls["hybrid_mode"] = bool(hybrid_mode)
     if hybrid_device_memory_limit is not None:
@@ -450,6 +481,68 @@ def _set_nvmath_cudss_config_array(cudss: Any, config: Any, param: Any, values: 
     cudss.config_set(config, param, array.ctypes.data, array.dtype.itemsize * array.size)
 
 
+def _find_nvmath_cudss_threading_lib(cudss: Any) -> str | None:
+    module_file = getattr(cudss, "__file__", None)
+    candidates: list[Path] = []
+    if module_file is not None:
+        for parent in Path(module_file).resolve().parents:
+            candidates.extend(sorted(parent.glob("nvidia/cu*/lib/libcudss_mtlayer_gomp.so*")))
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _resolve_nvmath_cudss_threading_lib(
+    cudss: Any,
+    controls: Mapping[str, Any],
+) -> str | None:
+    requested = controls.get("threading_lib")
+    needs_threading = (
+        requested is not None
+        or "host_nthreads" in controls
+        or bool(controls.get("hybrid_execute_mode", False))
+    )
+    if not needs_threading:
+        return None
+    if requested is not None:
+        requested_text = str(requested).strip()
+        if requested_text.lower() not in {"auto", "default"}:
+            requested_path = Path(requested_text).expanduser()
+            if not requested_path.is_file():
+                raise RuntimeError(
+                    "nvmath_cudss threading_lib points to a missing cuDSS threading "
+                    f"layer library: {requested_text!r}"
+                )
+            return str(requested_path)
+    else:
+        env_path = os.getenv("CUDSS_THREADING_LIB")
+        if env_path:
+            requested_path = Path(env_path).expanduser()
+            if requested_path.is_file():
+                return str(requested_path)
+
+    discovered = _find_nvmath_cudss_threading_lib(cudss)
+    if discovered is None:
+        raise RuntimeError(
+            "nvmath_cudss host threading was requested, but no cuDSS threading "
+            "layer library was found. Pass threading_lib=<path> or set "
+            "CUDSS_THREADING_LIB."
+        )
+    return discovered
+
+
+def _set_nvmath_cudss_threading_layer(
+    cudss: Any,
+    handle: Any,
+    controls: Mapping[str, Any],
+) -> str | None:
+    threading_lib = _resolve_nvmath_cudss_threading_lib(cudss, controls)
+    if threading_lib is not None:
+        cudss.set_threading_layer(handle, threading_lib)
+    return threading_lib
+
+
 _NVMATH_CUDSS_MEMORY_ESTIMATES_DTYPE = np.dtype(
     [
         ("permanent_device_memory", "<u8"),
@@ -479,6 +572,25 @@ def _nvmath_cudss_memory_estimates(cudss: Any, handle: Any, data: Any) -> dict[s
     return {name: int(getattr(record, name)) for name in names if name != "reserved"}
 
 
+def _validate_nvmath_cudss_runtime_controls(
+    controls: Mapping[str, Any],
+    device_ids: Sequence[int],
+) -> None:
+    if len(device_ids) <= 1:
+        return
+    if (
+        "host_nthreads" in controls
+        or "threading_lib" in controls
+        or bool(controls.get("hybrid_execute_mode", False))
+    ):
+        raise RuntimeError(
+            "nvmath_cudss host threading controls are not supported with the "
+            "multi-GPU cuDSS handle in the tested nvmath/cuDSS runtime. Omit "
+            "host_nthreads/threading_lib for multi-GPU runs, or select a single "
+            "CUDA device."
+        )
+
+
 class NvmathCudssFactor:
     """Reusable cuDSS sparse factorization for repeated single-RHS solves.
 
@@ -503,6 +615,7 @@ class NvmathCudssFactor:
             self.torch,
             cast(tuple[int, ...] | Literal["all"] | None, self.resolved_controls.get("device_ids")),
         )
+        _validate_nvmath_cudss_runtime_controls(self.resolved_controls, self.device_ids)
         self.primary_device = int(self.device_ids[0])
         self.torch.cuda.set_device(self.primary_device)
         self.torch_device = self.torch.device(f"cuda:{self.primary_device}")
@@ -523,6 +636,7 @@ class NvmathCudssFactor:
         self.solve_seconds = 0.0
         self.memory_estimates: dict[str, int] = {}
         self.memory_estimates_error = ""
+        self.threading_lib: str | None = None
         self._closed = False
         self._device_indices_array: np.ndarray | None = None
         self.handle = None
@@ -583,6 +697,11 @@ class NvmathCudssFactor:
                 len(self.device_ids),
                 self._device_indices_array.ctypes.data,
             )
+        self.threading_lib = _set_nvmath_cudss_threading_layer(
+            cudss,
+            self.handle,
+            self.resolved_controls,
+        )
         cudss.set_stream(
             self.handle,
             self.torch.cuda.current_stream(self.primary_device).cuda_stream,
@@ -851,6 +970,7 @@ class NvmathCudssFactor:
                 str(self.torch.cuda.get_device_name(device_id)) for device_id in self.device_ids
             ),
             "nvmath_cudss_factor_resolved_controls": json_safe_mapping(self.resolved_controls),
+            "nvmath_cudss_factor_threading_lib": self.threading_lib or "",
             "nvmath_cudss_factor_analysis_seconds": self.analysis_seconds,
             "nvmath_cudss_factor_factorization_seconds": self.factorization_seconds,
             "nvmath_cudss_factor_solve_calls": self.solve_calls,
@@ -936,6 +1056,7 @@ def solve_nvmath_cudss(
         torch,
         cast(tuple[int, ...] | Literal["all"] | None, resolved_controls.get("device_ids")),
     )
+    _validate_nvmath_cudss_runtime_controls(resolved_controls, device_ids)
     primary_device = device_ids[0]
     torch.cuda.set_device(primary_device)
     torch_device = torch.device(f"cuda:{primary_device}")
@@ -986,6 +1107,7 @@ def solve_nvmath_cudss(
         if len(device_ids) == 1
         else cudss.create_mg(len(device_ids), list(device_ids))
     )
+    threading_lib: str | None = None
     matrix_desc = rhs_desc = solution_desc = config = data = None
     for device_id in device_ids:
         torch.cuda.reset_peak_memory_stats(device_id)
@@ -993,6 +1115,7 @@ def solve_nvmath_cudss(
     memory_estimates_error = ""
     start = perf_counter()
     try:
+        threading_lib = _set_nvmath_cudss_threading_layer(cudss, handle, resolved_controls)
         cudss.set_stream(handle, torch.cuda.current_stream(primary_device).cuda_stream)
         matrix_desc = cudss.matrix_create_csr(
             rows,
@@ -1234,6 +1357,7 @@ def solve_nvmath_cudss(
         "serial_sparse_nvmath_cudss_device_names": tuple(
             str(torch.cuda.get_device_name(device_id)) for device_id in device_ids
         ),
+        "serial_sparse_nvmath_cudss_threading_lib": threading_lib or "",
         "serial_sparse_nvmath_cudss_backend_seconds": backend_solve_seconds,
         "serial_sparse_nvmath_cudss_relative_residual": relative_residual,
         "serial_sparse_nvmath_cudss_max_memory_allocated_bytes": tuple(

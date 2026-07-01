@@ -373,6 +373,7 @@ class FEniCSSolverOptions:
         pivot_epsilon_alg: str | int | None = None,
         nd_nlevels: int | None = None,
         host_nthreads: int | None = None,
+        threading_lib: str | None = None,
         hybrid_mode: bool | None = None,
         hybrid_device_memory_limit: int | None = None,
         hybrid_execute_mode: bool | None = None,
@@ -428,6 +429,7 @@ class FEniCSSolverOptions:
             pivot_epsilon_alg=pivot_epsilon_alg,
             nd_nlevels=nd_nlevels,
             host_nthreads=host_nthreads,
+            threading_lib=threading_lib,
             hybrid_mode=hybrid_mode,
             hybrid_device_memory_limit=hybrid_device_memory_limit,
             hybrid_execute_mode=hybrid_execute_mode,
@@ -564,6 +566,7 @@ class FEniCSSolverOptions:
         pivot_epsilon_alg: str | int | None = None,
         nd_nlevels: int | None = None,
         host_nthreads: int | None = None,
+        threading_lib: str | None = None,
         hybrid_mode: bool | None = None,
         hybrid_device_memory_limit: int | None = None,
         hybrid_execute_mode: bool | None = None,
@@ -640,7 +643,15 @@ class FEniCSSolverOptions:
             support it.
         host_nthreads :
             Optional positive host-thread count for cuDSS host-side work
-            (``ConfigParam.HOST_NTHREADS``).
+            (``ConfigParam.HOST_NTHREADS``). This affects execution only when a
+            cuDSS threading-layer library is loaded.
+        threading_lib :
+            Optional path to a cuDSS threading-layer library. Use ``"auto"`` to
+            request the packaged ``libcudss_mtlayer_gomp`` library when
+            available. If host threading is requested and this is omitted,
+            ``voids`` uses ``CUDSS_THREADING_LIB`` when set and otherwise
+            auto-loads the packaged threading layer when ``host_nthreads`` or
+            ``hybrid_execute_mode=True`` is requested.
         hybrid_mode :
             Optional request to enable cuDSS hybrid memory mode
             (``ConfigParam.HYBRID_MODE``), which can spill factorization data to
@@ -648,7 +659,10 @@ class FEniCSSolverOptions:
         hybrid_device_memory_limit :
             Optional positive device-memory limit in bytes for cuDSS hybrid
             memory mode (``ConfigParam.HYBRID_DEVICE_MEMORY_LIMIT``). ``voids``
-            applies this after analysis and before factorization.
+            applies this after analysis and before factorization. Multi-GPU
+            hybrid-memory limit handling is runtime dependent in the low-level
+            nvmath binding; compare against a small same-configuration probe
+            before relying on it.
         hybrid_execute_mode :
             Optional request to enable cuDSS hybrid execute mode
             (``ConfigParam.HYBRID_EXECUTE_MODE``). Support is runtime/backend
@@ -705,6 +719,7 @@ class FEniCSSolverOptions:
             pivot_epsilon_alg=pivot_epsilon_alg,
             nd_nlevels=nd_nlevels,
             host_nthreads=host_nthreads,
+            threading_lib=threading_lib,
             hybrid_mode=hybrid_mode,
             hybrid_device_memory_limit=hybrid_device_memory_limit,
             hybrid_execute_mode=hybrid_execute_mode,
