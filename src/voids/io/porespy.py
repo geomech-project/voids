@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import warnings
+from typing import cast
 
 import numpy as np
 
+from voids._typing import JsonValue, NetworkExtraValue
 from voids.core.network import Network
 from voids.core.provenance import Provenance
 from voids.core.sample import SampleGeometry
@@ -115,6 +117,30 @@ def _normalize_value(value: object) -> np.ndarray:
     """
 
     return np.asarray(value)
+
+
+def _network_extra_value(value: object) -> NetworkExtraValue:
+    if isinstance(value, np.ndarray):
+        return value
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        return {str(k): _json_value(v) for k, v in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(_json_value(item) for item in value)
+    return str(value)
+
+
+def _json_value(value: object) -> JsonValue:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, np.ndarray):
+        return _json_value(value.tolist())
+    if isinstance(value, Mapping):
+        return {str(k): _json_value(v) for k, v in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(_json_value(item) for item in value)
+    return str(value)
 
 
 def scale_porespy_geometry(
@@ -732,7 +758,7 @@ def from_porespy(
     throat_data: dict[str, np.ndarray] = {}
     pore_labels: dict[str, np.ndarray] = {}
     throat_labels: dict[str, np.ndarray] = {}
-    extra: dict[str, object] = {}
+    extra: dict[str, NetworkExtraValue] = {}
 
     throat_conns = None
     pore_coords = None
@@ -768,7 +794,7 @@ def from_porespy(
             else:
                 throat_data[sub.replace(".", "_")] = np.asarray(arr)
         else:
-            extra[key] = value
+            extra[key] = _network_extra_value(value)
 
     if throat_conns is None or pore_coords is None:
         throat_conns = np.asarray(network_dict.get("throat.conns"))
@@ -791,12 +817,14 @@ def from_porespy(
     if geometry_repairs not in {None, "imperial_export"}:
         raise ValueError("geometry_repairs must be None or 'imperial_export'")
     if geometry_repairs == "imperial_export":
-        extra["geometry_repairs"] = _apply_imperial_export_geometry_repairs(
-            pore_data,
-            throat_data,
-            np.asarray(throat_conns, dtype=int),
-            num_pores=int(pore_coords.shape[0]),
-            random_seed=repair_seed,
+        extra["geometry_repairs"] = _network_extra_value(
+            _apply_imperial_export_geometry_repairs(
+                pore_data,
+                throat_data,
+                np.asarray(throat_conns, dtype=int),
+                num_pores=int(pore_coords.shape[0]),
+                random_seed=repair_seed,
+            )
         )
 
     conduit_summary = _derive_missing_conduit_lengths(
@@ -806,12 +834,15 @@ def from_porespy(
         np.asarray(pore_coords, dtype=float),
     )
     if conduit_summary is not None:
-        extra["conduit_lengths"] = conduit_summary
+        extra["conduit_lengths"] = _network_extra_value(conduit_summary)
 
     _derive_missing_geometry(pore_data, throat_data)
 
     if "hydraulic_size_factors" in throat_data:
-        extra["throat.hydraulic_size_factors"] = throat_data.pop("hydraulic_size_factors")
+        extra["throat.hydraulic_size_factors"] = cast(
+            NetworkExtraValue,
+            throat_data.pop("hydraulic_size_factors"),
+        )
         warnings.warn(
             "Stored throat.hydraulic_size_factors in net.extra; the auto conductance model can use it",
             RuntimeWarning,

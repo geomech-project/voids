@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 from scipy.stats import ks_2samp
@@ -25,6 +24,9 @@ from voids.physics.singlephase import (
     SinglePhaseResult,
     solve,
 )
+
+
+BenchmarkDetailValue = str | int | float | bool | None
 
 
 @dataclass(slots=True)
@@ -51,7 +53,7 @@ class SinglePhaseCrosscheckSummary:
     permeability_rel_diff: float
     total_flow_abs_diff: float
     total_flow_rel_diff: float
-    details: dict[str, Any]
+    details: dict[str, BenchmarkDetailValue]
 
 
 @dataclass(slots=True)
@@ -486,7 +488,7 @@ def _summary_from_values(
     k_ref: float,
     q_voids: float,
     q_ref: float,
-    details: dict[str, Any],
+    details: dict[str, BenchmarkDetailValue],
 ) -> SinglePhaseCrosscheckSummary:
     """Build a crosscheck summary from scalar transport metrics.
 
@@ -724,11 +726,6 @@ def _openpnm_phase_factory(op, pn):
         Imported OpenPNM module.
     pn :
         OpenPNM network object.
-
-    Returns
-    -------
-    Any
-        Phase object compatible with the installed OpenPNM version.
 
     Raises
     ------

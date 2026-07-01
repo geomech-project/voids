@@ -4,14 +4,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from importlib import import_module
 from time import perf_counter
-from typing import Any, cast
+from typing import cast
 import warnings
 
 import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import MatrixRankWarning
 
-from voids.linalg.solve import SolverParameters, solve_linear_system
+from voids._typing import JsonObject
+from voids.linalg.solve import SolverInfo, SolverParameters, solve_linear_system
 
 from voids.image.porosity import PermeabilityMap
 
@@ -60,16 +61,16 @@ class TPFAResult:
     matrix_nnz: int
     solve_seconds: float
     solver_method: str
-    solver_info: dict[str, Any] = field(default_factory=dict)
+    solver_info: SolverInfo = field(default_factory=dict)
     residual_relative: float = 0.0
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: JsonObject = field(default_factory=dict)
 
 
 def _as_permeability_array(
     permeability: PermeabilityMap | np.ndarray,
     *,
     cell_size: float | Sequence[float] | None,
-) -> tuple[np.ndarray, tuple[float, ...], dict[str, Any]]:
+) -> tuple[np.ndarray, tuple[float, ...], JsonObject]:
     if isinstance(permeability, PermeabilityMap):
         values = np.asarray(permeability.values, dtype=float)
         size = tuple(float(v) for v in cast(tuple[float, ...], permeability.cell_size))

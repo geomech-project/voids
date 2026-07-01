@@ -570,6 +570,7 @@ def _get_hydraulic_size_factors(net: Network) -> np.ndarray:
     OpenPNM convention used by its generic hydraulic conductance model.
     """
 
+    raw: object
     if "hydraulic_size_factors" in net.throat:
         raw = net.throat["hydraulic_size_factors"]
     elif "throat.hydraulic_size_factors" in net.extra:

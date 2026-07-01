@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 import numpy as np
 
+from voids._typing import NetworkExtraValue
 from voids.core.provenance import Provenance
 from voids.core.sample import SampleGeometry
 
@@ -54,7 +54,7 @@ class Network:
     throat: dict[str, np.ndarray] = field(default_factory=dict)
     pore_labels: dict[str, np.ndarray] = field(default_factory=dict)
     throat_labels: dict[str, np.ndarray] = field(default_factory=dict)
-    extra: dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, NetworkExtraValue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Normalize arrays immediately after initialization.

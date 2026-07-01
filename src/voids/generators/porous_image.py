@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
 from typing import cast
 
 import numpy as np
 import porespy as ps
 
+from voids._typing import JsonObject
 from voids.image.connectivity import has_spanning_cluster
 from voids.image._utils import normalize_shape, validate_axis_index
 
@@ -37,7 +37,7 @@ class MacroMicroPorousImage:
     void: np.ndarray
     macro_void: np.ndarray
     micropore_void: np.ndarray
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: JsonObject = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Normalize and validate mask relationships."""

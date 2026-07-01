@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+
+from voids._typing import JsonObject, JsonValue
 
 
 @dataclass(slots=True)
@@ -116,12 +118,12 @@ class SampleGeometry:
             raise KeyError(f"Missing sample cross-section for axis '{axis}'")
         return float(self.cross_sections[axis])
 
-    def to_metadata(self) -> dict[str, Any]:
+    def to_metadata(self) -> JsonObject:
         """Serialize the sample geometry to a JSON-friendly dictionary.
 
         Returns
         -------
-        dict[str, Any]
+        JsonObject
             Mapping suitable for HDF5 or JSON serialization.
         """
 
@@ -129,14 +131,14 @@ class SampleGeometry:
             "voxel_size": self.voxel_size,
             "bulk_shape_voxels": self.bulk_shape_voxels,
             "bulk_volume": self.bulk_volume,
-            "lengths": self.lengths,
-            "cross_sections": self.cross_sections,
-            "axis_map": self.axis_map,
-            "units": self.units,
+            "lengths": dict(self.lengths),
+            "cross_sections": dict(self.cross_sections),
+            "axis_map": dict(self.axis_map),
+            "units": dict(self.units),
         }
 
     @classmethod
-    def from_metadata(cls, data: dict[str, Any]) -> "SampleGeometry":
+    def from_metadata(cls, data: JsonObject) -> "SampleGeometry":
         """Reconstruct sample geometry from serialized metadata.
 
         Parameters
@@ -151,15 +153,51 @@ class SampleGeometry:
         """
 
         return cls(
-            voxel_size=data.get("voxel_size"),
-            bulk_shape_voxels=tuple(data["bulk_shape_voxels"])
-            if data.get("bulk_shape_voxels") is not None
-            else None,
-            bulk_volume=data.get("bulk_volume"),
-            lengths={str(k): float(v) for k, v in (data.get("lengths") or {}).items()},
+            voxel_size=_scalar_or_tuple(data.get("voxel_size")),
+            bulk_shape_voxels=_int_tuple(data.get("bulk_shape_voxels")),
+            bulk_volume=_optional_float(data.get("bulk_volume")),
+            lengths={str(k): _float_value(v) for k, v in _mapping(data.get("lengths")).items()},
             cross_sections={
-                str(k): float(v) for k, v in (data.get("cross_sections") or {}).items()
+                str(k): _float_value(v) for k, v in _mapping(data.get("cross_sections")).items()
             },
-            axis_map={str(k): str(v) for k, v in (data.get("axis_map") or {}).items()},
-            units={str(k): str(v) for k, v in (data.get("units") or {}).items()},
+            axis_map={str(k): str(v) for k, v in _mapping(data.get("axis_map")).items()},
+            units={str(k): str(v) for k, v in _mapping(data.get("units")).items()},
         )
+
+
+def _mapping(value: JsonValue) -> Mapping[str, JsonValue]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _optional_float(value: JsonValue) -> float | None:
+    return float(value) if isinstance(value, (int, float, str)) else None
+
+
+def _float_value(value: JsonValue) -> float:
+    if isinstance(value, (int, float, str)):
+        return float(value)
+    raise TypeError(f"Expected numeric metadata value, got {type(value).__name__}")
+
+
+def _scalar_or_tuple(value: JsonValue) -> float | tuple[float, float, float] | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float, str)):
+        return float(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) == 3:
+        return (
+            _float_value(value[0]),
+            _float_value(value[1]),
+            _float_value(value[2]),
+        )
+    return None
+
+
+def _int_tuple(value: JsonValue) -> tuple[int, int, int] | None:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) == 3:
+        return (
+            int(_float_value(value[0])),
+            int(_float_value(value[1])),
+            int(_float_value(value[2])),
+        )
+    return None

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol, TypeAlias, cast
+from typing import Literal, Protocol, TypeAlias, cast
 
 import numpy as np
 from scipy import sparse
@@ -73,13 +73,14 @@ SolverParameterValue: TypeAlias = (
 )
 SolverParameters: TypeAlias = dict[str, SolverParameterValue]
 LinearSystemDType: TypeAlias = Literal["float32", "float64"]
-_SUPPORTED_LINEAR_SYSTEM_DTYPES: dict[np.dtype[Any], LinearSystemDType] = {
+SolverInfo: TypeAlias = dict[str, str | float | int | bool]
+_SUPPORTED_LINEAR_SYSTEM_DTYPES: dict[np.dtype[np.generic], LinearSystemDType] = {
     np.dtype("float32"): "float32",
     np.dtype("float64"): "float64",
 }
 
 
-def _resolve_linear_system_dtype(value: SolverParameterValue | None) -> np.dtype[Any]:
+def _resolve_linear_system_dtype(value: SolverParameterValue | None) -> np.dtype[np.generic]:
     """Normalize the requested floating-point dtype for sparse solves."""
 
     if value is None:
@@ -95,22 +96,22 @@ def _resolve_linear_system_dtype(value: SolverParameterValue | None) -> np.dtype
     return dtype
 
 
-def _linear_system_dtype_metadata(dtype: np.dtype[Any]) -> dict[str, str]:
+def _linear_system_dtype_metadata(dtype: np.dtype[np.generic]) -> dict[str, str]:
     return {"linear_system_dtype": _SUPPORTED_LINEAR_SYSTEM_DTYPES[dtype]}
 
 
 def _cast_linear_system(
     matrix: sparse.spmatrix,
     rhs: np.ndarray,
-    dtype: np.dtype[Any],
+    dtype: np.dtype[np.generic],
 ) -> tuple[sparse.csr_matrix, np.ndarray]:
     return matrix.tocsr().astype(dtype, copy=False), np.ascontiguousarray(
         np.asarray(rhs, dtype=dtype)
     )
 
 
-def _superlu_kwargs(parameters: SolverParameters) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {}
+def _superlu_kwargs(parameters: SolverParameters) -> dict[str, object]:
+    kwargs: dict[str, object] = {}
     if "permc_spec" in parameters:
         kwargs["permc_spec"] = parameters["permc_spec"]
     if "diag_pivot_thresh" in parameters:
@@ -211,7 +212,7 @@ def solve_linear_system(
     *,
     method: str = "direct",
     solver_parameters: SolverParameters | None = None,
-) -> tuple[np.ndarray, dict[str, str | float | int]]:
+) -> tuple[np.ndarray, SolverInfo]:
     """Solve a sparse linear system with one of the supported backends.
 
     Parameters
@@ -238,7 +239,7 @@ def solve_linear_system(
     -------
     numpy.ndarray
         Solution vector.
-    dict[str, Any]
+    SolverInfo
         Solver metadata containing the method name and the iterative solver
         status code ``info``.
 
@@ -267,7 +268,7 @@ def solve_linear_system(
     dtype_info = _linear_system_dtype_metadata(dtype)
 
     if method == "direct":
-        kwargs: dict[str, Any] = {}
+        kwargs: dict[str, object] = {}
         if dtype == np.dtype("float32"):
             # SciPy's default spsolve path may dispatch to UMFPACK when
             # scikit-umfpack is installed; that wrapper is double-only.

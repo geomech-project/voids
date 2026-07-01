@@ -1,22 +1,24 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import h5py
 import numpy as np
 
+from voids._typing import JsonObject, JsonValue, NetworkExtraValue
 from voids.core.network import Network
 from voids.core.provenance import Provenance
 from voids.core.sample import SampleGeometry
 
 
-def _json_default(value: Any) -> Any:
+def _json_default(value: object) -> JsonValue:
     """Convert NumPy values that commonly appear in metadata to JSON values."""
 
     if isinstance(value, np.ndarray):
-        return value.tolist()
+        return cast(JsonValue, value.tolist())
     if isinstance(value, np.integer):
         return int(value)
     if isinstance(value, np.floating):
@@ -26,7 +28,7 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
 
 
-def _write_json_attr(obj: h5py.Group, name: str, value: Any) -> None:
+def _write_json_attr(obj: h5py.Group, name: str, value: object) -> None:
     """Write a JSON-serializable value into an HDF5 attribute.
 
     Parameters
@@ -42,7 +44,7 @@ def _write_json_attr(obj: h5py.Group, name: str, value: Any) -> None:
     obj.attrs[name] = json.dumps(value, default=_json_default)
 
 
-def _read_json_attr(obj: h5py.Group, name: str, default: Any = None) -> Any:
+def _read_json_attr(obj: h5py.Group, name: str, default: JsonValue = None) -> JsonValue:
     """Read a JSON-serialized HDF5 attribute.
 
     Parameters
@@ -56,7 +58,7 @@ def _read_json_attr(obj: h5py.Group, name: str, default: Any = None) -> Any:
 
     Returns
     -------
-    Any
+    JsonValue
         Decoded JSON payload or ``default`` when the attribute does not exist.
     """
 
@@ -65,7 +67,11 @@ def _read_json_attr(obj: h5py.Group, name: str, default: Any = None) -> Any:
     raw = obj.attrs[name]
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8")
-    return json.loads(raw)
+    return cast(JsonValue, json.loads(raw))
+
+
+def _json_object(value: JsonValue) -> JsonObject:
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def save_hdf5(net: Network, path: str | Path) -> None:
@@ -141,8 +147,10 @@ def load_hdf5(path: str | Path) -> Network:
     path = Path(path)
     with h5py.File(path, "r") as f:
         schema_version = f["meta"]["schema_version"][()].decode("utf-8")
-        prov = Provenance.from_metadata(_read_json_attr(f["meta"], "provenance", {}))
-        sample = SampleGeometry.from_metadata(_read_json_attr(f["sample"], "payload", {}))
+        prov = Provenance.from_metadata(_json_object(_read_json_attr(f["meta"], "provenance", {})))
+        sample = SampleGeometry.from_metadata(
+            _json_object(_read_json_attr(f["sample"], "payload", {}))
+        )
 
         pore_coords = f["network"]["pore"]["coords"][()]
         throat_conns = f["network"]["throat"]["conns"][()]
@@ -158,7 +166,9 @@ def load_hdf5(path: str | Path) -> Network:
             if "labels" in f
             else {}
         )
-        extra = _read_json_attr(f, "extra", {})
+        extra: dict[str, NetworkExtraValue] = {
+            key: value for key, value in _json_object(_read_json_attr(f, "extra", {})).items()
+        }
 
     return Network(
         throat_conns=throat_conns,

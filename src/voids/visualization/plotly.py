@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from math import ceil
-from typing import Any
 
 import numpy as np
 import plotly.graph_objects as go
@@ -135,7 +134,7 @@ def plot_network_plotly(
     max_throats: int | None = 1000,
     title: str | None = None,
     show_colorbar: bool = True,
-    layout_kwargs: dict[str, Any] | None = None,
+    layout_kwargs: dict[str, object] | None = None,
 ) -> go.Figure:
     """Create an interactive Plotly visualization of a pore-throat network.
 
@@ -258,7 +257,7 @@ def plot_network_plotly(
         sampled_line_widths = np.full(sampled.shape, line_width_ref, dtype=float)
 
     if point_values is not None:
-        marker: dict[str, Any] = {
+        marker: dict[str, object] = {
             "size": marker_size,
             "color": point_values,
             "colorscale": "Viridis",
@@ -290,7 +289,7 @@ def plot_network_plotly(
             hover_lines.append(f"{point_size_label}={point_size_values[idx]:.3e}")
         pore_text.append("<br>".join(hover_lines))
 
-    traces: list[Any] = [
+    traces: list[object] = [
         go.Scatter3d(
             x=x,
             y=y,
@@ -352,7 +351,7 @@ def plot_network_plotly(
             title += f" (showing {sampled.size} of {net.Nt} throats)"
 
     figure = go.Figure(data=traces)
-    layout: dict[str, Any] = {
+    layout: dict[str, object] = {
         "title": title,
         "scene": {
             "xaxis_title": "X",

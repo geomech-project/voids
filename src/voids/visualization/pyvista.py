@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import warnings
-from typing import Any
+from typing import cast
 
 import numpy as np
 import pyvista as pv
@@ -135,7 +136,7 @@ def plot_network_pyvista(
     screenshot: str | None = None,
     show_axes: bool = True,
     notebook: bool | None = None,
-    **add_mesh_kwargs: Any,
+    **add_mesh_kwargs: object,
 ) -> tuple[pv.Plotter, pv.PolyData]:
     """Render a pore network with PyVista.
 
@@ -236,7 +237,7 @@ def plot_network_pyvista(
             render_tubes or use_variable_throat_sizes or tube_radius is not None
         )
         if render_tubes_effective:
-            kwargs: dict[str, Any] = {}
+            kwargs: dict[str, object] = {}
             if use_variable_throat_sizes:
                 kwargs["scalars"] = "throat.render_radius"
                 kwargs["absolute"] = True
@@ -244,7 +245,8 @@ def plot_network_pyvista(
             elif tube_radius is not None:
                 kwargs["radius"] = float(tube_radius)
             try:
-                line_mesh = poly.tube(**kwargs)
+                tube = cast(Callable[..., pv.PolyData], poly.tube)
+                line_mesh = tube(**kwargs)
             except Exception as exc:
                 line_mesh = poly
                 msg = (
@@ -257,7 +259,7 @@ def plot_network_pyvista(
                         "without the tube filter."
                     )
                 warnings.warn(msg, stacklevel=2)
-        line_kwargs: dict[str, Any] = {
+        line_kwargs: dict[str, object] = {
             "scalars": line_scalars_name,
             "show_scalar_bar": (line_scalars_name is not None),
             **add_mesh_kwargs,
@@ -266,7 +268,8 @@ def plot_network_pyvista(
             line_kwargs["line_width"] = line_width_value
             # Use line-tube approximation when tubes were requested but unavailable.
             line_kwargs["render_lines_as_tubes"] = render_tubes_effective
-        pl.add_mesh(line_mesh, **line_kwargs)
+        add_mesh = cast(Callable[..., object], pl.add_mesh)
+        add_mesh(line_mesh, **line_kwargs)
 
     if show_points and net.Np > 0:
         if use_variable_point_sizes:

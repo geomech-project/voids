@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from time import perf_counter
-from typing import Any, Literal, Protocol, cast
+from typing import Literal, NamedTuple, Protocol, cast
 
 import numpy as np
 from scipy.sparse import bmat, csr_matrix, diags
@@ -34,6 +35,9 @@ from voids.fem.singlephase._common import (
 from voids.linalg.cudss import NvmathCudssFactor
 
 
+_ControlScalar = str | bytes | int | float | bool
+
+
 class _UFLExpression(Protocol):
     """Structural type for the symbolic UFL algebra used in local form builders."""
 
@@ -43,7 +47,10 @@ class _UFLExpression(Protocol):
     def __rsub__(self, other: object, /) -> _UFLExpression: ...
     def __mul__(self, other: object, /) -> _UFLExpression: ...
     def __rmul__(self, other: object, /) -> _UFLExpression: ...
+    def __truediv__(self, other: object, /) -> _UFLExpression: ...
+    def __rtruediv__(self, other: object, /) -> _UFLExpression: ...
     def __neg__(self) -> _UFLExpression: ...
+    def __call__(self, restriction: str, /) -> _UFLExpression: ...
 
 
 class _UFLAlgebra(Protocol):
@@ -58,9 +65,61 @@ class _UFLAlgebra(Protocol):
         /,
     ) -> _UFLExpression: ...
     def jump(self, expression: _UFLExpression, /) -> _UFLExpression: ...
+    def gt(self, left: _UFLExpression, right: _UFLExpression, /) -> _UFLExpression: ...
+    def conditional(
+        self,
+        condition: _UFLExpression,
+        true_value: _UFLExpression,
+        false_value: _UFLExpression,
+        /,
+    ) -> _UFLExpression: ...
+    def max_value(
+        self,
+        left: _UFLExpression,
+        right: _UFLExpression,
+        /,
+    ) -> _UFLExpression: ...
+    def sqrt(self, expression: _UFLExpression, /) -> _UFLExpression: ...
+    def tanh(self, expression: _UFLExpression, /) -> _UFLExpression: ...
+    def CellDiameter(self, domain: object, /) -> _UFLExpression: ...
+    def avg(self, expression: _UFLExpression, /) -> _UFLExpression: ...
+    def TrialFunction(self, space: object, /) -> _UFLExpression: ...
+    def TestFunction(self, space: object, /) -> _UFLExpression: ...
 
 
-def _petsc_mat_to_csr(matrix: Any) -> csr_matrix:
+class _FEMFunctionVector(Protocol):
+    array: np.ndarray
+
+    def scatter_forward(self) -> None: ...
+
+
+class _FEMFunction(Protocol):
+    x: _FEMFunctionVector
+
+
+def _ufl_constant(context: _FEMContext, value: float) -> _UFLExpression:
+    return cast(_UFLExpression, context.api.fem.Constant(context.mesh, float(value)))
+
+
+class _PETScCSRMatrix(Protocol):
+    def getValuesCSR(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
+    def getSize(self) -> tuple[int, int]: ...
+
+
+class _PETScCSRConvertible(Protocol):
+    def assemble(self) -> None: ...
+    def convert(self, matrix_type: str, /) -> _PETScCSRMatrix: ...
+
+
+class _USFEMBlockCSRSystem(NamedTuple):
+    a00: csr_matrix
+    a01: csr_matrix
+    a10: csr_matrix
+    a11: csr_matrix
+    rhs: np.ndarray
+
+
+def _petsc_mat_to_csr(matrix: _PETScCSRConvertible) -> csr_matrix:
     matrix.assemble()
     converted = matrix.convert("aij")
     indptr, indices, data = converted.getValuesCSR()
@@ -94,12 +153,12 @@ def _drop_relative_by_row(matrix: csr_matrix, drop_rel: float) -> csr_matrix:
 
 
 def _assemble_usfem_block_csr_system(
-    context: Any,
+    context: _FEMContext,
     *,
-    forms: list[list[Any]],
-    rhs: list[Any],
-    bcs: list[Any],
-) -> dict[str, Any]:
+    forms: Sequence[Sequence[object]],
+    rhs: Sequence[object],
+    bcs: Sequence[object],
+) -> _USFEMBlockCSRSystem:
     if context.mesh.comm.size != 1:
         raise NotImplementedError(
             "The USFEM Schurdiag/cuDSS preset is a single-process iterative "
@@ -108,7 +167,9 @@ def _assemble_usfem_block_csr_system(
         )
     api = _require_dolfinx_petsc(context.api)
     fem = api.fem
-    petsc = cast(Any, api.petsc)
+    petsc = api.petsc
+    if petsc is None:  # pragma: no cover - guarded by _require_dolfinx_petsc
+        raise RuntimeError("PETSc bindings are required to assemble USFEM block matrices")
     block_forms = [[fem.form(form) for form in row] for row in forms]
     matrix_nest = petsc.assemble_matrix(
         block_forms,
@@ -127,40 +188,53 @@ def _assemble_usfem_block_csr_system(
         mode=petsc.PETSc.ScatterMode.REVERSE,
     )
     petsc.set_bc(vector, bcs)
-    return {
-        "A00": _petsc_mat_to_csr(matrix_nest.getNestSubMatrix(0, 0)),
-        "A01": _petsc_mat_to_csr(matrix_nest.getNestSubMatrix(0, 1)),
-        "A10": _petsc_mat_to_csr(matrix_nest.getNestSubMatrix(1, 0)),
-        "A11": _petsc_mat_to_csr(matrix_nest.getNestSubMatrix(1, 1)),
-        "rhs": np.asarray(vector.array.copy(), dtype=float),
-    }
+    return _USFEMBlockCSRSystem(
+        a00=_petsc_mat_to_csr(matrix_nest.getNestSubMatrix(0, 0)),
+        a01=_petsc_mat_to_csr(matrix_nest.getNestSubMatrix(0, 1)),
+        a10=_petsc_mat_to_csr(matrix_nest.getNestSubMatrix(1, 0)),
+        a11=_petsc_mat_to_csr(matrix_nest.getNestSubMatrix(1, 1)),
+        rhs=np.asarray(vector.array.copy(), dtype=float),
+    )
 
 
-def _usfem_iterative_control(
-    controls: dict[str, Any],
+def _usfem_float_control(
+    controls: Mapping[str, object],
     name: str,
-    default: Any,
-    cast_type: Any,
-) -> Any:
-    return cast_type(controls.get(name, default))
+    default: _ControlScalar,
+) -> float:
+    value = controls.get(name, default)
+    if not isinstance(value, str | bytes | int | float | bool):
+        raise TypeError(f"{name} must be convertible to float")
+    return float(value)
+
+
+def _usfem_int_control(
+    controls: Mapping[str, object],
+    name: str,
+    default: _ControlScalar,
+) -> int:
+    value = controls.get(name, default)
+    if not isinstance(value, str | bytes | int | float | bool):
+        raise TypeError(f"{name} must be convertible to int")
+    return int(value)
 
 
 def _solve_usfem_schurdiag_cudss(
-    context: Any,
+    context: _FEMContext,
     *,
-    forms: list[list[Any]],
-    rhs: list[Any],
-    bcs: list[Any],
-    solution_functions: list[Any],
+    forms: Sequence[Sequence[object]],
+    rhs: Sequence[object],
+    bcs: Sequence[object],
+    solution_functions: Sequence[_FEMFunction],
     options: FEniCSSolverOptions,
-) -> tuple[list[Any], float, dict[str, Any]]:
+) -> tuple[list[_FEMFunction], float, dict[str, object]]:
     controls = dict(options.iterative_solver_controls)
-    gmres_rtol = _usfem_iterative_control(controls, "gmres_rtol", 1.0e-8, float)
-    gmres_atol = _usfem_iterative_control(controls, "gmres_atol", 0.0, float)
-    gmres_maxiter = _usfem_iterative_control(controls, "gmres_maxiter", 1000, int)
-    gmres_restart = _usfem_iterative_control(controls, "gmres_restart", 200, int)
+    gmres_rtol = _usfem_float_control(controls, "gmres_rtol", 1.0e-8)
+    gmres_atol = _usfem_float_control(controls, "gmres_atol", 0.0)
+    gmres_maxiter = _usfem_int_control(controls, "gmres_maxiter", 1000)
+    gmres_restart = _usfem_int_control(controls, "gmres_restart", 200)
     velocity_solver = str(controls.get("velocity_solver", "amg"))
-    schur_drop_rel = _usfem_iterative_control(controls, "schurdiag_drop_rel", 0.0, float)
+    schur_drop_rel = _usfem_float_control(controls, "schurdiag_drop_rel", 0.0)
     error_if_not_converged = bool(controls.get("error_if_not_converged", True))
 
     start = perf_counter()
@@ -173,11 +247,11 @@ def _solve_usfem_schurdiag_cudss(
     )
     assembly_seconds = perf_counter() - assembly_start
 
-    a00 = blocks["A00"].tocsc()
-    a01 = blocks["A01"].tocsr()
-    a10 = blocks["A10"].tocsr()
-    a11 = blocks["A11"].tocsr()
-    rhs_array = np.asarray(blocks["rhs"], dtype=float)
+    a00 = blocks.a00.tocsc()
+    a01 = blocks.a01.tocsr()
+    a10 = blocks.a10.tocsr()
+    a11 = blocks.a11.tocsr()
+    rhs_array = np.asarray(blocks.rhs, dtype=float)
     system = bmat([[a00, a01], [a10, a11]], format="csr")
     n_u = int(a00.shape[0])
 
@@ -255,7 +329,7 @@ def _solve_usfem_schurdiag_cudss(
             callback_type="pr_norm",
         )
     finally:
-        pressure_factor_metadata = pressure_factor.metadata()
+        pressure_factor_metadata: dict[str, object] = dict(pressure_factor.metadata())
         pressure_factor.close()
     linear_solve_seconds = perf_counter() - linear_solve_start
     solve_seconds = perf_counter() - start
@@ -321,13 +395,19 @@ def _solve_usfem_schurdiag_cudss(
     )
 
 
-def _paper_tau(context: Any, h: Any, gamma: Any, nu_eff: Any, *, m_t: float) -> Any:
-    ufl = context.api.ufl
-    fem = context.api.fem
-    one = fem.Constant(context.mesh, 1.0)
-    zero = fem.Constant(context.mesh, 0.0)
-    four = fem.Constant(context.mesh, 4.0)
-    m_t_value = fem.Constant(context.mesh, float(m_t))
+def _paper_tau(
+    context: _FEMContext,
+    h: _UFLExpression,
+    gamma: _UFLExpression,
+    nu_eff: _UFLExpression,
+    *,
+    m_t: float,
+) -> _UFLExpression:
+    ufl = cast(_UFLAlgebra, context.api.ufl)
+    one = _ufl_constant(context, 1.0)
+    zero = _ufl_constant(context, 0.0)
+    four = _ufl_constant(context, 4.0)
+    m_t_value = _ufl_constant(context, float(m_t))
     gamma_positive = ufl.gt(gamma, zero)
     pe_t = ufl.conditional(
         gamma_positive,
@@ -343,23 +423,22 @@ def _paper_tau(context: Any, h: Any, gamma: Any, nu_eff: Any, *, m_t: float) -> 
 
 
 def _interior_pressure_tau(
-    context: Any,
-    h_f: Any,
-    gamma: Any,
-    nu_eff: Any,
+    context: _FEMContext,
+    h_f: _UFLExpression,
+    gamma: _UFLExpression,
+    nu_eff: _UFLExpression,
     *,
     alpha_edge: float,
-) -> Any:
-    ufl = context.api.ufl
-    fem = context.api.fem
-    tiny = fem.Constant(context.mesh, 1.0e-12)
-    two = fem.Constant(context.mesh, 2.0)
-    twelve = fem.Constant(context.mesh, 12.0)
-    alpha = fem.Constant(context.mesh, float(alpha_edge))
+) -> _UFLExpression:
+    ufl = cast(_UFLAlgebra, context.api.ufl)
+    tiny = _ufl_constant(context, 1.0e-12)
+    two = _ufl_constant(context, 2.0)
+    twelve = _ufl_constant(context, 12.0)
+    alpha = _ufl_constant(context, float(alpha_edge))
     nu_max = ufl.max_value(nu_eff("+"), nu_eff("-"))
     gamma_max = ufl.max_value(
         ufl.max_value(gamma("+"), gamma("-")),
-        fem.Constant(context.mesh, 0.0),
+        _ufl_constant(context, 0.0),
     )
     alpha_f = ufl.sqrt(gamma_max * h_f * h_f / nu_max)
     return alpha * ufl.conditional(
@@ -379,21 +458,20 @@ def _validate_usfem_controls(*, tau_factor: float, m_t: float, alpha_edge: float
 
 
 def _usfem_stabilization_terms(
-    context: Any,
+    context: _FEMContext,
     *,
     tau_factor: float,
     m_t: float,
     alpha_edge: float,
-    gamma: Any | None = None,
-    nu_eff: Any | None = None,
-) -> tuple[Any, Any, Any, Any]:
-    ufl = context.api.ufl
-    fem = context.api.fem
-    gamma = context.coefficients["gamma"] if gamma is None else gamma
-    nu_eff = context.coefficients["nu_eff"] if nu_eff is None else nu_eff
+    gamma: _UFLExpression | None = None,
+    nu_eff: _UFLExpression | None = None,
+) -> tuple[_UFLExpression, _UFLExpression, _UFLExpression, _UFLExpression]:
+    ufl = cast(_UFLAlgebra, context.api.ufl)
+    gamma = cast(_UFLExpression, context.coefficients["gamma"]) if gamma is None else gamma
+    nu_eff = cast(_UFLExpression, context.coefficients["nu_eff"]) if nu_eff is None else nu_eff
     h = ufl.CellDiameter(context.mesh)
     h_f = ufl.avg(h)
-    tau = fem.Constant(context.mesh, float(tau_factor)) * _paper_tau(
+    tau = _ufl_constant(context, float(tau_factor)) * _paper_tau(
         context,
         h,
         gamma,
@@ -468,7 +546,7 @@ def solve_brinkman_usfem(
             )
             gamma_override = cast(_UFLExpression, gamma_raw)
             nu_eff_override = cast(_UFLExpression, nu_eff_raw)
-        gamma_raw, nu_eff_raw, tau_raw, tau_f_raw = _usfem_stabilization_terms(
+        gamma, nu_eff, tau, tau_f = _usfem_stabilization_terms(
             context,
             tau_factor=tau_factor,
             m_t=m_t,
@@ -476,10 +554,6 @@ def solve_brinkman_usfem(
             gamma=gamma_override,
             nu_eff=nu_eff_override,
         )
-        gamma = cast(_UFLExpression, gamma_raw)
-        nu_eff = cast(_UFLExpression, nu_eff_raw)
-        tau = cast(_UFLExpression, tau_raw)
-        tau_f = cast(_UFLExpression, tau_f_raw)
         residual_u = gamma * u + ufl.grad(p) - nu_eff * ufl.div(ufl.grad(u))
         residual_vq = gamma * v - ufl.grad(q) - nu_eff * ufl.div(ufl.grad(v))
         return (
@@ -581,8 +655,10 @@ def solve_brinkman_usfem_block(
             velocity_scale=nondimensional_options.velocity_scale,
         )
 
-    ufl = context.api.ufl
+    ufl = cast(_UFLAlgebra, context.api.ufl)
     fem = context.api.fem
+    dx = cast(_UFLExpression, context.dx)
+    dS = cast(_UFLExpression, context.dS)
     velocity_element = context.api.basix_ufl.element(
         "Lagrange",
         context.mesh.basix_cell(),
@@ -601,47 +677,41 @@ def solve_brinkman_usfem_block(
     p = ufl.TrialFunction(pressure_space)
     v = ufl.TestFunction(velocity_space)
     q = ufl.TestFunction(pressure_space)
-    coefficient_kwargs: dict[str, Any] = {}
+    gamma_override: _UFLExpression | None = None
+    nu_eff_override: _UFLExpression | None = None
     if scales is not None:
         gamma_scaled, nu_eff_scaled = _brinkman_nondimensional_coefficients(
             context,
             problem,
             scales,
         )
-        coefficient_kwargs = {"gamma": gamma_scaled, "nu_eff": nu_eff_scaled}
+        gamma_override = cast(_UFLExpression, gamma_scaled)
+        nu_eff_override = cast(_UFLExpression, nu_eff_scaled)
     gamma, nu_eff, tau, tau_f = _usfem_stabilization_terms(
         context,
         tau_factor=tau_factor,
         m_t=m_t,
         alpha_edge=alpha_edge,
-        **coefficient_kwargs,
+        gamma=gamma_override,
+        nu_eff=nu_eff_override,
     )
 
-    def residual_velocity_part(w):
+    def residual_velocity_part(w: _UFLExpression) -> _UFLExpression:
         return gamma * w - nu_eff * ufl.div(ufl.grad(w))
 
     a00 = (
-        nu_eff * ufl.inner(ufl.grad(u), ufl.grad(v)) * context.dx
-        + ufl.inner(gamma * u, v) * context.dx
+        nu_eff * ufl.inner(ufl.grad(u), ufl.grad(v)) * dx
+        + ufl.inner(gamma * u, v) * dx
         - tau
         * ufl.inner(
             residual_velocity_part(u),
             residual_velocity_part(v),
         )
-        * context.dx
+        * dx
     )
-    a01 = (
-        -p * ufl.div(v) * context.dx
-        - tau * ufl.inner(ufl.grad(p), residual_velocity_part(v)) * context.dx
-    )
-    a10 = (
-        q * ufl.div(u) * context.dx
-        + tau * ufl.inner(residual_velocity_part(u), ufl.grad(q)) * context.dx
-    )
-    a11 = (
-        tau_f * ufl.jump(p) * ufl.jump(q) * context.dS
-        + tau * ufl.inner(ufl.grad(p), ufl.grad(q)) * context.dx
-    )
+    a01 = -p * ufl.div(v) * dx - tau * ufl.inner(ufl.grad(p), residual_velocity_part(v)) * dx
+    a10 = q * ufl.div(u) * dx + tau * ufl.inner(residual_velocity_part(u), ufl.grad(q)) * dx
+    a11 = tau_f * ufl.jump(p) * ufl.jump(q) * dS + tau * ufl.inner(ufl.grad(p), ufl.grad(q)) * dx
     rhs_velocity = _pressure_boundary_load(
         context,
         v,
@@ -649,7 +719,7 @@ def solve_brinkman_usfem_block(
         pressure_inlet=pressure_inlet if scales is None else 1.0,
         pressure_outlet=pressure_outlet if scales is None else 0.0,
     )
-    rhs_pressure = fem.Constant(context.mesh, 0.0) * q * context.dx
+    rhs_pressure = _ufl_constant(context, 0.0) * q * dx
 
     bcs = _velocity_side_wall_bcs(context, velocity_space, flow_axis=flow_axis)
     bcs.append(_standalone_pressure_gauge_bc(context, pressure_space))

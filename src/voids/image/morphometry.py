@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-from typing import Any
 
 import numpy as np
 
@@ -110,7 +109,7 @@ def _validate_distance_map(distance_map: np.ndarray, *, shape: tuple[int, ...]) 
     return distance
 
 
-def _porespy_local_thickness(*args: Any, **kwargs: Any) -> np.ndarray:
+def _porespy_local_thickness(*args: object, **kwargs: object) -> np.ndarray:
     """Run PoreSpy local thickness with a lazy dependency import."""
 
     import porespy as ps

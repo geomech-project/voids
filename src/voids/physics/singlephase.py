@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 import warnings
 
 import numpy as np
@@ -16,8 +15,17 @@ from voids.graph.connectivity import connected_components, induced_subnetwork
 from voids.linalg.assemble import assemble_pressure_system
 from voids.linalg.bc import apply_dirichlet_rowcol
 from voids.linalg.diagnostics import residual_norm
-from voids.linalg.solve import solve_linear_system
+from voids.linalg.solve import SolverInfo, SolverParameters, solve_linear_system
 from voids.physics.thermo import TabulatedWaterViscosityModel
+
+
+@dataclass(slots=True)
+class _NonlinearState:
+    pore_mu: np.ndarray
+    throat_mu: np.ndarray
+    conductance: np.ndarray
+    residual: np.ndarray
+    jacobian: sparse.csr_matrix
 
 
 @dataclass(slots=True)
@@ -161,7 +169,7 @@ class SinglePhaseOptions:
     nonlinear_max_iterations: int = 25
     nonlinear_pressure_tolerance: float = 1.0e-10
     nonlinear_relaxation: float = 1.0
-    solver_parameters: dict[str, Any] = field(default_factory=dict)
+    solver_parameters: SolverParameters = field(default_factory=dict)
     nonlinear_solver: str = "picard"
     nonlinear_line_search_reduction: float = 0.5
     nonlinear_line_search_max_steps: int = 8
@@ -208,7 +216,7 @@ class SinglePhaseResult:
     pore_viscosity: np.ndarray | None = None
     throat_viscosity: np.ndarray | None = None
     reference_viscosity: float | None = None
-    solver_info: dict[str, Any] = field(default_factory=dict)
+    solver_info: SolverInfo = field(default_factory=dict)
 
 
 def _make_dirichlet_vector(net: Network, bc: PressureBC) -> tuple[np.ndarray, np.ndarray]:
@@ -349,7 +357,7 @@ def _solve_active_linear_system(
     active_values: np.ndarray,
     active_fixed_mask: np.ndarray,
     options: SinglePhaseOptions,
-) -> tuple[np.ndarray, dict[str, Any], Any, np.ndarray]:
+) -> tuple[np.ndarray, SolverInfo, sparse.csr_matrix, np.ndarray]:
     """Assemble and solve the active pressure subsystem for a given conductance field."""
 
     A = assemble_pressure_system(active_net, g_active)
@@ -374,7 +382,7 @@ def _assemble_active_system(
     active_values: np.ndarray,
     active_fixed_mask: np.ndarray,
     options: SinglePhaseOptions,
-) -> tuple[Any, np.ndarray]:
+) -> tuple[sparse.csr_matrix, np.ndarray]:
     """Assemble the Dirichlet-eliminated active pressure system."""
 
     A = assemble_pressure_system(active_net, g_active)
@@ -394,7 +402,7 @@ def _assemble_variable_viscosity_system(
     active_values: np.ndarray,
     active_fixed_mask: np.ndarray,
     options: SinglePhaseOptions,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, Any, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, sparse.csr_matrix, np.ndarray]:
     """Assemble the current pressure-dependent system and associated viscosity fields."""
 
     pore_mu, throat_mu = _evaluate_viscosity_fields(
@@ -553,7 +561,9 @@ def _solve_with_variable_viscosity(
     active_values: np.ndarray,
     active_fixed_mask: np.ndarray,
     options: SinglePhaseOptions,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any], Any, np.ndarray]:
+) -> tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, SolverInfo, sparse.csr_matrix, np.ndarray
+]:
     """Solve the active subsystem with pressure-dependent viscosity."""
 
     ref_mu = fluid.reference_viscosity(pin=bc.pin, pout=bc.pout)
@@ -667,7 +677,9 @@ def _solve_with_variable_viscosity_newton(
     active_values: np.ndarray,
     active_fixed_mask: np.ndarray,
     options: SinglePhaseOptions,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any], Any, np.ndarray]:
+) -> tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, SolverInfo, sparse.csr_matrix, np.ndarray
+]:
     """Solve the active subsystem with damped Newton for pressure-dependent viscosity."""
 
     ref_mu = fluid.reference_viscosity(pin=bc.pin, pout=bc.pout)
@@ -693,15 +705,15 @@ def _solve_with_variable_viscosity_newton(
         options=options,
     )
 
-    state: dict[str, Any] = {
-        "pore_mu": pore_mu0,
-        "throat_mu": throat_mu0,
-        "conductance": g0,
-        "residual": residual0,
-        "jacobian": J0,
-    }
+    state = _NonlinearState(
+        pore_mu=pore_mu0,
+        throat_mu=throat_mu0,
+        conductance=g0,
+        residual=residual0,
+        jacobian=J0,
+    )
 
-    def _refresh_state(pore_pressure: np.ndarray) -> dict[str, Any]:
+    def _refresh_state(pore_pressure: np.ndarray) -> _NonlinearState:
         residual, jacobian, g_active, pore_mu, throat_mu = _nonlinear_residual_and_jacobian(
             active_net,
             pore_pressure,
@@ -711,15 +723,11 @@ def _solve_with_variable_viscosity_newton(
             active_fixed_mask=active_fixed_mask,
             options=options,
         )
-        state.update(
-            {
-                "pore_mu": pore_mu,
-                "throat_mu": throat_mu,
-                "conductance": g_active,
-                "residual": residual,
-                "jacobian": jacobian,
-            }
-        )
+        state.pore_mu = pore_mu
+        state.throat_mu = throat_mu
+        state.conductance = g_active
+        state.residual = residual
+        state.jacobian = jacobian
         return state
 
     p_active = p_initial.copy()
@@ -732,7 +740,7 @@ def _solve_with_variable_viscosity_newton(
     nonlinear_change = float("inf")
     residual_measure = float(np.linalg.norm(residual[free], ord=np.inf)) if np.any(free) else 0.0
     iterations = 0
-    linear_solver_info: dict[str, Any] = {"method": options.solver, "info": 0}
+    linear_solver_info: SolverInfo = {"method": options.solver, "info": 0}
 
     for iterations in range(1, options.nonlinear_max_iterations + 1):
         if np.any(free):
@@ -758,7 +766,7 @@ def _solve_with_variable_viscosity_newton(
             trial_pressure = p_active + alpha * delta
             trial_pressure[active_fixed_mask] = active_values[active_fixed_mask]
             trial_state = _refresh_state(trial_pressure)
-            trial_residual = trial_state["residual"]
+            trial_residual = trial_state.residual
             trial_residual_measure = (
                 float(np.linalg.norm(trial_residual[free], ord=np.inf)) if np.any(free) else 0.0
             )
@@ -771,18 +779,18 @@ def _solve_with_variable_viscosity_newton(
             trial_pressure = p_active + alpha * delta
             trial_pressure[active_fixed_mask] = active_values[active_fixed_mask]
             trial_state = _refresh_state(trial_pressure)
-            trial_residual = trial_state["residual"]
+            trial_residual = trial_state.residual
             trial_residual_measure = (
                 float(np.linalg.norm(trial_residual[free], ord=np.inf)) if np.any(free) else 0.0
             )
 
         p_active = trial_pressure
         state = trial_state
-        residual = state["residual"]
-        jacobian = state["jacobian"]
-        g_active = state["conductance"]
-        pore_mu = state["pore_mu"]
-        throat_mu = state["throat_mu"]
+        residual = state.residual
+        jacobian = state.jacobian
+        g_active = state.conductance
+        pore_mu = state.pore_mu
+        throat_mu = state.throat_mu
         residual_measure = trial_residual_measure
     else:
         warnings.warn(
