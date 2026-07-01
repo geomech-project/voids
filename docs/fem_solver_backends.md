@@ -183,14 +183,66 @@ CUDA device; cuDSS then manages the internal multi-GPU direct factorization.
 This backend is intentionally optional and should be compared against a
 same-map direct reference before using it for scientific claims.
 
+USFEM Brinkman block solves also have an experimental Schurdiag/cuDSS iterative
+preset:
+
+```python
+from voids.fem.singlephase import FEniCSSolverOptions, solve_brinkman_usfem_block
+
+options = FEniCSSolverOptions.usfem_schurdiag_cudss_experimental(
+    dtype="float64",
+    device_ids=(0, 1),
+)
+result = solve_brinkman_usfem_block(problem, options=options)
+```
+
+This preset is specific to `solve_brinkman_usfem_block`. It uses PETSc/DOLFINx
+to assemble the velocity/pressure block forms in one Python process, then solves
+the monolithic system with SciPy GMRES and a lower-Schur preconditioner. The
+velocity block uses PyAMG by default, and the pressure correction uses
+`S_hat = A_pp - A_pu diag(A_uu)^-1 A_up`, factored once with cuDSS and reused
+for every GMRES pressure correction. Use `velocity_solver="exact"` if you want
+a SciPy SuperLU velocity-block solve instead of PyAMG on small comparison
+cases. The preset records GMRES residuals, Schurdiag sizes, cuDSS factor times,
+device ids, and cuDSS memory estimates in result metadata.
+
+The Schurdiag/cuDSS preset is not a replacement for direct references. It is a
+single-process GPU-assisted iterative path for medium and large USFEM maps where
+the pressure Schur approximation is much cheaper to factor with cuDSS than with
+CPU direct solvers. Start with `dtype="float64"`; local high-contrast probes
+showed good permeability and field agreement in double precision, while
+single-precision Schurdiag preconditioning could produce small final GMRES
+residuals but poor pressure-field agreement.
+
+For pressure factors that do not fit in device memory, cuDSS hybrid memory mode
+can be requested:
+
+```python
+large_options = FEniCSSolverOptions.usfem_schurdiag_cudss_experimental(
+    dtype="float64",
+    device_ids=(0, 1),
+    hybrid_mode=True,
+    hybrid_device_memory_limit=20_000_000_000,
+)
+```
+
+Hybrid memory should be treated as a capacity fallback, not a speed setting. On
+the local two-A5000 workstation, a 300^3 synthetic image reduced to a 30^3 map
+exceeded non-hybrid cuDSS device memory during the Schurdiag pressure
+factorization; enabling hybrid memory avoided that immediate allocation failure
+and entered GMRES, but the run was still too slow for a default benchmark row.
+
 cuDSS exposes several numerical controls that can be useful for single
 precision experiments on ill-conditioned maps. `voids` forwards
 `ir_steps`, `use_matching`, `matching_alg`, `pivot_type`,
 `pivot_threshold`, `pivot_epsilon`, `pivot_epsilon_alg`, `reordering_alg`,
-`factorization_alg`, `solve_alg`, `nd_nlevels`, `use_superpanels`, and
-`deterministic_mode` when the installed cuDSS runtime supports them. For
+`factorization_alg`, `solve_alg`, `nd_nlevels`, `host_nthreads`,
+`hybrid_mode`, `hybrid_device_memory_limit`, `hybrid_execute_mode`,
+`use_cuda_register_memory`, `use_superpanels`, and `deterministic_mode` when
+the installed cuDSS runtime supports them. For
 example, a more conservative single-precision USFEM trial can increase
-iterative refinement and perturb very small pivots:
+iterative refinement and perturb very small pivots, but this should be treated
+as a diagnostic run rather than an accepted accuracy setting:
 
 ```python
 cudss_float32_usfem_trial = FEniCSSolverOptions.nvmath_cudss_direct(
@@ -204,14 +256,13 @@ cudss_float32_usfem_trial = FEniCSSolverOptions.nvmath_cudss_direct(
 This is still a trial configuration, not a portable default. On a 300^3
 synthetic image block-averaged to a 30^3 map with porosity floor `1.0e-3`,
 permeability floor `1.0e-20`, and permeability cap `1.0e-8`, this
-single-GPU setting passed the USFEM residual check in repeated local probes
-while retaining a substantial speedup. The same controls did not rescue TPFA
-cuDSS `float32`, which produced near-unit residuals and zero effective
-permeability; TPFA at that contrast should use `float64` or a separately
-validated scaled formulation. Some cuDSS controls are version/backend
-dependent: in the tested nvmath/cuDSS stack, explicit `reordering_alg` values
-`ALG_1`/`ALG_2` and `deterministic_mode=True` raised cuDSS
-`NOT_SUPPORTED`.
+kind of single-precision setting can reduce memory but must be judged by
+same-map field errors, not just by the final linear residual or permeability.
+The same caution applies to TPFA at high contrast; use `float64` or a separately
+validated scaled formulation unless a same-map reference confirms the lower
+precision result. Some cuDSS controls are version/backend dependent: in the
+tested nvmath/cuDSS stack, explicit `reordering_alg` values `ALG_1`/`ALG_2` and
+`deterministic_mode=True` raised cuDSS `NOT_SUPPORTED`.
 
 For USFEM mixed Brinkman systems, the serial SciPy/SuperLU path can sometimes
 reduce fill by disabling diagonal pivoting after the standard COLAMD
@@ -334,11 +385,12 @@ backend.
   runtime installed. It is available for PNM, TPFA, and serial FEM direct
   solves; LBM does not use this sparse direct backend. On multi-GPU
   workstations, start with `device_ids=(0, 1)` or `device_ids="all"` for large
-  double-precision mixed FEM systems that do not fit on one GPU. Keep
-  `dtype="float64"` unless a same-map direct reference and the residual check
-  justify a lower precision. For single precision USFEM experiments, prefer a
-  residual-checked trial such as `ir_steps=20, pivot_epsilon=1.0e-4`; do not
-  disable the residual check to accept a solve.
+  double-precision systems that do not fit comfortably on one GPU. For USFEM
+  Brinkman maps, prefer
+  `FEniCSSolverOptions.usfem_schurdiag_cudss_experimental(dtype="float64",
+  device_ids=(0, 1))` when you want the GPU-assisted iterative Schurdiag path.
+  Keep `dtype="float64"` unless a same-map direct reference, residual check, and
+  pressure/velocity field comparison justify a lower precision.
 - Use Krylov methods with PyAMG when direct factorizations become too expensive,
   but record convergence tolerances and residuals.
 - Use FEM `"petsc"` for PETSc/MPI or heavily configured production runs.
