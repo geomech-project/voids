@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import builtins
+import csv
+import json
+from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 import warnings
@@ -1072,6 +1075,127 @@ def test_benchmark_segmented_volume_with_xlb_uses_defaults_and_records(
     assert record["dp_physical"] == pytest.approx(25.0 / 3.0)
     assert record["xlb_mach_max"] == pytest.approx(0.03)
     assert record["xlb_re_voxel_max"] == pytest.approx(0.2)
+
+
+def test_export_xlb_direct_simulation_artifacts_writes_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Test the notebook-oriented XLB artifact exporter with a fake solver."""
+
+    phases = np.ones((3, 4, 5), dtype=int)
+    captured_axes: list[str] = []
+
+    def _fake_xlb_solver(
+        phases_arg: np.ndarray,
+        *,
+        voxel_size: float,
+        flow_axis: str | None = None,
+        options: xlb_mod.XLBOptions | None = None,
+    ) -> xlb_mod.XLBDirectSimulationResult:
+        axis = str(flow_axis or "x")
+        captured_axes.append(axis)
+        assert np.array_equal(phases_arg, phases)
+        assert voxel_size == pytest.approx(2.0e-6)
+        assert isinstance(options, xlb_mod.XLBOptions)
+        return xlb_mod.XLBDirectSimulationResult(
+            flow_axis=axis,
+            voxel_size=float(voxel_size),
+            image_porosity=1.0,
+            sample_lengths={axis: 3.0},
+            sample_cross_sections={axis: 20.0},
+            lattice_viscosity=0.1,
+            lattice_pressure_inlet=1.0,
+            lattice_pressure_outlet=0.9,
+            lattice_density_inlet=3.0,
+            lattice_density_outlet=2.7,
+            lattice_pressure_drop=0.1,
+            inlet_outlet_buffer_cells=6,
+            omega=1.25,
+            superficial_velocity_lattice=0.2,
+            superficial_velocity_profile_lattice=np.array([0.2, 0.2, 0.2]),
+            velocity_lattice=np.ones((3, *phases.shape), dtype=float),
+            axial_velocity_lattice=np.ones(phases.shape, dtype=float),
+            converged=True,
+            n_steps=10,
+            convergence_metric=1.0e-4,
+            permeability=2.0e-15,
+            backend="jax",
+            backend_version="fake-xlb",
+            formulation="steady_stokes_limit",
+            velocity_set="D3Q19",
+            collision_model="BGK",
+            streaming_scheme="pull",
+            max_speed_lattice=0.02,
+            max_mach_lattice=0.03,
+            reynolds_voxel_max=0.2,
+        )
+
+    def _fake_write_structured_vector_field(
+        vector: np.ndarray,
+        grid: object,
+        path: str | Path,
+        **kwargs: object,
+    ) -> Path:
+        destination = Path(path)
+        destination.write_text("vtu", encoding="utf-8")
+        assert vector.shape == (3, *phases.shape)
+        assert "extra_cell_data" in kwargs
+        return destination
+
+    def _fake_plot_vector_midplanes(
+        vector: np.ndarray,
+        *,
+        title: str,
+        path: str | Path | None = None,
+        **kwargs: object,
+    ) -> object:
+        assert title
+        assert path is not None
+        Path(path).write_text("png", encoding="utf-8")
+        assert vector.shape == (3, *phases.shape)
+        return object()
+
+    monkeypatch.setattr(xlb_mod, "solve_binary_volume_with_xlb", _fake_xlb_solver)
+    monkeypatch.setattr(
+        xlb_mod,
+        "write_structured_vector_field",
+        _fake_write_structured_vector_field,
+    )
+    monkeypatch.setattr(xlb_mod, "plot_vector_midplanes", _fake_plot_vector_midplanes)
+
+    rows = xlb_mod.export_xlb_direct_simulation_artifacts(
+        phases,
+        voxel_size=2.0e-6,
+        flow_axes=("x", "z"),
+        options=xlb_mod.XLBOptions.steady_stokes_defaults(max_steps=10),
+        output_dir=tmp_path,
+        output_prefix="case",
+        sample_name="sample",
+        m2_per_md=1.0e-15,
+    )
+
+    assert captured_axes == ["x", "z"]
+    assert [row["axis"] for row in rows] == ["x", "z"]
+    assert rows[0]["K_mD"] == pytest.approx(2.0)
+
+    directional_path = tmp_path / "case_xlb_lbm_directional.csv"
+    field_outputs_path = tmp_path / "case_xlb_lbm_field_outputs.csv"
+    status_path = tmp_path / "case_xlb_lbm_status.json"
+    assert directional_path.exists()
+    assert field_outputs_path.exists()
+    assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "ok"
+
+    with directional_path.open(newline="", encoding="utf-8") as handle:
+        directional_rows = list(csv.DictReader(handle))
+    with field_outputs_path.open(newline="", encoding="utf-8") as handle:
+        field_rows = list(csv.DictReader(handle))
+
+    assert len(directional_rows) == 2
+    assert len(field_rows) == 4
+    assert {row["kind"] for row in field_rows} == {"paraview_vtu", "midplane_quiver_png"}
+    for field_row in field_rows:
+        assert Path(field_row["path"]).exists()
 
 
 def test_benchmark_segmented_volume_with_xlb_requires_density_for_pressure_mapping(
