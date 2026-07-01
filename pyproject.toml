@@ -92,6 +92,10 @@ solvers = [
   "scikit-umfpack",
   "pyamg>=5.3",
 ]
+gpu = [
+  "nvmath-python>=0.9; sys_platform == 'linux' or sys_platform == 'win32'",
+  "torch-sla[all]; sys_platform == 'linux' or sys_platform == 'win32'",
+]
 [project.urls]
 Homepage = "https://github.com/geomech-project/voids"
 Documentation = "https://geomech-project.github.io/voids/"
