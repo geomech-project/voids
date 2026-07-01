@@ -15,6 +15,7 @@ from voids.image.porosity import (
     load_porosity_map_hdf5,
     permeability_map_from_porosity,
     porosity_map_from_binary,
+    porosity_map_from_binary_target_shape,
     porosity_map_from_grayscale,
     save_permeability_map_hdf5,
     save_porosity_map_hdf5,
@@ -105,6 +106,43 @@ def test_porosity_map_non_strict_trims_partial_cells() -> None:
     assert porosity.shape == (2, 2)
     assert porosity.metadata["fine_shape"] == (5, 4)
     assert porosity.metadata["trimmed_shape"] == (4, 4)
+
+
+def test_porosity_map_from_binary_target_shape_keeps_full_domain() -> None:
+    """Target-shape averaging keeps all fine voxels when bins are nonuniform."""
+
+    void = np.arange(5 * 4).reshape(5, 4) % 3 == 0
+
+    porosity = porosity_map_from_binary_target_shape(
+        void,
+        target_shape=(3, 2),
+        voxel_size=(2.0, 3.0),
+    )
+
+    expected = np.array(
+        [
+            [np.mean(void[0:1, 0:2]), np.mean(void[0:1, 2:4])],
+            [np.mean(void[1:3, 0:2]), np.mean(void[1:3, 2:4])],
+            [np.mean(void[3:5, 0:2]), np.mean(void[3:5, 2:4])],
+        ]
+    )
+    assert porosity.shape == (3, 2)
+    assert porosity.cell_size == (10.0 / 3.0, 6.0)
+    assert np.allclose(porosity.values, expected)
+    assert porosity.metadata["fine_shape"] == (5, 4)
+    assert porosity.metadata["target_shape"] == (3, 2)
+    assert porosity.metadata["bin_edges"] == ((0, 1, 3, 5), (0, 2, 4))
+    assert porosity.metadata["uniform_bin_widths"] is False
+
+
+def test_porosity_map_from_binary_target_shape_rejects_too_many_cells() -> None:
+    """A target map cannot request more cells than fine voxels."""
+
+    with pytest.raises(ValueError, match="must not exceed"):
+        porosity_map_from_binary_target_shape(
+            np.ones((2, 2), dtype=bool),
+            target_shape=(3, 1),
+        )
 
 
 def test_binary_porosity_map_rejects_nonbinary_inputs() -> None:

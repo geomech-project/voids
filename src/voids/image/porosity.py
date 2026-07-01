@@ -140,7 +140,7 @@ def _normalize_nonnegative_scalar(
 def _validate_porosity_values(values: np.ndarray) -> np.ndarray:
     """Return a validated 2D or 3D porosity field."""
 
-    arr = np.asarray(values, dtype=float)
+    arr = np.asarray(values)
     normalize_shape(arr.shape, allowed_ndim=(2, 3))
     if not np.all(np.isfinite(arr)):
         raise ValueError("porosity values must be finite")
@@ -196,6 +196,34 @@ def _block_mean(
     )
     block_axes = tuple(range(1, 2 * ndim, 2))
     return trimmed.reshape(reshape_shape).mean(axis=block_axes), trimmed_shape
+
+
+def _target_shape_mean(
+    values: np.ndarray,
+    *,
+    target_shape: tuple[int, ...],
+) -> tuple[np.ndarray, tuple[tuple[int, ...], ...]]:
+    """Average a fine-grid field into a requested number of coarse cells."""
+
+    arr = np.asarray(values, dtype=float)
+    ndim = arr.ndim
+    if len(target_shape) != ndim:
+        raise ValueError(f"target_shape must have length {ndim}")
+    if any(t > s for t, s in zip(target_shape, arr.shape, strict=True)):
+        raise ValueError("target_shape entries must not exceed the image shape")
+
+    edges = tuple(
+        tuple(int(value) for value in np.linspace(0, size, count + 1, dtype=np.int64))
+        for size, count in zip(arr.shape, target_shape, strict=True)
+    )
+    result = np.empty(target_shape, dtype=float)
+    for coarse_index in np.ndindex(target_shape):
+        slices = tuple(
+            slice(axis_edges[index], axis_edges[index + 1])
+            for index, axis_edges in zip(coarse_index, edges, strict=True)
+        )
+        result[coarse_index] = float(np.mean(arr[slices]))
+    return result, edges
 
 
 def _as_binary_mask(image: np.ndarray) -> np.ndarray:
@@ -718,6 +746,69 @@ def porosity_map_from_binary(
     )
 
 
+def porosity_map_from_binary_target_shape(
+    image: np.ndarray,
+    *,
+    target_shape: Sequence[int],
+    voxel_size: float | Sequence[float] = 1.0,
+    image_is_void: bool = True,
+    origin: Sequence[float] | None = None,
+    units: dict[str, str] | None = None,
+    metadata: JsonObject | None = None,
+) -> PorosityMap:
+    """Compute a local porosity map with a requested cell-count shape.
+
+    Parameters
+    ----------
+    image :
+        Binary 2D or 3D image. By default, ``True`` or ``1`` denotes void.
+    target_shape :
+        Requested porosity-map shape. If an image dimension is not exactly
+        divisible by the requested cell count, adjacent coarse cells may cover
+        fine-voxel slabs whose widths differ by one voxel. The full input image
+        is represented; no trailing voxels are trimmed.
+    voxel_size :
+        Scalar or per-axis fine-image voxel spacing in physical units.
+    image_is_void :
+        If ``False``, nonzero image values are interpreted as solid and are
+        inverted before averaging.
+    origin, units, metadata :
+        Optional physical and provenance metadata.
+
+    Returns
+    -------
+    PorosityMap
+        Cell-average local porosity map with ``shape == target_shape``.
+    """
+
+    void_mask = _as_binary_mask(image)
+    if not image_is_void:
+        void_mask = ~void_mask
+    target = normalize_shape(target_shape, allowed_ndim=(void_mask.ndim,))
+    values, bin_edges = _target_shape_mean(void_mask, target_shape=target)
+    voxel = _normalize_positive_tuple(voxel_size, ndim=void_mask.ndim, name="voxel_size")
+    cell_size = tuple(v * s / t for v, s, t in zip(voxel, void_mask.shape, target, strict=True))
+
+    map_metadata: JsonObject = {
+        "source_kind": "binary_void_fraction_target_shape",
+        "fine_shape": tuple(int(v) for v in void_mask.shape),
+        "target_shape": target,
+        "bin_edges": bin_edges,
+        "image_is_void": bool(image_is_void),
+        "uniform_bin_widths": all(s % t == 0 for s, t in zip(void_mask.shape, target, strict=True)),
+    }
+    if metadata:
+        map_metadata.update(metadata)
+
+    return PorosityMap(
+        values=values,
+        cell_size=cell_size,
+        origin=origin,
+        units=units or {"length": "m"},
+        metadata=map_metadata,
+    )
+
+
 def porosity_map_from_grayscale(
     grayscale: np.ndarray,
     *,
@@ -878,6 +969,7 @@ __all__ = [
     "kozeny_carman_permeability",
     "load_permeability_map_hdf5",
     "porosity_map_from_binary",
+    "porosity_map_from_binary_target_shape",
     "porosity_map_from_grayscale",
     "permeability_map_from_porosity",
     "save_permeability_map_hdf5",
