@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import inspect
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from importlib import import_module
@@ -1474,6 +1475,37 @@ def _set_nest_fieldsplit_is(problem: Any) -> bool:
     return True
 
 
+def _create_dolfinx_linear_problem(
+    petsc: Any,
+    lhs: Any,
+    rhs: Any,
+    *,
+    bcs: list[Any],
+    petsc_options: dict[str, Any] | None,
+    petsc_options_prefix: str,
+    **extra_kwargs: Any,
+) -> Any:
+    """Create a DOLFINx LinearProblem across supported constructor variants."""
+
+    linear_problem = petsc.LinearProblem
+    parameters: Mapping[str, inspect.Parameter]
+    try:
+        parameters = inspect.signature(linear_problem).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+
+    kwargs: dict[str, Any] = {
+        "bcs": bcs,
+        "petsc_options": petsc_options,
+    }
+    if not parameters or "petsc_options_prefix" in parameters:
+        kwargs["petsc_options_prefix"] = petsc_options_prefix
+    for name, value in extra_kwargs.items():
+        if not parameters or name in parameters:
+            kwargs[name] = value
+    return linear_problem(lhs, rhs, **kwargs)
+
+
 def _solve_mixed_problem(
     context: _FEMContext,
     *,
@@ -1488,7 +1520,8 @@ def _solve_mixed_problem(
     start = perf_counter()
     petsc = cast(Any, api.petsc)
     petsc_options_prefix = f"{solver_options.petsc_options_prefix}{prefix_suffix}_"
-    problem = petsc.LinearProblem(
+    problem = _create_dolfinx_linear_problem(
+        petsc,
         form,
         rhs,
         bcs=bcs,
@@ -1536,7 +1569,8 @@ def _solve_block_problem_petsc(
     petsc = cast(Any, api.petsc)
     petsc_options_prefix = f"{solver_options.petsc_options_prefix}{prefix_suffix}_"
     deferred_petsc_options = dict(solver_options.petsc_options) if matrix_kind == "nest" else None
-    problem = petsc.LinearProblem(
+    problem = _create_dolfinx_linear_problem(
+        petsc,
         forms,
         rhs,
         bcs=bcs,
