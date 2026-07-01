@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from time import perf_counter
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 import numpy as np
 from scipy.sparse import bmat, csr_matrix, diags
@@ -12,6 +12,7 @@ from voids.fem.singlephase._common import (
     FEMMapProblem,
     FEMSinglePhaseResult,
     FEniCSSolverOptions,
+    _FEMContext,
     _build_context,
     _brinkman_nondimensional_coefficients,
     _brinkman_nondimensional_scales,
@@ -31,6 +32,32 @@ from voids.fem.singlephase._common import (
     _velocity_side_wall_bcs,
 )
 from voids.linalg.cudss import NvmathCudssFactor
+
+
+class _UFLExpression(Protocol):
+    """Structural type for the symbolic UFL algebra used in local form builders."""
+
+    def __add__(self, other: object, /) -> _UFLExpression: ...
+    def __radd__(self, other: object, /) -> _UFLExpression: ...
+    def __sub__(self, other: object, /) -> _UFLExpression: ...
+    def __rsub__(self, other: object, /) -> _UFLExpression: ...
+    def __mul__(self, other: object, /) -> _UFLExpression: ...
+    def __rmul__(self, other: object, /) -> _UFLExpression: ...
+    def __neg__(self) -> _UFLExpression: ...
+
+
+class _UFLAlgebra(Protocol):
+    """Subset of the UFL module operations needed by the USFEM weak form."""
+
+    def grad(self, expression: _UFLExpression, /) -> _UFLExpression: ...
+    def div(self, expression: _UFLExpression, /) -> _UFLExpression: ...
+    def inner(
+        self,
+        left: _UFLExpression,
+        right: _UFLExpression,
+        /,
+    ) -> _UFLExpression: ...
+    def jump(self, expression: _UFLExpression, /) -> _UFLExpression: ...
 
 
 def _petsc_mat_to_csr(matrix: Any) -> csr_matrix:
@@ -421,28 +448,47 @@ def solve_brinkman_usfem(
             velocity_scale=nondimensional_options.velocity_scale,
         )
 
-    def form_builder(context, u, p, v, q):
-        ufl = context.api.ufl
-        coefficient_kwargs: dict[str, Any] = {}
+    def form_builder(
+        context: _FEMContext,
+        u: _UFLExpression,
+        p: _UFLExpression,
+        v: _UFLExpression,
+        q: _UFLExpression,
+    ) -> _UFLExpression:
+        ufl = cast(_UFLAlgebra, context.api.ufl)
+        dx = cast(_UFLExpression, context.dx)
+        dS = cast(_UFLExpression, context.dS)
+        gamma_override: _UFLExpression | None = None
+        nu_eff_override: _UFLExpression | None = None
         if scales is not None:
-            gamma, nu_eff = _brinkman_nondimensional_coefficients(context, problem, scales)
-            coefficient_kwargs = {"gamma": gamma, "nu_eff": nu_eff}
-        gamma, nu_eff, tau, tau_f = _usfem_stabilization_terms(
+            gamma_raw, nu_eff_raw = _brinkman_nondimensional_coefficients(
+                context,
+                problem,
+                scales,
+            )
+            gamma_override = cast(_UFLExpression, gamma_raw)
+            nu_eff_override = cast(_UFLExpression, nu_eff_raw)
+        gamma_raw, nu_eff_raw, tau_raw, tau_f_raw = _usfem_stabilization_terms(
             context,
             tau_factor=tau_factor,
             m_t=m_t,
             alpha_edge=alpha_edge,
-            **coefficient_kwargs,
+            gamma=gamma_override,
+            nu_eff=nu_eff_override,
         )
+        gamma = cast(_UFLExpression, gamma_raw)
+        nu_eff = cast(_UFLExpression, nu_eff_raw)
+        tau = cast(_UFLExpression, tau_raw)
+        tau_f = cast(_UFLExpression, tau_f_raw)
         residual_u = gamma * u + ufl.grad(p) - nu_eff * ufl.div(ufl.grad(u))
         residual_vq = gamma * v - ufl.grad(q) - nu_eff * ufl.div(ufl.grad(v))
         return (
-            nu_eff * ufl.inner(ufl.grad(u), ufl.grad(v)) * context.dx
-            + ufl.inner(gamma * u, v) * context.dx
-            - p * ufl.div(v) * context.dx
-            + q * ufl.div(u) * context.dx
-            + tau_f * ufl.jump(p) * ufl.jump(q) * context.dS
-            - tau * ufl.inner(residual_u, residual_vq) * context.dx
+            nu_eff * ufl.inner(ufl.grad(u), ufl.grad(v)) * dx
+            + ufl.inner(gamma * u, v) * dx
+            - p * ufl.div(v) * dx
+            + q * ufl.div(u) * dx
+            + tau_f * ufl.jump(p) * ufl.jump(q) * dS
+            - tau * ufl.inner(residual_u, residual_vq) * dx
         )
 
     result = _solve_with_form_builder(
