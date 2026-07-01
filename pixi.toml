@@ -17,6 +17,9 @@ platforms = ["linux-64", "win-64", "osx-arm64"]
 [feature.gpu]
 platforms = ["linux-64-cuda", "win-64-cuda"]
 
+[feature.intel]
+platforms = ["linux-64", "win-64", "linux-64-cuda", "win-64-cuda"]
+
 ##########################################
 ########## Core dependencies #############
 ##########################################
@@ -45,20 +48,8 @@ kaleido = ">=0.2.1"
 meshio = ">=5.3"
 
 ##########################################
-####### Platform dependencies ############
+####### Platform specifics ###############
 ##########################################
-
-[target.linux-64.dependencies]
-mkl = ">=2023"
-
-[target.linux-64-cuda.dependencies]
-mkl = ">=2023"
-
-[target.linux-64.pypi-dependencies]
-pypardiso = ">=0.4"
-
-[target.linux-64-cuda.pypi-dependencies]
-pypardiso = ">=0.4"
 
 [target.linux-64.activation.env]
 UCX_TLS = "tcp,self"
@@ -112,12 +103,19 @@ scikit-umfpack = "*"
 [feature.solvers.pypi-dependencies]
 pyamg = ">=5.3"
 
+[feature.intel.dependencies]
+mkl = ">=2023"
+pypardiso = ">=0.4"
+
 [feature.gpu.dependencies]
 cuda-version = "12.6.*"
 
 [feature.gpu.pypi-dependencies]
 nvmath-python = ">=0.9"
 torch-sla = {version = "*", extras = ["all"]}
+
+[feature.gpu.target.linux-64-cuda.pypi-dependencies]
+jax = {version = ">=0.8,<0.10", extras = ["cuda12"]}
 
 [feature.docs.dependencies]
 ruff = ">=0.6"
@@ -175,7 +173,7 @@ docs-serve = "pixi run -e docs mkdocs serve"
 NO_MKDOCS_2_WARNING = "1"
 
 [environments]
-default = { features = ["core", "dev", "viz", "notebooks", "thermo", "lbm", "fem", "solvers"], solve-group = "default" }
-test = { features = ["core", "dev", "viz", "thermo", "lbm", "fem", "solvers", "test"], solve-group = "default" }
+default = { features = ["core", "dev", "viz", "notebooks", "thermo", "lbm", "fem", "solvers", "intel"], solve-group = "default" }
+test = { features = ["core", "dev", "viz", "thermo", "lbm", "fem", "solvers", "intel", "test"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "docs" }
-gpu = { features = ["core", "dev", "viz", "notebooks", "thermo", "lbm", "fem", "solvers", "gpu", "test"], solve-group = "default" }
+gpu = { features = ["core", "dev", "viz", "notebooks", "thermo", "lbm", "fem", "solvers", "intel", "gpu", "test"], solve-group = "default" }
