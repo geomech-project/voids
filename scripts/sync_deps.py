@@ -16,9 +16,11 @@ PIXI_PATH = REPO_ROOT / "pixi.toml"
 
 TARGET_MARKERS = {
     "linux-64": "sys_platform == 'linux'",
+    "linux-64-cuda": "sys_platform == 'linux'",
     "osx-64": "sys_platform == 'darwin'",
     "osx-arm64": "sys_platform == 'darwin'",
     "win-64": "sys_platform == 'win32'",
+    "win-64-cuda": "sys_platform == 'win32'",
 }
 
 CORE_EXCLUDED_PACKAGE_NAMES = frozenset(
@@ -35,6 +37,7 @@ PYPROJECT_EXCLUDED_FEATURE_NAMES = frozenset({"core", "docs"})
 FEATURE_EXCLUDED_PACKAGE_NAMES = {
     "dev": frozenset({"zlib"}),
     "fem": frozenset({"fenics-dolfinx"}),
+    "gpu": frozenset({"cuda-version"}),
     "solvers": frozenset({"suitesparse", "libumfpack"}),
 }
 PYPI_NAME_OVERRIDES = {
@@ -129,6 +132,24 @@ def _iter_target_requirements(raw_targets: object) -> Iterable[PixiRequirement]:
         yield from _iter_table_requirements(target_data.get("pypi-dependencies"), marker=marker)
 
 
+def _marker_from_platforms(raw_platforms: object) -> str | None:
+    if not isinstance(raw_platforms, list):
+        return None
+
+    markers: list[str] = []
+    for platform in raw_platforms:
+        if not isinstance(platform, str):
+            continue
+        marker = TARGET_MARKERS.get(platform)
+        if marker is None or marker in markers:
+            continue
+        markers.append(marker)
+
+    if not markers:
+        return None
+    return " or ".join(markers)
+
+
 def _iter_project_requirements(pixi_data: dict[str, object]) -> Iterable[PixiRequirement]:
     """Yield package runtime requirements from Pixi's core feature.
 
@@ -153,8 +174,9 @@ def _iter_feature_requirements(
     feature = _feature_data(pixi_data).get(feature_name)
     if not isinstance(feature, dict):
         return
-    yield from _iter_table_requirements(feature.get("dependencies"))
-    yield from _iter_table_requirements(feature.get("pypi-dependencies"))
+    marker = _marker_from_platforms(feature.get("platforms"))
+    yield from _iter_table_requirements(feature.get("dependencies"), marker=marker)
+    yield from _iter_table_requirements(feature.get("pypi-dependencies"), marker=marker)
     yield from _iter_target_requirements(feature.get("target"))
 
 
