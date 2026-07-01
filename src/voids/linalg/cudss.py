@@ -14,6 +14,10 @@ NVMATH_CUDSS_CONTROL_KEYS = {
     "device_ids",
     "dtype",
     "factorization_alg",
+    "host_nthreads",
+    "hybrid_device_memory_limit",
+    "hybrid_execute_mode",
+    "hybrid_mode",
     "ir_steps",
     "matching_alg",
     "nd_nlevels",
@@ -24,6 +28,7 @@ NVMATH_CUDSS_CONTROL_KEYS = {
     "reordering_alg",
     "residual_rtol",
     "solve_alg",
+    "use_cuda_register_memory",
     "use_superpanels",
     "use_matching",
     "value_dtype",
@@ -174,6 +179,22 @@ def resolve_nvmath_cudss_controls(controls: Mapping[str, Any]) -> dict[str, Any]
             if nd_nlevels < 0:
                 raise ValueError("nvmath_cudss nd_nlevels must be non-negative")
             resolved["nd_nlevels"] = nd_nlevels
+        elif normalized_key == "host_nthreads":
+            host_nthreads = int(value)
+            if host_nthreads <= 0:
+                raise ValueError("nvmath_cudss host_nthreads must be positive")
+            resolved["host_nthreads"] = host_nthreads
+        elif normalized_key == "hybrid_device_memory_limit":
+            memory_limit = int(value)
+            if memory_limit <= 0:
+                raise ValueError("nvmath_cudss hybrid_device_memory_limit must be positive")
+            resolved["hybrid_device_memory_limit"] = memory_limit
+        elif normalized_key in {
+            "hybrid_mode",
+            "hybrid_execute_mode",
+            "use_cuda_register_memory",
+        }:
+            resolved[normalized_key] = bool(value)
         elif normalized_key == "use_superpanels":
             resolved["use_superpanels"] = bool(value)
         elif normalized_key == "deterministic_mode":
@@ -205,6 +226,11 @@ def nvmath_cudss_controls_from_arguments(
     pivot_epsilon: float | None = None,
     pivot_epsilon_alg: str | int | None = None,
     nd_nlevels: int | None = None,
+    host_nthreads: int | None = None,
+    hybrid_mode: bool | None = None,
+    hybrid_device_memory_limit: int | None = None,
+    hybrid_execute_mode: bool | None = None,
+    use_cuda_register_memory: bool | None = None,
     use_superpanels: bool | None = None,
     deterministic_mode: bool | None = None,
     check_residual: bool = True,
@@ -266,6 +292,25 @@ def nvmath_cudss_controls_from_arguments(
         Optional non-negative nested-dissection level control
         (``ConfigParam.ND_NLEVELS``) for cuDSS reordering algorithms that support
         it.
+    host_nthreads :
+        Optional positive host-thread count for cuDSS host-side work
+        (``ConfigParam.HOST_NTHREADS``).
+    hybrid_mode :
+        Optional request to enable cuDSS hybrid memory mode
+        (``ConfigParam.HYBRID_MODE``). This must be applied before the analysis
+        phase and can reduce required device memory by using host memory.
+    hybrid_device_memory_limit :
+        Optional positive device-memory limit in bytes
+        (``ConfigParam.HYBRID_DEVICE_MEMORY_LIMIT``). ``voids`` applies this
+        after analysis and before factorization, following cuDSS' phase
+        ordering for manual hybrid-memory control.
+    hybrid_execute_mode :
+        Optional request to enable cuDSS hybrid execute mode
+        (``ConfigParam.HYBRID_EXECUTE_MODE``). This must be applied before the
+        analysis phase and is runtime/backend dependent.
+    use_cuda_register_memory :
+        Optional request to register host memory with CUDA
+        (``ConfigParam.USE_CUDA_REGISTER_MEMORY``) for hybrid-memory execution.
     use_superpanels :
         Optional flag for cuDSS superpanel optimization
         (``ConfigParam.USE_SUPERPANELS``). ``None`` leaves the cuDSS default
@@ -329,6 +374,16 @@ def nvmath_cudss_controls_from_arguments(
         nvmath_cudss_controls["pivot_epsilon_alg"] = pivot_epsilon_alg
     if nd_nlevels is not None:
         nvmath_cudss_controls["nd_nlevels"] = int(nd_nlevels)
+    if host_nthreads is not None:
+        nvmath_cudss_controls["host_nthreads"] = int(host_nthreads)
+    if hybrid_mode is not None:
+        nvmath_cudss_controls["hybrid_mode"] = bool(hybrid_mode)
+    if hybrid_device_memory_limit is not None:
+        nvmath_cudss_controls["hybrid_device_memory_limit"] = int(hybrid_device_memory_limit)
+    if hybrid_execute_mode is not None:
+        nvmath_cudss_controls["hybrid_execute_mode"] = bool(hybrid_execute_mode)
+    if use_cuda_register_memory is not None:
+        nvmath_cudss_controls["use_cuda_register_memory"] = bool(use_cuda_register_memory)
     if use_superpanels is not None:
         nvmath_cudss_controls["use_superpanels"] = bool(use_superpanels)
     if deterministic_mode is not None:
@@ -422,6 +477,435 @@ def _nvmath_cudss_memory_estimates(cudss: Any, handle: Any, data: Any) -> dict[s
     record = estimates.view(np.recarray)
     names = _NVMATH_CUDSS_MEMORY_ESTIMATES_DTYPE.names or ()
     return {name: int(getattr(record, name)) for name in names if name != "reserved"}
+
+
+class NvmathCudssFactor:
+    """Reusable cuDSS sparse factorization for repeated single-RHS solves.
+
+    The direct :func:`solve_nvmath_cudss` helper creates and destroys a cuDSS
+    handle for one linear solve. This class keeps the cuDSS analysis and
+    factorization data alive so iterative methods can reuse the same sparse
+    factor for many right-hand sides. It is intended for internal solver
+    preconditioners and advanced benchmarks; the matrix structure and values are
+    fixed for the lifetime of the object.
+    """
+
+    def __init__(
+        self,
+        matrix: sparse.spmatrix,
+        *,
+        controls: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.torch, self.cudss = require_nvmath_cudss()
+        requested_controls = dict(controls or {})
+        self.resolved_controls = resolve_nvmath_cudss_controls(requested_controls)
+        self.device_ids = nvmath_cudss_device_ids(
+            self.torch,
+            cast(tuple[int, ...] | Literal["all"] | None, self.resolved_controls.get("device_ids")),
+        )
+        self.primary_device = int(self.device_ids[0])
+        self.torch.cuda.set_device(self.primary_device)
+        self.torch_device = self.torch.device(f"cuda:{self.primary_device}")
+        self.torch_dtype = (
+            self.torch.float64
+            if self.resolved_controls["dtype"] == "float64"
+            else self.torch.float32
+        )
+        self.numpy_dtype = (
+            np.float64 if self.resolved_controls["dtype"] == "float64" else np.float32
+        )
+        self.value_type = 1 if self.resolved_controls["dtype"] == "float64" else 0
+        self.rows = 0
+        self.nnz = 0
+        self.analysis_seconds = 0.0
+        self.factorization_seconds = 0.0
+        self.solve_calls = 0
+        self.solve_seconds = 0.0
+        self.memory_estimates: dict[str, int] = {}
+        self.memory_estimates_error = ""
+        self._closed = False
+        self._device_indices_array: np.ndarray | None = None
+        self.handle = None
+        self.matrix_desc = None
+        self.rhs_desc = None
+        self.solution_desc = None
+        self.config = None
+        self.data = None
+
+        csr_matrix = matrix.tocsr()
+        rows, cols = csr_matrix.shape
+        if rows != cols:
+            raise ValueError("NvmathCudssFactor requires a square sparse matrix")
+        int32_max = np.iinfo(np.int32).max
+        if rows > int32_max or cols > int32_max or int(csr_matrix.nnz) > int32_max:
+            raise ValueError("NvmathCudssFactor currently requires 32-bit CSR indices")
+        self.rows = int(rows)
+        self.nnz = int(csr_matrix.nnz)
+
+        self.row_offsets = self.torch.as_tensor(
+            np.ascontiguousarray(csr_matrix.indptr, dtype=np.int32),
+            device=self.torch_device,
+        )
+        self.col_indices = self.torch.as_tensor(
+            np.ascontiguousarray(csr_matrix.indices, dtype=np.int32),
+            device=self.torch_device,
+        )
+        self.values = self.torch.as_tensor(
+            np.ascontiguousarray(csr_matrix.data, dtype=self.numpy_dtype),
+            dtype=self.torch_dtype,
+            device=self.torch_device,
+        )
+        self.rhs_col_major = self.torch.zeros(
+            (1, self.rows),
+            dtype=self.torch_dtype,
+            device=self.torch_device,
+        )
+        self.solution_col_major = self.torch.zeros_like(self.rhs_col_major)
+
+        for device_id in self.device_ids:
+            self.torch.cuda.reset_peak_memory_stats(device_id)
+
+        try:
+            self._create_descriptors()
+            self._apply_controls()
+            self._factorize()
+        except Exception:
+            self.close()
+            raise
+
+    def _create_descriptors(self) -> None:
+        cudss = self.cudss
+        if len(self.device_ids) == 1:
+            self.handle = cudss.create()
+        else:
+            self._device_indices_array = np.asarray(self.device_ids, dtype=np.int32)
+            self.handle = cudss.create_mg(
+                len(self.device_ids),
+                self._device_indices_array.ctypes.data,
+            )
+        cudss.set_stream(
+            self.handle,
+            self.torch.cuda.current_stream(self.primary_device).cuda_stream,
+        )
+        self.matrix_desc = cudss.matrix_create_csr(
+            self.rows,
+            self.rows,
+            self.nnz,
+            self.row_offsets.data_ptr(),
+            0,
+            self.col_indices.data_ptr(),
+            self.values.data_ptr(),
+            10,  # CUDA_R_32I
+            self.value_type,
+            cudss.MatrixType.GENERAL.value,
+            cudss.MatrixViewType.FULL.value,
+            cudss.IndexBase.ZERO.value,
+        )
+        self.rhs_desc = cudss.matrix_create_dn(
+            self.rows,
+            1,
+            self.rows,
+            self.rhs_col_major.data_ptr(),
+            self.value_type,
+            cudss.Layout.COL_MAJOR.value,
+        )
+        self.solution_desc = cudss.matrix_create_dn(
+            self.rows,
+            1,
+            self.rows,
+            self.solution_col_major.data_ptr(),
+            self.value_type,
+            cudss.Layout.COL_MAJOR.value,
+        )
+        self.config = cudss.config_create()
+        self.data = cudss.data_create(self.handle)
+
+    def _apply_controls(self) -> None:
+        cudss = self.cudss
+        controls = self.resolved_controls
+        pivot_type_map = {
+            "col": cudss.PivotType.PIVOT_COL,
+            "row": cudss.PivotType.PIVOT_ROW,
+            "none": cudss.PivotType.PIVOT_NONE,
+        }
+        if len(self.device_ids) > 1:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.DEVICE_COUNT,
+                len(self.device_ids),
+            )
+            _set_nvmath_cudss_config_array(
+                cudss,
+                self.config,
+                cudss.ConfigParam.DEVICE_INDICES,
+                self.device_ids,
+            )
+        if "reordering_alg" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.REORDERING_ALG,
+                int(controls["reordering_alg"]),
+            )
+        if "matching_alg" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.MATCHING_ALG,
+                int(controls["matching_alg"]),
+            )
+        if "factorization_alg" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.FACTORIZATION_ALG,
+                int(controls["factorization_alg"]),
+            )
+        if "solve_alg" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.SOLVE_ALG,
+                int(controls["solve_alg"]),
+            )
+        _set_nvmath_cudss_config_scalar(
+            cudss,
+            self.config,
+            cudss.ConfigParam.IR_N_STEPS,
+            int(controls["ir_steps"]),
+        )
+        _set_nvmath_cudss_config_scalar(
+            cudss,
+            self.config,
+            cudss.ConfigParam.USE_MATCHING,
+            int(bool(controls["use_matching"])),
+        )
+        if "pivot_type" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.PIVOT_TYPE,
+                pivot_type_map[str(controls["pivot_type"])].value,
+            )
+        if "pivot_threshold" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.PIVOT_THRESHOLD,
+                float(controls["pivot_threshold"]),
+            )
+        if "pivot_epsilon" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.PIVOT_EPSILON,
+                float(controls["pivot_epsilon"]),
+            )
+        if "pivot_epsilon_alg" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.PIVOT_EPSILON_ALG,
+                int(controls["pivot_epsilon_alg"]),
+            )
+        if "nd_nlevels" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.ND_NLEVELS,
+                int(controls["nd_nlevels"]),
+            )
+        if "host_nthreads" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.HOST_NTHREADS,
+                int(controls["host_nthreads"]),
+            )
+        if "hybrid_mode" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.HYBRID_MODE,
+                int(bool(controls["hybrid_mode"])),
+            )
+        if "hybrid_execute_mode" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.HYBRID_EXECUTE_MODE,
+                int(bool(controls["hybrid_execute_mode"])),
+            )
+        if "use_cuda_register_memory" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.USE_CUDA_REGISTER_MEMORY,
+                int(bool(controls["use_cuda_register_memory"])),
+            )
+        if "use_superpanels" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.USE_SUPERPANELS,
+                int(bool(controls["use_superpanels"])),
+            )
+        if "deterministic_mode" in controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                self.config,
+                cudss.ConfigParam.DETERMINISTIC_MODE,
+                int(bool(controls["deterministic_mode"])),
+            )
+
+    def _sync_devices(self) -> None:
+        self.torch.cuda.synchronize(self.primary_device)
+        for device_id in self.device_ids[1:]:
+            self.torch.cuda.synchronize(device_id)
+
+    def _execute_phase(self, phase_name: str, phase: int) -> None:
+        try:
+            self.cudss.execute(
+                self.handle,
+                phase,
+                self.config,
+                self.data,
+                self.matrix_desc,
+                self.solution_desc,
+                self.rhs_desc,
+            )
+            self._sync_devices()
+        except Exception as exc:
+            failure_memory_estimates: dict[str, int] = {}
+            try:
+                failure_memory_estimates = _nvmath_cudss_memory_estimates(
+                    self.cudss,
+                    self.handle,
+                    self.data,
+                )
+            except Exception:
+                pass
+            memory_message = (
+                f"; cuDSS memory estimates (bytes): {json_safe_mapping(failure_memory_estimates)}"
+                if failure_memory_estimates
+                else ""
+            )
+            raise RuntimeError(
+                f"NvmathCudssFactor failed during {phase_name} phase on CUDA devices "
+                f"{tuple(self.device_ids)} with dtype={self.resolved_controls['dtype']}: "
+                f"{type(exc).__name__}: {exc}{memory_message}"
+            ) from exc
+
+    def _factorize(self) -> None:
+        start = perf_counter()
+        self._execute_phase("analysis", self.cudss.Phase.ANALYSIS.value)
+        self.analysis_seconds = perf_counter() - start
+        if "hybrid_device_memory_limit" in self.resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                self.cudss,
+                self.config,
+                self.cudss.ConfigParam.HYBRID_DEVICE_MEMORY_LIMIT,
+                int(self.resolved_controls["hybrid_device_memory_limit"]),
+            )
+        start = perf_counter()
+        self._execute_phase("factorization", self.cudss.Phase.FACTORIZATION.value)
+        self.factorization_seconds = perf_counter() - start
+        try:
+            self.memory_estimates = _nvmath_cudss_memory_estimates(
+                self.cudss,
+                self.handle,
+                self.data,
+            )
+        except Exception as exc:  # pragma: no cover - defensive around cuDSS versions
+            self.memory_estimates_error = f"{type(exc).__name__}: {exc}"
+
+    def solve(self, rhs_array: np.ndarray) -> np.ndarray:
+        """Solve the factored sparse system for one right-hand-side vector."""
+
+        if self._closed:
+            raise RuntimeError("NvmathCudssFactor is closed")
+        rhs = np.asarray(rhs_array, dtype=self.numpy_dtype)
+        if rhs.shape != (self.rows,):
+            raise ValueError(f"expected vector with shape {(self.rows,)}, got {rhs.shape}")
+        start = perf_counter()
+        rhs_tensor = self.torch.as_tensor(
+            np.ascontiguousarray(rhs),
+            dtype=self.torch_dtype,
+            device=self.torch_device,
+        )
+        self.rhs_col_major.view(-1).copy_(rhs_tensor)
+        self.solution_col_major.zero_()
+        self._execute_phase("solve", self.cudss.Phase.SOLVE.value)
+        self.solve_seconds += perf_counter() - start
+        self.solve_calls += 1
+        return np.asarray(self.solution_col_major.view(-1).detach().cpu().numpy(), dtype=float)
+
+    def metadata(self) -> dict[str, Any]:
+        """Return diagnostic metadata for the reusable factorization."""
+
+        return {
+            "nvmath_cudss_factor_dtype": str(self.resolved_controls["dtype"]),
+            "nvmath_cudss_factor_device_ids": tuple(self.device_ids),
+            "nvmath_cudss_factor_device_names": tuple(
+                str(self.torch.cuda.get_device_name(device_id)) for device_id in self.device_ids
+            ),
+            "nvmath_cudss_factor_resolved_controls": json_safe_mapping(self.resolved_controls),
+            "nvmath_cudss_factor_analysis_seconds": self.analysis_seconds,
+            "nvmath_cudss_factor_factorization_seconds": self.factorization_seconds,
+            "nvmath_cudss_factor_solve_calls": self.solve_calls,
+            "nvmath_cudss_factor_solve_seconds": self.solve_seconds,
+            "nvmath_cudss_factor_solve_seconds_per_call": (
+                self.solve_seconds / self.solve_calls if self.solve_calls else np.nan
+            ),
+            "nvmath_cudss_factor_max_memory_allocated_bytes": tuple(
+                int(self.torch.cuda.max_memory_allocated(device_id))
+                for device_id in self.device_ids
+            ),
+            "nvmath_cudss_factor_primary_max_memory_allocated_bytes": int(
+                self.torch.cuda.max_memory_allocated(self.primary_device)
+            ),
+            "nvmath_cudss_factor_memory_estimates": json_safe_mapping(self.memory_estimates),
+            "nvmath_cudss_factor_memory_estimates_error": self.memory_estimates_error,
+            "nvmath_cudss_factor_torch_version": str(getattr(self.torch, "__version__", "")),
+            "nvmath_cudss_factor_torch_cuda_version": str(
+                getattr(getattr(self.torch, "version", None), "cuda", "")
+            ),
+        }
+
+    def close(self) -> None:
+        """Release cuDSS descriptors, config, data, and handle."""
+
+        if self._closed:
+            return
+        if self.data is not None:
+            self.cudss.data_destroy(self.handle, self.data)
+            self.data = None
+        if self.config is not None:
+            self.cudss.config_destroy(self.config)
+            self.config = None
+        if self.solution_desc is not None:
+            self.cudss.matrix_destroy(self.solution_desc)
+            self.solution_desc = None
+        if self.rhs_desc is not None:
+            self.cudss.matrix_destroy(self.rhs_desc)
+            self.rhs_desc = None
+        if self.matrix_desc is not None:
+            self.cudss.matrix_destroy(self.matrix_desc)
+            self.matrix_desc = None
+        if self.handle is not None:
+            self.cudss.destroy(self.handle)
+            self.handle = None
+        self._closed = True
+
+    def __enter__(self) -> NvmathCudssFactor:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        self.close()
 
 
 def _nvmath_cudss_relative_residual(
@@ -630,6 +1114,34 @@ def solve_nvmath_cudss(
                 cudss.ConfigParam.ND_NLEVELS,
                 int(resolved_controls["nd_nlevels"]),
             )
+        if "host_nthreads" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.HOST_NTHREADS,
+                int(resolved_controls["host_nthreads"]),
+            )
+        if "hybrid_mode" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.HYBRID_MODE,
+                int(bool(resolved_controls["hybrid_mode"])),
+            )
+        if "hybrid_execute_mode" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.HYBRID_EXECUTE_MODE,
+                int(bool(resolved_controls["hybrid_execute_mode"])),
+            )
+        if "use_cuda_register_memory" in resolved_controls:
+            _set_nvmath_cudss_config_scalar(
+                cudss,
+                config,
+                cudss.ConfigParam.USE_CUDA_REGISTER_MEMORY,
+                int(bool(resolved_controls["use_cuda_register_memory"])),
+            )
         if "use_superpanels" in resolved_controls:
             _set_nvmath_cudss_config_scalar(
                 cudss,
@@ -651,6 +1163,13 @@ def solve_nvmath_cudss(
         ):
             try:
                 cudss.execute(handle, phase, config, data, matrix_desc, solution_desc, rhs_desc)
+                if phase_name == "analysis" and "hybrid_device_memory_limit" in resolved_controls:
+                    _set_nvmath_cudss_config_scalar(
+                        cudss,
+                        config,
+                        cudss.ConfigParam.HYBRID_DEVICE_MEMORY_LIMIT,
+                        int(resolved_controls["hybrid_device_memory_limit"]),
+                    )
             except Exception as exc:
                 failure_memory_estimates: dict[str, int] = {}
                 try:
@@ -737,6 +1256,7 @@ __all__ = [
     "NVMATH_CUDSS_ALGORITHMS",
     "NVMATH_CUDSS_DTYPES",
     "NVMATH_CUDSS_PIVOT_TYPES",
+    "NvmathCudssFactor",
     "json_safe_mapping",
     "normalize_nvmath_cudss_device_ids",
     "nvmath_cudss_controls_from_arguments",
