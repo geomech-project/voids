@@ -113,7 +113,7 @@ output_dir = (
 output_dir.mkdir(parents=True, exist_ok=True)
 output_prefix = (
     "gpu_sparse_solver_comparison_image300_phi025_voxel5um_block10_map30_"
-    "extracted_pnm_cpu_gpu_precision_cudss_all_gpus"
+    "extracted_pnm_cpu_gpu_precision_cudss_single_gpu_hybrid"
 )
 
 run_benchmark = True
@@ -149,7 +149,9 @@ kozeny_constant = 180.0
 permeability_floor = 1.0e-20
 permeability_cap = 1.0e-8
 porosity_floor = 1.0e-3
-gpu_device_ids: int | tuple[int, ...] | str = "all"
+gpu_device_ids: int | tuple[int, ...] | str = 0
+gpu_cudss_host_nthreads = min(8, max(1, os.cpu_count() or 1))
+gpu_cudss_hybrid_device_memory_limit = 20_000_000_000
 cpu_dtypes = ("float64", "float32")
 gpu_dtypes = ("float64", "float32")
 pnm_extraction_backend = "porespy"
@@ -436,6 +438,10 @@ case_metadata = pd.DataFrame(
             "flow_axis": flow_axis,
             "pressure_drop": pressure_inlet - pressure_outlet,
             "gpu_device_ids": gpu_device_ids,
+            "gpu_cudss_host_nthreads": gpu_cudss_host_nthreads,
+            "gpu_cudss_hybrid_device_memory_limit": (
+                gpu_cudss_hybrid_device_memory_limit
+            ),
             "cpu_dtypes": ", ".join(cpu_dtypes),
             "gpu_dtypes": ", ".join(gpu_dtypes),
             "run_fem_serial_cpu_precision": run_fem_serial_cpu_precision,
@@ -451,7 +457,18 @@ print(f"Saved case metadata: {case_metadata_path}")
 
 # %%
 def cudss_parameters(dtype: str) -> dict[str, object]:
-    return {"device_ids": gpu_device_ids, "dtype": dtype}
+    return {
+        "device_ids": gpu_device_ids,
+        "dtype": dtype,
+        "ir_steps": 5,
+        "use_matching": True,
+        "host_nthreads": gpu_cudss_host_nthreads,
+        "threading_lib": "auto",
+        "hybrid_mode": True,
+        "hybrid_device_memory_limit": gpu_cudss_hybrid_device_memory_limit,
+        "use_cuda_register_memory": True,
+        "check_residual": True,
+    }
 
 
 def cpu_solver_parameters(dtype: str) -> dict[str, object]:
@@ -897,6 +914,14 @@ for dtype in gpu_dtypes:
             "options": FEniCSSolverOptions.nvmath_cudss_direct(
                 device_ids=gpu_device_ids,
                 dtype=dtype,  # type: ignore[arg-type]
+                ir_steps=5,
+                use_matching=True,
+                host_nthreads=gpu_cudss_host_nthreads,
+                threading_lib="auto",
+                hybrid_mode=True,
+                hybrid_device_memory_limit=gpu_cudss_hybrid_device_memory_limit,
+                use_cuda_register_memory=True,
+                check_residual=True,
             ),
         }
     )

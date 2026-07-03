@@ -1,22 +1,21 @@
 # %% [markdown]
 # # MWE 41 - DRP-317 Berea map-resistor and FEM micro-continuum comparison
 #
-# This notebook compares DRP-317 Berea permeability estimates on the same
-# scanned `256 x 256 x 256` ROI used by notebook 18:
+# This notebook compares DRP-317 Berea permeability estimates on a scanned
+# `500 x 500 x 500` ROI with a `30^3` coefficient map:
 #
-# - extracted PNM rows from the existing Berea validation outputs
+# - optional extracted PNM rows from notebook 42 when its same-ROI PNM output exists
 # - a 3-D cell-centered TPFA Darcy-Darcy solve on a Kozeny-Carman map
 # - FEniCSx USFEM Darcy-Brinkman micro-continuum solves from `voids.fem`
 # - the experimental Berea reference `Kabs = 121 mD`
 #
-# Direct-image LBM DNS is intentionally not included for this default `256^3`
-# ROI in the CPU notebook run. The feasible DNS comparison is kept in notebook
-# 42 on the smaller same-ROI block-3 case.
+# Direct-image LBM DNS is intentionally not included in this Berea-only CPU
+# notebook. The direct-image same-ROI comparison is kept in notebook 42.
 #
 # Scientific scope and assumptions:
 #
 # - the RAW binary convention is `0 = void/pore`, `1 = solid`
-# - the porosity map is a block average of the binary ROI
+# - the porosity map is a target-shape average of the binary ROI
 # - the permeability map is a Kozeny-Carman closure field, not a direct
 #   pore-scale measurement
 # - Darcy-Brinkman FEM uses both porosity and permeability maps
@@ -29,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +55,7 @@ from voids.image.porosity import (
     load_permeability_map_hdf5,
     load_porosity_map_hdf5,
     permeability_map_from_porosity,
-    porosity_map_from_binary,
+    porosity_map_from_binary_target_shape,
     save_permeability_map_hdf5,
     save_porosity_map_hdf5,
 )
@@ -82,13 +82,10 @@ experimental_kabs_mD = 121.0
 experimental_kabs_rel_error = 0.10
 
 full_shape = (1000, 1000, 1000)
-roi_shape = (256, 256, 256)
-roi_origin = (0, 744, 0)
-
-# `256 / 16 = 16`, so the FEM map has 16^3 cells. This is coarse, but still
-# keeps the 3-D FEM solves practical on a laptop when BLAS/OpenMP threading and
-# direct-solver workspace are controlled.
-map_block_shape = (16, 16, 16)
+roi_shape = (500, 500, 500)
+map_target_shape = (30, 30, 30)
+roi_scan_positions = 5
+roi_porosity_target = "full_image"  # "full_image" or "experimental"
 
 kozeny_constant = 180.0
 solid_permeability_m2 = 1.0e-20
@@ -111,11 +108,35 @@ resistor_solver_parameters: dict[str, Any] = {
 run_fem = True
 fem_porosity_floor = 1.0e-3
 fem_k_floor = 1.0e-20
-fem_solver_backend = "superlu_dist"
-fem_direct_options = FEniCSSolverOptions.direct_lu(fem_solver_backend).petsc_options
+fem_solver_backend = "nvmath_cudss_hybrid_float64"
+fem_cudss_hybrid_device_memory_limit = 20_000_000_000
+fem_options = FEniCSSolverOptions.nvmath_cudss_direct(
+    dtype="float64",
+    device_ids=0,
+    ir_steps=5,
+    use_matching=True,
+    host_nthreads=8,
+    threading_lib="auto",
+    hybrid_mode=True,
+    hybrid_device_memory_limit=fem_cudss_hybrid_device_memory_limit,
+    use_cuda_register_memory=True,
+    check_residual=True,
+)
+fem_solver_options_metadata = {
+    "linear_backend": fem_options.linear_backend,
+    "solver_preset": fem_options.solver_preset,
+    "linear_system_dtype": fem_options.linear_system_dtype,
+    "nvmath_cudss_controls": fem_options.nvmath_cudss_controls,
+}
 
 input_dir = data_path() / "drp-317"
-pnm_directional_path = input_dir / f"{sample_stem}_kabs_directional.csv"
+pnm_directional_path = (
+    project_root()
+    / "notebooks"
+    / "outputs"
+    / "42_mwe_drp317_berea_roi500_map30_same_roi_comparison"
+    / "drp317_berea_roi500_map30_same_roi_pnm_directional.csv"
+)
 
 output_dir = (
     project_root()
@@ -125,7 +146,7 @@ output_dir = (
 )
 output_dir.mkdir(parents=True, exist_ok=True)
 
-output_prefix = "drp317_berea_roi"
+output_prefix = "drp317_berea_roi500_map30"
 
 M2_PER_MD = 9.869233e-16
 
@@ -145,20 +166,60 @@ if actual_voxels != expected_voxels:
         f"but {raw_path.name} stores {actual_voxels:,}."
     )
 
-if any(s % b != 0 for s, b in zip(roi_shape, map_block_shape, strict=True)):
-    raise ValueError(
-        f"roi_shape {roi_shape} must be divisible by map_block_shape {map_block_shape}"
-    )
-
-roi_stop = tuple(o + s for o, s in zip(roi_origin, roi_shape, strict=True))
-if any(o < 0 for o in roi_origin) or any(
-    stop > full for stop, full in zip(roi_stop, full_shape, strict=True)
-):
-    raise ValueError(
-        f"ROI origin {roi_origin} and shape {roi_shape} must stay inside {full_shape}"
-    )
-
 raw_image = np.memmap(raw_path, dtype=np.uint8, mode="r", shape=full_shape, order="C")
+
+
+def raw_to_void(raw: np.ndarray) -> np.ndarray:
+    """Return the DRP-317 Berea phase convention used in notebook 18."""
+
+    return np.asarray(raw == 0, dtype=bool)
+
+
+def candidate_starts(full_edge: int, sub_edge: int, *, count: int) -> list[int]:
+    if sub_edge > full_edge:
+        raise ValueError(f"ROI edge {sub_edge} exceeds full edge {full_edge}")
+    if count <= 1 or sub_edge == full_edge:
+        return [0]
+    max_origin = full_edge - sub_edge
+    return sorted({int(round(value)) for value in np.linspace(0, max_origin, count)})
+
+
+phi_void_is_zero = 1.0 - float(np.mean(raw_image))
+target_porosity = (
+    phi_void_is_zero
+    if roi_porosity_target == "full_image"
+    else 0.01 * experimental_porosity_pct
+)
+
+scan_records: list[dict[str, object]] = []
+starts_by_axis = [
+    candidate_starts(full, sub, count=roi_scan_positions)
+    for full, sub in zip(full_shape, roi_shape, strict=True)
+]
+for origin in product(*starts_by_axis):
+    slices = tuple(
+        slice(start, start + size)
+        for start, size in zip(origin, roi_shape, strict=True)
+    )
+    block_raw = np.asarray(raw_image[slices], dtype=np.uint8)
+    block_porosity = float(raw_to_void(block_raw).mean())
+    scan_records.append(
+        {
+            "origin": tuple(int(value) for value in origin),
+            "porosity_pct": 100.0 * block_porosity,
+            "target_porosity_pct": 100.0 * target_porosity,
+            "abs_porosity_error_pct_points": 100.0
+            * abs(block_porosity - target_porosity),
+        }
+    )
+
+roi_scan = pd.DataFrame(scan_records).sort_values(
+    ["abs_porosity_error_pct_points", "porosity_pct"],
+    kind="stable",
+)
+roi_scan = roi_scan.reset_index(drop=True)
+roi_origin = tuple(int(value) for value in roi_scan.loc[0, "origin"])
+roi_stop = tuple(o + s for o, s in zip(roi_origin, roi_shape, strict=True))
 roi_slices = tuple(slice(o, stop) for o, stop in zip(roi_origin, roi_stop, strict=True))
 roi_raw = np.asarray(raw_image[roi_slices], dtype=np.uint8)
 values, counts = np.unique(roi_raw, return_counts=True)
@@ -166,7 +227,7 @@ unexpected_values = set(values.tolist()) - {0, 1}
 if unexpected_values:
     raise ValueError(f"Expected binary RAW values 0/1; got {sorted(values.tolist())}")
 
-void_roi = np.asarray(roi_raw == 0, dtype=bool)
+void_roi = raw_to_void(roi_raw)
 roi_porosity_pct = 100.0 * float(void_roi.mean())
 
 phase_summary = pd.DataFrame(
@@ -192,13 +253,14 @@ roi_summary = pd.DataFrame(
         },
         {"quantity": "experimental Kabs", "value": experimental_kabs_mD, "units": "mD"},
         {
-            "quantity": "map block shape",
-            "value": str(map_block_shape),
-            "units": "voxels",
+            "quantity": "map target shape",
+            "value": str(map_target_shape),
+            "units": "cells",
         },
     ]
 )
 
+display(roi_scan.head(10))
 display(phase_summary)
 display(roi_summary)
 
@@ -218,7 +280,7 @@ for ax, (title, binary_slice) in zip(axes, binary_slice_specs, strict=True):
     ax.set_ylabel("voxel index")
 fig.colorbar(image, ax=axes.ravel().tolist(), ticks=[0, 1], label="RAW value")
 
-binary_figure_path = output_dir / "drp317_berea_roi_binary_midplanes.png"
+binary_figure_path = output_dir / f"{output_prefix}_binary_midplanes.png"
 fig.savefig(binary_figure_path, dpi=180)
 binary_figure_path
 
@@ -226,18 +288,18 @@ binary_figure_path
 # ## Build porosity and Kozeny-Carman permeability maps
 
 # %%
-porosity_map = porosity_map_from_binary(
+porosity_map = porosity_map_from_binary_target_shape(
     void_roi,
-    block_shape=map_block_shape,
+    target_shape=map_target_shape,
     voxel_size=(voxel_size_m, voxel_size_m, voxel_size_m),
-    strict=True,
     metadata={
-        "case": "drp317_berea_3d_roi",
+        "case": output_prefix,
         "raw_filename": raw_relpath.name,
         "raw_shape": full_shape,
         "raw_order": "C",
         "roi_origin": roi_origin,
         "roi_shape": roi_shape,
+        "map_target_shape": map_target_shape,
         "phase_convention": "0=void_or_pore, 1=solid",
         "experimental_porosity_pct": experimental_porosity_pct,
         "experimental_kabs_mD": experimental_kabs_mD,
@@ -258,8 +320,8 @@ permeability_map = permeability_map_from_porosity(
     },
 )
 
-porosity_h5 = output_dir / "drp317_berea_roi_porosity_map.h5"
-permeability_h5 = output_dir / "drp317_berea_roi_permeability_map.h5"
+porosity_h5 = output_dir / f"{output_prefix}_porosity_map.h5"
+permeability_h5 = output_dir / f"{output_prefix}_permeability_map.h5"
 save_porosity_map_hdf5(porosity_map, porosity_h5)
 save_permeability_map_hdf5(permeability_map, permeability_h5)
 
@@ -331,7 +393,7 @@ for col, (title, porosity_slice, permeability_slice) in enumerate(map_slice_spec
     axes[1, col].set_title(f"{title} log10 K")
     fig.colorbar(im1, ax=axes[1, col], fraction=0.046, pad=0.04)
 
-map_figure_path = output_dir / "drp317_berea_roi_porosity_permeability_midplanes.png"
+map_figure_path = output_dir / f"{output_prefix}_porosity_permeability_midplanes.png"
 fig.savefig(map_figure_path, dpi=180)
 map_figure_path
 
@@ -391,13 +453,13 @@ fem_output_dir = output_dir / "fenicsx_usfem_micro_continuum"
 fem_output_dir.mkdir(parents=True, exist_ok=True)
 fem_directional_path = fem_output_dir / f"{output_prefix}_fenicsx_usfem_directional.csv"
 fem_directional_paths = [fem_directional_path]
-fem_status_path = output_dir / "drp317_berea_roi_fem_status.json"
+fem_status_path = output_dir / f"{output_prefix}_fem_status.json"
 
 fem_status: dict[str, Any] = {
     "requested": bool(run_fem),
     "backend": "voids.fem.singlephase.solve_brinkman_usfem",
     "solver_backend": fem_solver_backend,
-    "direct_options": fem_direct_options,
+    "solver_options": fem_solver_options_metadata,
     "runs": [],
     "status": "not_requested" if not run_fem else "pending",
 }
@@ -410,7 +472,6 @@ if run_fem:
         porosity_floor=fem_porosity_floor,
         permeability_floor=fem_k_floor,
     )
-    fem_options = FEniCSSolverOptions(petsc_options=fem_direct_options)
     fem_rows: list[dict[str, object]] = []
     fem_status["status"] = "ok"
     for axis in flow_axes:
@@ -421,6 +482,7 @@ if run_fem:
             pressure_inlet=pressure_inlet_pa,
             pressure_outlet=pressure_outlet_pa,
             options=fem_options,
+            nondimensional=True,
         )
         wall_seconds = time.perf_counter() - start
         fem_status["runs"].append(
@@ -447,7 +509,9 @@ if run_fem:
                 "K_eq_mD": result.permeability / M2_PER_MD,
                 "solve_seconds": result.solve_seconds,
                 "wall_seconds": wall_seconds,
-                "solver_options_json": json.dumps(fem_direct_options, sort_keys=True),
+                "solver_options_json": json.dumps(
+                    fem_solver_options_metadata, sort_keys=True
+                ),
                 "metadata_json": json.dumps(result.metadata, sort_keys=True),
             }
         )
@@ -504,15 +568,18 @@ if not fem_df.empty:
 if pnm_directional_path.exists():
     pnm_directional = pd.read_csv(pnm_directional_path)
     for row in pnm_directional.to_dict(orient="records"):
+        method = row.get("method", row.get("backend_label", "PNM"))
+        k_m2 = row.get("K_eq_m2", row.get("k_m2", np.nan))
+        k_mD = row.get("K_eq_mD", row.get("k_mD", np.nan))
         comparison_rows.append(
             {
                 "family": "extracted_pnm",
                 "formulation": "pore_network_model",
-                "method": row["backend_label"],
+                "method": method,
                 "solver_backend": "",
                 "axis": row["axis"],
-                "K_m2": float(row["k_m2"]),
-                "K_mD": float(row["k_mD"]),
+                "K_m2": float(k_m2),
+                "K_mD": float(k_mD),
                 "solve_seconds": np.nan,
             }
         )
@@ -590,11 +657,11 @@ ax.set_yscale("log")
 ax.set_xticks(x_positions)
 ax.set_xticklabels([r"$K_x$", r"$K_y$", r"$K_z$"])
 ax.set_ylabel("equivalent permeability [mD]")
-ax.set_title("DRP-317 Berea ROI: PNM, TPFA, and USFEM comparisons")
+ax.set_title("DRP-317 Berea ROI-500 map-30: PNM, TPFA, and USFEM")
 ax.grid(True, axis="y", which="both", alpha=0.25)
 ax.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
 
-comparison_plot_path = output_dir / "drp317_berea_roi_model_comparison.png"
+comparison_plot_path = output_dir / f"{output_prefix}_model_comparison.png"
 fig.savefig(comparison_plot_path, dpi=200)
 comparison_plot_path
 
@@ -622,11 +689,11 @@ ax.set_yscale("log")
 ax.set_xticks(x_positions)
 ax.set_xticklabels([r"$K_x$", r"$K_y$", r"$K_z$"])
 ax.set_ylabel("solve time [s]")
-ax.set_title("DRP-317 Berea ROI solver wall time by axis")
+ax.set_title("DRP-317 Berea ROI-500 map-30 solver wall time by axis")
 ax.grid(True, axis="y", which="both", alpha=0.25)
 ax.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
 
-time_plot_path = output_dir / "drp317_berea_roi_model_solve_time.png"
+time_plot_path = output_dir / f"{output_prefix}_model_solve_time.png"
 fig.savefig(time_plot_path, dpi=200)
 time_plot_path
 
@@ -652,7 +719,7 @@ ax.set_xticks(np.arange(len(axis_order)))
 ax.set_xticklabels([r"$K_x$", r"$K_y$", r"$K_z$"])
 ax.set_yticks(np.arange(len(heatmap_df.index)))
 ax.set_yticklabels(heatmap_df.index)
-ax.set_title("DRP-317 Berea ROI equivalent permeability")
+ax.set_title("DRP-317 Berea ROI-500 map-30 equivalent permeability")
 fig.colorbar(image, ax=ax, label=r"$\log_{10}(K\,[\mathrm{mD}])$")
 
 for row_index, method in enumerate(heatmap_df.index):
@@ -674,7 +741,7 @@ for row_index, method in enumerate(heatmap_df.index):
             fontsize=9,
         )
 
-comparison_heatmap_path = output_dir / "drp317_berea_roi_model_comparison_heatmap.png"
+comparison_heatmap_path = output_dir / f"{output_prefix}_model_comparison_heatmap.png"
 fig.savefig(comparison_heatmap_path, dpi=200)
 comparison_heatmap_path
 
@@ -682,13 +749,15 @@ comparison_heatmap_path
 # ## Save tables
 
 # %%
-roi_summary_path = output_dir / "drp317_berea_roi_summary.csv"
-phase_summary_path = output_dir / "drp317_berea_roi_phase_summary.csv"
-map_summary_path = output_dir / "drp317_berea_roi_map_summary.csv"
-resistor_path = output_dir / "drp317_berea_roi_map_resistor_directional.csv"
-comparison_path = output_dir / "drp317_berea_roi_model_comparison.csv"
-ratio_path = output_dir / "drp317_berea_roi_model_ratios_to_experiment.csv"
+roi_scan_path = output_dir / f"{output_prefix}_scan.csv"
+roi_summary_path = output_dir / f"{output_prefix}_summary.csv"
+phase_summary_path = output_dir / f"{output_prefix}_phase_summary.csv"
+map_summary_path = output_dir / f"{output_prefix}_map_summary.csv"
+resistor_path = output_dir / f"{output_prefix}_map_resistor_directional.csv"
+comparison_path = output_dir / f"{output_prefix}_model_comparison.csv"
+ratio_path = output_dir / f"{output_prefix}_model_ratios_to_experiment.csv"
 
+roi_scan.to_csv(roi_scan_path, index=False)
 roi_summary.to_csv(roi_summary_path, index=False)
 phase_summary.to_csv(phase_summary_path, index=False)
 map_summary.to_csv(map_summary_path, index=False)
@@ -700,6 +769,7 @@ fem_status_path.write_text(json.dumps(fem_status, indent=2), encoding="utf-8")
 saved_paths = [
     porosity_h5,
     permeability_h5,
+    roi_scan_path,
     roi_summary_path,
     phase_summary_path,
     map_summary_path,
@@ -716,7 +786,7 @@ saved_paths = [
 saved_paths.extend(path for path in fem_directional_paths if path.exists())
 
 for axis, result in resistor_results.items():
-    pressure_path = output_dir / f"drp317_berea_roi_map_resistor_pressure_{axis}.npy"
+    pressure_path = output_dir / f"{output_prefix}_map_resistor_pressure_{axis}.npy"
     np.save(pressure_path, result.pressure)
     saved_paths.append(pressure_path)
 
@@ -725,13 +795,13 @@ pd.DataFrame({"saved_path": [str(path) for path in saved_paths]})
 # %% [markdown]
 # ## Interpretation notes
 #
-# - The PoreSpy PNM row is the closest existing extracted-network estimate to
-#   the experimental Berea permeability for this ROI.
+# - PNM rows are included only when notebook 42 has already generated same-ROI
+#   extraction outputs for this `500^3` ROI.
 # - The Darcy-Brinkman FEM row is the micro-continuum comparison because it uses
 #   both `phi` and `K(phi)`. The TPFA finite-volume Darcy-Darcy row is a pure
 #   permeability-coefficient baseline.
-# - The map-based values are sensitive to `map_block_shape`, the Kozeny-Carman
+# - The map-based values are sensitive to `map_target_shape`, the Kozeny-Carman
 #   characteristic length, and the permeability caps. These parameters are
 #   closure assumptions, not measured Berea properties.
-# - Direct-image LBM DNS is left out of this `256^3` ROI run because it is a
-#   much larger CPU target than the `75^3` DNS run in notebook 42.
+# - Direct-image LBM DNS is left out of this Berea-only CPU notebook. Notebook
+#   42 owns the direct-image same-ROI comparison.

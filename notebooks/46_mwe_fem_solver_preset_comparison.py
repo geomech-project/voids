@@ -21,7 +21,7 @@
 # ruff: noqa: E402
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import json
 import os
 import subprocess
@@ -237,9 +237,12 @@ print(
     flush=True,
 )
 
-dolfinx_superlu_dist_available = (
-    importlib.util.find_spec("dolfinx.la.superlu_dist") is not None
-)
+try:
+    importlib.import_module("dolfinx.la.superlu_dist")
+except (AttributeError, ImportError, ModuleNotFoundError):
+    dolfinx_superlu_dist_available = False
+else:
+    dolfinx_superlu_dist_available = True
 display(
     pd.DataFrame(
         [
