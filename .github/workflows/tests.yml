@@ -39,13 +39,15 @@ jobs:
       - name: Install Pixi
         uses: prefix-dev/setup-pixi@v0
         with:
-          environments: test
+          environments: >-
+            test
+            test-intel
 
       - name: Run tests with coverage (Ubuntu only)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          pixi run -e test test-cov-report
+          pixi run -e test-intel test-cov-report
 
       - name: Run tests
         if: runner.os != 'Linux'
