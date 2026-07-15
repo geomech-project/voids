@@ -73,7 +73,11 @@ def _drop_relative_by_row(matrix: csr_matrix, drop_rel: float) -> csr_matrix:
         threshold = float(drop_rel) * float(row_abs.max())
         row_cols = indices[start:end]
         keep[start:end] = (row_abs >= threshold) | (row_cols == row)
-    counts = np.add.reduceat(keep.astype(np.int64), indptr[:-1])
+    counts = np.fromiter(
+        (np.count_nonzero(keep[indptr[row] : indptr[row + 1]]) for row in range(csr.shape[0])),
+        dtype=np.int64,
+        count=csr.shape[0],
+    )
     new_indptr = np.empty_like(indptr)
     new_indptr[0] = 0
     np.cumsum(counts, out=new_indptr[1:])
@@ -263,18 +267,6 @@ def _solve_usfem_schurdiag_cudss(
         pressure_factor.close()
     linear_solve_seconds = perf_counter() - linear_solve_start
     solve_seconds = perf_counter() - start
-    residual = np.asarray(system @ solution_array - rhs_array, dtype=float)
-    relative_residual = float(
-        np.linalg.norm(residual) / max(float(np.linalg.norm(rhs_array)), 1.0e-300)
-    )
-    info = int(info)
-    if info != 0 and error_if_not_converged:
-        raise RuntimeError(
-            "USFEM Schurdiag/cuDSS GMRES did not converge: "
-            f"info={info}, relative_residual={relative_residual:.3e}, "
-            f"iterations={len(residual_history)}"
-        )
-
     velocity, pressure = solution_functions
     if n_u != velocity.x.array.size:
         raise RuntimeError(
@@ -287,6 +279,18 @@ def _solve_usfem_schurdiag_cudss(
             "USFEM Schurdiag/cuDSS returned an incompatible solution vector size "
             f"{solution_array.size}; expected {n_u + n_p}."
         )
+    residual = np.asarray(system @ solution_array - rhs_array, dtype=float)
+    relative_residual = float(
+        np.linalg.norm(residual) / max(float(np.linalg.norm(rhs_array)), 1.0e-300)
+    )
+    info = int(info)
+    if info != 0 and error_if_not_converged:
+        raise RuntimeError(
+            "USFEM Schurdiag/cuDSS GMRES did not converge: "
+            f"info={info}, relative_residual={relative_residual:.3e}, "
+            f"iterations={len(residual_history)}"
+        )
+
     velocity.x.array[:] = solution_array[:n_u].real
     pressure.x.array[:] = solution_array[n_u : n_u + n_p].real
     velocity.x.scatter_forward()
