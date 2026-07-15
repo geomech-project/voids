@@ -44,7 +44,7 @@ governing equations, boundary conditions, map/image assumptions, and solver diag
 
 ## Current Scope
 
-The current `v0.1.x` implementation includes:
+The current implementation includes:
 
 - canonical `Network`, `SampleGeometry`, and `Provenance` data structures
 - import of PoreSpy/OpenPNM-style dictionaries into the canonical model
@@ -82,7 +82,7 @@ Important boundaries:
 - controlled grayscale preprocessing, segmentation helpers, and `snow2`-based extraction helpers are available in `voids.image`
 - synthetic mesh/manufactured examples are controlled validation cases, not realistic rock reconstructions
 
-For a more formal statement of scope and assumptions, see [spec_v0_1.md](spec_v0_1.md).
+For a more formal statement of scope and assumptions, see [spec_v0.md](spec_v0.md).
 
 The rendered documentation is intended to live alongside the repository at
 <https://geomech-project.github.io/voids/>.
