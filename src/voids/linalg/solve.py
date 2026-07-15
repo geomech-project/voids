@@ -269,11 +269,11 @@ def solve_linear_system(
         }
     if method == "nvmath_cudss":
         x, metadata = solve_nvmath_cudss(
-            A,
-            np.ascontiguousarray(np.asarray(b, dtype=float)),
+            A_work,
+            np.ascontiguousarray(b_work),
             controls=parameters,
         )
-        return np.asarray(x, dtype=float), {
+        return np.asarray(x, dtype=dtype), {
             "method": method,
             "backend": "nvmath.bindings.cudss",
             "info": 0,

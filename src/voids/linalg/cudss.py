@@ -1333,11 +1333,11 @@ def solve_nvmath_cudss(
     solution = solution_col_major.t()
     if rhs_is_vector:
         solution = solution.squeeze(1)
-    solution_array = np.asarray(solution.detach().cpu().numpy(), dtype=float)
+    solution_array = np.asarray(solution.detach().cpu().numpy(), dtype=numpy_dtype)
     relative_residual = _nvmath_cudss_relative_residual(
         csr_matrix,
         solution_array,
-        np.asarray(rhs_array, dtype=float),
+        np.asarray(rhs_array, dtype=numpy_dtype),
     )
     if bool(resolved_controls["check_residual"]) and relative_residual > float(
         resolved_controls["residual_rtol"]
