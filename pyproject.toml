@@ -10,7 +10,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "LGPL-2.1-only" }
 authors = [
-  { name = "Diego Volpatto", email = "volpatto@lncc.br" }
+  { name = "Diego Volpatto", email = "volpatto@lncc.br" },
+  { name = "Frederic Valentin", email = "valentin@lncc.br" }
 ]
 keywords = [
   "pore-network-modeling",
@@ -48,8 +49,6 @@ dependencies = [
   "openpnm>=3.6,<3.7",
   "pyvista>=0.43",
   "meshio>=5.3",
-  "mkl>=2023; sys_platform == 'linux'",
-  "pypardiso>=0.4; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]
@@ -90,6 +89,15 @@ thermo = [
 solvers = [
   "scikit-umfpack",
   "pyamg>=5.3",
+]
+gpu = [
+  "nvmath-python>=0.9; sys_platform == 'linux' or sys_platform == 'win32'",
+  "torch-sla[all]; sys_platform == 'linux' or sys_platform == 'win32'",
+  "jax[cuda12]>=0.8,<0.10; sys_platform == 'linux'",
+]
+intel = [
+  "mkl>=2023; sys_platform == 'linux' or sys_platform == 'win32'",
+  "pypardiso>=0.4; sys_platform == 'linux' or sys_platform == 'win32'",
 ]
 [project.urls]
 Homepage = "https://github.com/geomech-project/voids"

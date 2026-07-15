@@ -249,7 +249,7 @@ def plot_scalar_midplanes(
     vmin: float | None = None,
     vmax: float | None = None,
     colorbar_use_offset: bool = True,
-) -> Any:
+) -> object:
     """Plot scalar-field mid-slices and optionally save the figure."""
 
     import matplotlib.pyplot as plt
@@ -294,7 +294,7 @@ def plot_vector_midplanes(
     colorbar_label: str = "velocity magnitude",
     vmin: float | None = None,
     vmax: float | None = None,
-) -> Any:
+) -> object:
     """Plot vector-field magnitude mid-slices with in-plane quiver arrows."""
 
     import matplotlib.pyplot as plt

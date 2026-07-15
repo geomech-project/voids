@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
+from voids._typing import JsonObject
 from voids.core.network import Network
 from voids.core.provenance import Provenance
 from voids.core.sample import SampleGeometry
@@ -288,6 +289,13 @@ def load_pnflow_cnm(
     throat_shape_factor = _pnflow_effective_shape_factor(throat_shape_factor_raw)
     throat_area = throat_radius**2 / (4.0 * throat_shape_factor)
 
+    pnflow_metadata: JsonObject = {
+        "prefix": str(prefix_path),
+        "n_physical_pores": n_physical_pores,
+        "n_boundary_mirror_pores": n_boundary_mirror_pores,
+        "box_lengths": dict(box_lengths),
+        "pnflow_solver_box_compat": pnflow_solver_box_compat,
+    }
     net = Network(
         throat_conns=np.asarray(throat_conns, dtype=np.int64),
         pore_coords=pore_coords_arr,
@@ -343,15 +351,7 @@ def load_pnflow_cnm(
                 constant_values=False,
             ),
         },
-        extra={
-            "pnflow_cnm": {
-                "prefix": str(prefix_path),
-                "n_physical_pores": n_physical_pores,
-                "n_boundary_mirror_pores": n_boundary_mirror_pores,
-                "box_lengths": box_lengths,
-                "pnflow_solver_box_compat": pnflow_solver_box_compat,
-            }
-        },
+        extra={"pnflow_cnm": pnflow_metadata},
     )
     validate_network(net)
     return PnflowCNMImportResult(

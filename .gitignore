@@ -216,6 +216,7 @@ refs/
 .vscode/
 notebooks/**/*.png
 tmp/
+.tmp/
 outputs/
 *.prt
 

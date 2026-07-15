@@ -1,25 +1,26 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import h5py
 import numpy as np
 
+from voids._typing import JsonObject, JsonValue
 from voids.image._utils import normalize_shape
 
 _SCHEMA_VERSION = "voids.porosity_map.v1"
 _PERMEABILITY_SCHEMA_VERSION = "voids.permeability_map.v1"
 
 
-def _json_default(value: Any) -> Any:
+def _json_default(value: object) -> JsonValue:
     """Convert common NumPy metadata values to JSON-compatible values."""
 
     if isinstance(value, np.ndarray):
-        return value.tolist()
+        return cast(JsonValue, value.tolist())
     if isinstance(value, np.integer):
         return int(value)
     if isinstance(value, np.floating):
@@ -29,13 +30,17 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
 
 
-def _write_json_attr(obj: h5py.Group | h5py.File, name: str, value: Any) -> None:
+def _write_json_attr(obj: h5py.Group | h5py.File, name: str, value: JsonValue) -> None:
     """Write JSON metadata into an HDF5 attribute."""
 
     obj.attrs[name] = json.dumps(value, default=_json_default)
 
 
-def _read_json_attr(obj: h5py.Group | h5py.File, name: str, default: Any = None) -> Any:
+def _read_json_attr(
+    obj: h5py.Group | h5py.File,
+    name: str,
+    default: JsonValue = None,
+) -> JsonValue:
     """Read JSON metadata from an HDF5 attribute."""
 
     if name not in obj.attrs:
@@ -43,7 +48,38 @@ def _read_json_attr(obj: h5py.Group | h5py.File, name: str, default: Any = None)
     raw = obj.attrs[name]
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8")
-    return json.loads(raw)
+    return cast(JsonValue, json.loads(raw))
+
+
+def _json_object(value: JsonValue) -> JsonObject:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _float_value(value: JsonValue) -> float:
+    if isinstance(value, (int, float, str)):
+        return float(value)
+    raise TypeError(f"Expected numeric metadata value, got {type(value).__name__}")
+
+
+def _metadata_float_sequence(value: JsonValue) -> tuple[float, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(_float_value(item) for item in value)
+    return None
+
+
+def _metadata_cell_size(value: JsonValue, default: float) -> float | tuple[float, ...]:
+    if isinstance(value, (int, float, str)):
+        return float(value)
+    sequence = _metadata_float_sequence(value)
+    return default if sequence is None else sequence
+
+
+def _json_cell_size(value: float | Sequence[float]) -> float | tuple[float, ...]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(float(item) for item in value)
+    return float(value)
 
 
 def _normalize_positive_tuple(
@@ -104,7 +140,7 @@ def _normalize_nonnegative_scalar(
 def _validate_porosity_values(values: np.ndarray) -> np.ndarray:
     """Return a validated 2D or 3D porosity field."""
 
-    arr = np.asarray(values, dtype=float)
+    arr = np.asarray(values)
     normalize_shape(arr.shape, allowed_ndim=(2, 3))
     if not np.all(np.isfinite(arr)):
         raise ValueError("porosity values must be finite")
@@ -162,6 +198,34 @@ def _block_mean(
     return trimmed.reshape(reshape_shape).mean(axis=block_axes), trimmed_shape
 
 
+def _target_shape_mean(
+    values: np.ndarray,
+    *,
+    target_shape: tuple[int, ...],
+) -> tuple[np.ndarray, tuple[tuple[int, ...], ...]]:
+    """Average a fine-grid field into a requested number of coarse cells."""
+
+    arr = np.asarray(values, dtype=float)
+    ndim = arr.ndim
+    if len(target_shape) != ndim:
+        raise ValueError(f"target_shape must have length {ndim}")
+    if any(t > s for t, s in zip(target_shape, arr.shape, strict=True)):
+        raise ValueError("target_shape entries must not exceed the image shape")
+
+    edges = tuple(
+        tuple(int(value) for value in np.linspace(0, size, count + 1, dtype=np.int64))
+        for size, count in zip(arr.shape, target_shape, strict=True)
+    )
+    result = np.empty(target_shape, dtype=float)
+    for coarse_index in np.ndindex(target_shape):
+        slices = tuple(
+            slice(axis_edges[index], axis_edges[index + 1])
+            for index, axis_edges in zip(coarse_index, edges, strict=True)
+        )
+        result[coarse_index] = float(np.mean(arr[slices]))
+    return result, edges
+
+
 def _as_binary_mask(image: np.ndarray) -> np.ndarray:
     """Validate a segmented image and return a boolean mask."""
 
@@ -199,7 +263,7 @@ class PorosityMap:
     cell_size: float | Sequence[float] = 1.0
     origin: Sequence[float] | None = None
     units: dict[str, str] = field(default_factory=lambda: {"length": "m"})
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: JsonObject = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Normalize and validate porosity-map fields."""
@@ -251,28 +315,28 @@ class PorosityMap:
 
         return float(np.sum(self.values) * self.cell_volume)
 
-    def to_metadata(self) -> dict[str, Any]:
+    def to_metadata(self) -> JsonObject:
         """Serialize map metadata without the porosity array."""
 
         return {
             "schema_version": _SCHEMA_VERSION,
             "shape": self.shape,
-            "cell_size": self.cell_size,
-            "origin": self.origin,
-            "units": self.units,
+            "cell_size": _json_cell_size(self.cell_size),
+            "origin": _metadata_float_sequence(self.origin),
+            "units": dict(self.units),
             "metadata": self.metadata,
         }
 
     @classmethod
-    def from_metadata(cls, values: np.ndarray, metadata: dict[str, Any]) -> "PorosityMap":
+    def from_metadata(cls, values: np.ndarray, metadata: JsonObject) -> "PorosityMap":
         """Reconstruct a porosity map from values and serialized metadata."""
 
         return cls(
             values=values,
-            cell_size=metadata.get("cell_size", 1.0),
-            origin=metadata.get("origin"),
-            units={str(k): str(v) for k, v in (metadata.get("units") or {}).items()},
-            metadata=dict(metadata.get("metadata") or {}),
+            cell_size=_metadata_cell_size(metadata.get("cell_size"), 1.0),
+            origin=_metadata_float_sequence(metadata.get("origin")),
+            units={str(k): str(v) for k, v in _json_object(metadata.get("units")).items()},
+            metadata=_json_object(metadata.get("metadata")),
         )
 
 
@@ -299,7 +363,7 @@ class PermeabilityMap:
     cell_size: float | Sequence[float] = 1.0
     origin: Sequence[float] | None = None
     units: dict[str, str] = field(default_factory=lambda: {"length": "m", "permeability": "m^2"})
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: JsonObject = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Normalize and validate permeability-map fields."""
@@ -343,28 +407,28 @@ class PermeabilityMap:
         with np.errstate(divide="ignore", invalid="ignore"):
             return np.asarray(np.reciprocal(self.values), dtype=float)
 
-    def to_metadata(self) -> dict[str, Any]:
+    def to_metadata(self) -> JsonObject:
         """Serialize map metadata without the permeability array."""
 
         return {
             "schema_version": _PERMEABILITY_SCHEMA_VERSION,
             "shape": self.shape,
-            "cell_size": self.cell_size,
-            "origin": self.origin,
-            "units": self.units,
+            "cell_size": _json_cell_size(self.cell_size),
+            "origin": _metadata_float_sequence(self.origin),
+            "units": dict(self.units),
             "metadata": self.metadata,
         }
 
     @classmethod
-    def from_metadata(cls, values: np.ndarray, metadata: dict[str, Any]) -> "PermeabilityMap":
+    def from_metadata(cls, values: np.ndarray, metadata: JsonObject) -> "PermeabilityMap":
         """Reconstruct a permeability map from values and serialized metadata."""
 
         return cls(
             values=values,
-            cell_size=metadata.get("cell_size", 1.0),
-            origin=metadata.get("origin"),
-            units={str(k): str(v) for k, v in (metadata.get("units") or {}).items()},
-            metadata=dict(metadata.get("metadata") or {}),
+            cell_size=_metadata_cell_size(metadata.get("cell_size"), 1.0),
+            origin=_metadata_float_sequence(metadata.get("origin")),
+            units={str(k): str(v) for k, v in _json_object(metadata.get("units")).items()},
+            metadata=_json_object(metadata.get("metadata")),
         )
 
 
@@ -567,7 +631,7 @@ def permeability_map_from_porosity(
     solid_permeability: float = 0.0,
     free_flow_permeability: float = np.inf,
     max_permeability: float | None = None,
-    metadata: dict[str, Any] | None = None,
+    metadata: JsonObject | None = None,
 ) -> PermeabilityMap:
     """Generate a Kozeny-Carman permeability map from a porosity map.
 
@@ -596,7 +660,7 @@ def permeability_map_from_porosity(
         max_permeability=max_permeability,
     )
     length_unit = porosity_map.units.get("length", "m")
-    map_metadata: dict[str, Any] = {
+    map_metadata: JsonObject = {
         "source_kind": "kozeny_carman_permeability",
         "porosity_source_metadata": porosity_map.metadata,
         "characteristic_length": float(characteristic_length),
@@ -626,7 +690,7 @@ def porosity_map_from_binary(
     strict: bool = True,
     origin: Sequence[float] | None = None,
     units: dict[str, str] | None = None,
-    metadata: dict[str, Any] | None = None,
+    metadata: JsonObject | None = None,
 ) -> PorosityMap:
     """Compute a local porosity map from a segmented binary image.
 
@@ -662,13 +726,76 @@ def porosity_map_from_binary(
     voxel = _normalize_positive_tuple(voxel_size, ndim=void_mask.ndim, name="voxel_size")
     cell_size = tuple(v * b for v, b in zip(voxel, block, strict=True))
 
-    map_metadata: dict[str, Any] = {
+    map_metadata: JsonObject = {
         "source_kind": "binary_void_fraction",
         "fine_shape": tuple(int(v) for v in void_mask.shape),
         "trimmed_shape": trimmed_shape,
         "block_shape": block,
         "image_is_void": bool(image_is_void),
         "strict": bool(strict),
+    }
+    if metadata:
+        map_metadata.update(metadata)
+
+    return PorosityMap(
+        values=values,
+        cell_size=cell_size,
+        origin=origin,
+        units=units or {"length": "m"},
+        metadata=map_metadata,
+    )
+
+
+def porosity_map_from_binary_target_shape(
+    image: np.ndarray,
+    *,
+    target_shape: Sequence[int],
+    voxel_size: float | Sequence[float] = 1.0,
+    image_is_void: bool = True,
+    origin: Sequence[float] | None = None,
+    units: dict[str, str] | None = None,
+    metadata: JsonObject | None = None,
+) -> PorosityMap:
+    """Compute a local porosity map with a requested cell-count shape.
+
+    Parameters
+    ----------
+    image :
+        Binary 2D or 3D image. By default, ``True`` or ``1`` denotes void.
+    target_shape :
+        Requested porosity-map shape. If an image dimension is not exactly
+        divisible by the requested cell count, adjacent coarse cells may cover
+        fine-voxel slabs whose widths differ by one voxel. The full input image
+        is represented; no trailing voxels are trimmed.
+    voxel_size :
+        Scalar or per-axis fine-image voxel spacing in physical units.
+    image_is_void :
+        If ``False``, nonzero image values are interpreted as solid and are
+        inverted before averaging.
+    origin, units, metadata :
+        Optional physical and provenance metadata.
+
+    Returns
+    -------
+    PorosityMap
+        Cell-average local porosity map with ``shape == target_shape``.
+    """
+
+    void_mask = _as_binary_mask(image)
+    if not image_is_void:
+        void_mask = ~void_mask
+    target = normalize_shape(target_shape, allowed_ndim=(void_mask.ndim,))
+    values, bin_edges = _target_shape_mean(void_mask, target_shape=target)
+    voxel = _normalize_positive_tuple(voxel_size, ndim=void_mask.ndim, name="voxel_size")
+    cell_size = tuple(v * s / t for v, s, t in zip(voxel, void_mask.shape, target, strict=True))
+
+    map_metadata: JsonObject = {
+        "source_kind": "binary_void_fraction_target_shape",
+        "fine_shape": tuple(int(v) for v in void_mask.shape),
+        "target_shape": target,
+        "bin_edges": bin_edges,
+        "image_is_void": bool(image_is_void),
+        "uniform_bin_widths": all(s % t == 0 for s, t in zip(void_mask.shape, target, strict=True)),
     }
     if metadata:
         map_metadata.update(metadata)
@@ -694,7 +821,7 @@ def porosity_map_from_grayscale(
     strict: bool = True,
     origin: Sequence[float] | None = None,
     units: dict[str, str] | None = None,
-    metadata: dict[str, Any] | None = None,
+    metadata: JsonObject | None = None,
 ) -> PorosityMap:
     """Compute a local porosity map from a calibrated grayscale image.
 
@@ -734,7 +861,7 @@ def porosity_map_from_grayscale(
     voxel = _normalize_positive_tuple(voxel_size, ndim=voxel_porosity.ndim, name="voxel_size")
     cell_size = tuple(v * b for v, b in zip(voxel, block, strict=True))
 
-    map_metadata: dict[str, Any] = {
+    map_metadata: JsonObject = {
         "source_kind": "grayscale_linear_calibration",
         "fine_shape": tuple(int(v) for v in voxel_porosity.shape),
         "trimmed_shape": trimmed_shape,
@@ -792,7 +919,7 @@ def load_porosity_map_hdf5(path: str | Path) -> PorosityMap:
             raise ValueError(f"Unsupported porosity-map schema version {schema_version!r}")
         values = f["porosity"][()]
         metadata = _read_json_attr(f, "metadata", {})
-    return PorosityMap.from_metadata(values, metadata)
+    return PorosityMap.from_metadata(values, _json_object(metadata))
 
 
 def save_permeability_map_hdf5(permeability_map: PermeabilityMap, path: str | Path) -> None:
@@ -831,7 +958,7 @@ def load_permeability_map_hdf5(path: str | Path) -> PermeabilityMap:
             raise ValueError(f"Unsupported permeability-map schema version {schema_version!r}")
         values = f["permeability"][()]
         metadata = _read_json_attr(f, "metadata", {})
-    return PermeabilityMap.from_metadata(values, metadata)
+    return PermeabilityMap.from_metadata(values, _json_object(metadata))
 
 
 __all__ = [
@@ -842,6 +969,7 @@ __all__ = [
     "kozeny_carman_permeability",
     "load_permeability_map_hdf5",
     "porosity_map_from_binary",
+    "porosity_map_from_binary_target_shape",
     "porosity_map_from_grayscale",
     "permeability_map_from_porosity",
     "save_permeability_map_hdf5",

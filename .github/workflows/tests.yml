@@ -18,17 +18,23 @@ concurrency:
 
 jobs:
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, ${{ matrix.environment }})
     runs-on: ${{ matrix.os }}
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      PYTHONFAULTHANDLER: "1"
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+        include:
+          # Intel tests on Linux and Windows, regular tests on macOS
+          # since Intel is not supported on macOS
+          - os: ubuntu-latest
+            environment: test-intel
+          - os: macos-latest
+            environment: test
+          - os: windows-latest
+            environment: test-intel
 
     steps:
       - name: Check out repository
@@ -39,17 +45,17 @@ jobs:
       - name: Install Pixi
         uses: prefix-dev/setup-pixi@v0
         with:
-          environments: test
+          environments: ${{ matrix.environment }}
 
       - name: Run tests with coverage (Ubuntu only)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          pixi run -e test test-cov-report
+          pixi run -e "${{ matrix.environment }}" test-cov-report
 
       - name: Run tests
         if: runner.os != 'Linux'
-        run: pixi run -e test test-cov
+        run: pixi run -e "${{ matrix.environment }}" test-cov
 
       - name: Upload coverage artifact
         if: runner.os == 'Linux'

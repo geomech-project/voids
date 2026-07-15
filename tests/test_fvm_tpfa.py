@@ -5,6 +5,7 @@ import pytest
 from scipy import sparse
 from scipy.sparse.linalg import MatrixRankWarning
 
+import voids.linalg.solve as solve_mod
 import voids.fvm.singlephase.tpfa as tpfa_mod
 from voids.fvm.singlephase import (
     solve_tpfa,
@@ -45,6 +46,103 @@ def test_tpfa_constant_3d_array_accepts_sequence_cell_size() -> None:
 
     assert result.permeability == pytest.approx(1.7)
     assert result.mass_balance_error < 1.0e-12
+
+
+def test_tpfa_vectorized_assembly_matches_reference_stencil() -> None:
+    values = np.array(
+        [
+            [[1.0, 2.0], [0.5, 0.0]],
+            [[4.0, 3.0], [2.5, 1.5]],
+        ],
+        dtype=float,
+    )
+    cell_size = (0.2, 0.3, 0.4)
+    flow_axis = 2
+    viscosity = 1.7
+    pressure_inlet = 5.0
+    pressure_outlet = 1.0
+    shape = values.shape
+    n_cells = int(values.size)
+    rows: list[int] = []
+    cols: list[int] = []
+    data: list[float] = []
+    rhs = np.zeros(n_cells, dtype=float)
+    diagonal = np.zeros(n_cells, dtype=float)
+
+    def flat(index: tuple[int, ...]) -> int:
+        return int(np.ravel_multi_index(index, shape, order="C"))
+
+    for index in np.ndindex(shape):
+        row = flat(index)
+        k_cell = float(values[index])
+        if index[flow_axis] == 0 and k_cell > 0.0:
+            trans = (
+                k_cell
+                * tpfa_mod._face_area(cell_size, flow_axis)
+                / (viscosity * (cell_size[flow_axis] / 2.0))
+            )
+            diagonal[row] += trans
+            rhs[row] += trans * pressure_inlet
+        if index[flow_axis] == shape[flow_axis] - 1 and k_cell > 0.0:
+            trans = (
+                k_cell
+                * tpfa_mod._face_area(cell_size, flow_axis)
+                / (viscosity * (cell_size[flow_axis] / 2.0))
+            )
+            diagonal[row] += trans
+            rhs[row] += trans * pressure_outlet
+
+        for direction in range(values.ndim):
+            neighbor_index = list(index)
+            neighbor_index[direction] += 1
+            if neighbor_index[direction] >= shape[direction]:
+                continue
+            neighbor = tuple(neighbor_index)
+            neighbor_row = flat(neighbor)
+            k_face = tpfa_mod._harmonic_face_permeability(k_cell, float(values[neighbor]))
+            if k_face <= 0.0:
+                continue
+            trans = (
+                k_face
+                * tpfa_mod._face_area(cell_size, direction)
+                / (viscosity * cell_size[direction])
+            )
+            diagonal[row] += trans
+            diagonal[neighbor_row] += trans
+            rows.extend((row, neighbor_row))
+            cols.extend((neighbor_row, row))
+            data.extend((-trans, -trans))
+
+    rows.extend(range(n_cells))
+    cols.extend(range(n_cells))
+    data.extend(diagonal.tolist())
+    expected_matrix = sparse.csr_matrix((data, (rows, cols)), shape=(n_cells, n_cells))
+
+    matrix, assembled_rhs = tpfa_mod._assemble_tpfa_system(
+        values,
+        cell_size=cell_size,
+        flow_axis_index=flow_axis,
+        viscosity=viscosity,
+        pressure_inlet=pressure_inlet,
+        pressure_outlet=pressure_outlet,
+    )
+
+    assert np.allclose(matrix.toarray(), expected_matrix.toarray())
+    assert np.allclose(assembled_rhs, rhs)
+
+
+def test_tpfa_vectorized_assembly_handles_zero_transmissibility_directions() -> None:
+    matrix, rhs = tpfa_mod._assemble_tpfa_system(
+        np.zeros((2, 2, 2), dtype=float),
+        cell_size=(1.0, 1.0, 1.0),
+        flow_axis_index=0,
+        viscosity=1.0,
+        pressure_inlet=1.0,
+        pressure_outlet=0.0,
+    )
+
+    assert np.allclose(matrix.toarray(), 0.0)
+    assert np.allclose(rhs, 0.0)
 
 
 def test_tpfa_array_accepts_scalar_cell_size() -> None:
@@ -110,6 +208,39 @@ def test_tpfa_umfpack_solver_matches_direct() -> None:
     assert umfpack.flow_rate == pytest.approx(direct.flow_rate, rel=1.0e-12)
     assert umfpack.solver_method == "umfpack"
     assert umfpack.solver_info["backend"] == "scikits.umfpack.spsolve"
+
+
+def test_tpfa_nvmath_cudss_solver_matches_direct_with_fake_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TPFA can reuse the shared CUDA direct sparse backend."""
+
+    def fake_solve_nvmath_cudss(
+        matrix: sparse.spmatrix,
+        rhs: np.ndarray,
+        *,
+        controls: object = None,
+    ) -> tuple[np.ndarray, dict[str, object]]:
+        return np.asarray(sparse.linalg.spsolve(matrix, rhs), dtype=float), {
+            "serial_sparse_nvmath_cudss_relative_residual": 0.0,
+        }
+
+    monkeypatch.setattr(solve_mod, "solve_nvmath_cudss", fake_solve_nvmath_cudss)
+
+    permeability = np.full((4, 4), 3.1)
+    direct = solve_tpfa(permeability, flow_axis="y", solver_method="direct")
+    cudss = solve_tpfa(
+        permeability,
+        flow_axis="y",
+        solver_method="nvmath_cudss",
+        solver_parameters={"device_ids": (0,), "dtype": "float64"},
+    )
+
+    assert np.allclose(cudss.pressure, direct.pressure)
+    assert cudss.permeability == pytest.approx(direct.permeability)
+    assert cudss.flow_rate == pytest.approx(direct.flow_rate)
+    assert cudss.solver_method == "nvmath_cudss"
+    assert cudss.solver_info["backend"] == "nvmath.bindings.cudss"
 
 
 def test_tpfa_rejects_nonpositive_pressure_drop() -> None:

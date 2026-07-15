@@ -216,6 +216,76 @@ package.
     factorization backend and these thread settings with any reported FEM
     permeability values.
 
+### Brinkman nondimensional form
+
+The Taylor-Hood Brinkman and stabilized USFEM Brinkman backends can assemble an
+equivalent nondimensional linear system by passing
+`nondimensional=True`, or by passing
+`BrinkmanNondimensionalization(...)` to choose one of the implemented velocity
+scales.
+This option changes the internal algebraic scaling, not the reported physical
+permeability.
+
+Let \(L\) be the sample length along the solved flow axis, and let
+\(\Delta P=p_{\mathrm{in}}-p_{\mathrm{out}}\). The implementation solves for
+
+\[
+\mathbf{u}^*=\frac{\mathbf{u}}{U},
+\qquad
+p^*=\frac{p}{\Delta P}.
+\]
+
+The default is the viscous-free scale from the nondimensional Brinkman
+derivation,
+
+\[
+U=\frac{\Delta P L}{\mu}.
+\]
+
+With physical mesh coordinates, this is assembled by row-scaling the Brinkman
+momentum form with \(U/\Delta P=L/\mu\), giving coefficients
+
+\[
+\widehat{\nu}_{\mathrm{eff}}=\frac{L}{\max(\phi,\phi_{\min})},
+\qquad
+\widehat{\gamma}=\frac{L}{\max(K,K_{\min})}.
+\]
+
+For a constant-permeability map, `BrinkmanNondimensionalization(
+velocity_scale="unit_darcy")` uses the coefficient-unit porous-medium scale
+
+\[
+U=\frac{\Delta P K}{\mu L}.
+\]
+
+In unit-coordinate notation this gives the familiar form
+
+\[
+-\nabla^*p^*+\frac{\mathrm{Da}}{\epsilon}\nabla^{*2}\mathbf{u}^*
+-\mathbf{u}^*=\mathbf{0},
+\qquad
+\mathrm{Da}=\frac{K}{L^2}.
+\]
+
+This unit-Darcy scale is intentionally rejected for permeability maps that are
+not globally constant across elements. In `voids`, \(K(\mathbf{x})\) is sampled
+as a DG0 field, so it is constant inside each element, but it can jump across
+element facets. The local derivation is therefore valid inside each element,
+but \(U_T=\Delta P K_T/(\mu L)\) would be discontinuous across facets. With the
+current continuous Taylor-Hood and USFEM velocity spaces, a continuous
+\(\mathbf{u}^*\) would recover a discontinuous physical velocity
+\(\mathbf{u}=U_T\mathbf{u}^*\), while a continuous physical velocity would imply
+a discontinuous \(\mathbf{u}^*\). A faithful heterogeneous unit-Darcy
+nondimensional form would need a discontinuous or weighted velocity
+representation and explicit interface treatment, which is not the current
+Brinkman formulation.
+
+For both scales, the imposed inlet and outlet tractions are normalized to
+\(p^*_{\mathrm{in}}=1\) and \(p^*_{\mathrm{out}}=0\). After the solve, `voids`
+multiplies the velocity by \(U\) and pressure by \(\Delta P\) before computing
+flux and apparent permeability. Result metadata records the chosen velocity
+scale, \(L\), \(\Delta P\), and \(U\).
+
 ---
 
 ## Taylor-Hood Darcy-Darcy

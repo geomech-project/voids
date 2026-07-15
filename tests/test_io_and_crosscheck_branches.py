@@ -20,7 +20,11 @@ from voids.benchmarks.crosscheck import (
     summarize_network_geometry,
 )
 from voids.examples.mesh import make_cartesian_mesh_network
+from voids.image import network_extraction as extraction_mod
+from voids.image import porosity as porosity_mod
 from voids.io.openpnm import to_openpnm_dict, to_openpnm_network
+from voids.io import porespy as porespy_mod
+from voids.io import volume as volume_mod
 from voids.io.porespy import ensure_cartesian_boundary_labels, from_porespy, scale_porespy_geometry
 from voids.physics.singlephase import FluidSinglePhase, PressureBC
 
@@ -53,6 +57,60 @@ def test_scale_porespy_geometry_requires_positive_voxel_size() -> None:
 
     with pytest.raises(ValueError, match="voxel_size must be positive"):
         scale_porespy_geometry({}, voxel_size=0.0)
+
+
+def test_json_conversion_helpers_preserve_supported_nested_values() -> None:
+    array = np.array([1, 2])
+    assert porespy_mod._network_extra_value(array) is array
+    assert porespy_mod._network_extra_value(None) is None
+    assert porespy_mod._network_extra_value({"a": array}) == {"a": (1, 2)}
+    assert porespy_mod._network_extra_value([array, {"b": 3}]) == ((1, 2), {"b": 3})
+    assert porespy_mod._network_extra_value(object()).startswith("<object object")
+
+    assert extraction_mod._json_value_from_object(array) == (1, 2)
+    assert extraction_mod._json_value_from_object({"a": array}) == {"a": (1, 2)}
+    assert extraction_mod._json_value_from_object([array]) == ((1, 2),)
+    assert extraction_mod._json_value_from_object(object()).startswith("<object object")
+
+
+def test_porosity_metadata_helpers_and_target_shape_validation() -> None:
+    assert porosity_mod._metadata_float_sequence(None) is None
+    assert porosity_mod._metadata_float_sequence([1, "2"]) == (1.0, 2.0)
+    assert porosity_mod._metadata_float_sequence("2") is None
+    assert porosity_mod._metadata_cell_size("2", 1.0) == 2.0
+    assert porosity_mod._json_cell_size([1, 2]) == (1.0, 2.0)
+    assert porosity_mod._json_cell_size(2) == 2.0
+    with pytest.raises(TypeError, match="Expected numeric metadata"):
+        porosity_mod._float_value({})
+    with pytest.raises(ValueError, match="target_shape must have length"):
+        porosity_mod._target_shape_mean(np.ones((2, 2)), target_shape=(2,))
+
+    result = porosity_mod.porosity_map_from_binary_target_shape(
+        np.zeros((3, 3), dtype=bool),
+        target_shape=(2, 2),
+        image_is_void=False,
+        metadata={"source": "test"},
+    )
+    assert np.all(result.values == 1.0)
+    assert result.metadata["source"] == "test"
+
+
+def test_volume_metadata_validation_helpers() -> None:
+    assert volume_mod._metadata_voxel_size(2, name="voxel_size") == 2.0
+    with pytest.raises(ValueError, match="non-JSON value"):
+        volume_mod._json_value(object())
+    with pytest.raises(ValueError, match="must be a JSON array"):
+        volume_mod._metadata_sequence("bad", name="shape")
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        volume_mod._metadata_string_mapping([], name="units")
+    with pytest.raises(ValueError, match="entries must be integers"):
+        volume_mod._metadata_shape([True], name="shape")
+    with pytest.raises(ValueError, match="must be a string"):
+        volume_mod._metadata_dtype(1, name="dtype")
+    with pytest.raises(ValueError, match="entries must be numeric"):
+        volume_mod._metadata_voxel_size([True], name="voxel_size")
+    with pytest.raises(ValueError, match="dtype must be a string"):
+        volume_mod._restore_metadata_dtype(np.ones(2), {"dtype": 1}, dtype_was_explicit=False)
 
 
 def test_ensure_cartesian_boundary_labels_validates_inputs_and_preserves_existing_labels() -> None:

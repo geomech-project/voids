@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 
+from voids._typing import NetworkExtraValue
 from voids.core.network import Network
 from voids.io.porespy import from_porespy
 
@@ -11,7 +12,11 @@ if TYPE_CHECKING:
     import openpnm
 
 
-def to_openpnm_dict(net: Network, *, include_extra: bool = False) -> dict[str, Any]:
+def to_openpnm_dict(
+    net: Network,
+    *,
+    include_extra: bool = False,
+) -> dict[str, NetworkExtraValue]:
     """Export a network to an OpenPNM/PoreSpy-style flat dictionary.
 
     Parameters
@@ -23,7 +28,7 @@ def to_openpnm_dict(net: Network, *, include_extra: bool = False) -> dict[str, A
 
     Returns
     -------
-    dict of str to Any
+    dict of str to NetworkExtraValue
         Flat mapping using keys such as ``"pore.coords"`` and ``"throat.conns"``.
 
     Notes
@@ -34,7 +39,7 @@ def to_openpnm_dict(net: Network, *, include_extra: bool = False) -> dict[str, A
     such as ``throat.conduit_lengths.pore1``.
     """
 
-    out: dict[str, Any] = {
+    out: dict[str, NetworkExtraValue] = {
         "pore.coords": np.asarray(net.pore_coords, dtype=float).copy(),
         "throat.conns": np.asarray(net.throat_conns, dtype=int).copy(),
     }
@@ -81,7 +86,7 @@ def to_openpnm_network(
 
     Returns
     -------
-    Any
+    openpnm.network.Network
         OpenPNM network object. The precise class depends on the installed OpenPNM version.
 
     Raises
@@ -135,10 +140,10 @@ def to_openpnm_network(
         for k, v in net.throat_labels.items():
             pn[f"throat.{k}"] = np.asarray(v, dtype=bool)
     if include_extra:
-        for k, v in net.extra.items():
+        for k, extra_value in net.extra.items():
             if isinstance(k, str) and (k.startswith("pore.") or k.startswith("throat.")):
                 try:
-                    pn[k] = np.asarray(v)
+                    pn[k] = np.asarray(extra_value)
                 except Exception:
                     pass
     return pn

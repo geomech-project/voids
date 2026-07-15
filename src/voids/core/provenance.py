@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+
+from voids._typing import JsonObject, JsonValue
 
 
 @dataclass(slots=True)
@@ -41,14 +43,14 @@ class Provenance:
     preprocessing_hash: str | None = None
     random_seed: int | None = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    user_notes: dict[str, Any] = field(default_factory=dict)
+    user_notes: JsonObject = field(default_factory=dict)
 
-    def to_metadata(self) -> dict[str, Any]:
+    def to_metadata(self) -> JsonObject:
         """Serialize the provenance record to a JSON-friendly mapping.
 
         Returns
         -------
-        dict[str, Any]
+        JsonObject
             Dictionary suitable for storage in HDF5 attributes or JSON payloads.
         """
 
@@ -66,7 +68,7 @@ class Provenance:
         }
 
     @classmethod
-    def from_metadata(cls, data: dict[str, Any]) -> "Provenance":
+    def from_metadata(cls, data: JsonObject) -> "Provenance":
         """Construct a provenance record from serialized metadata.
 
         Parameters
@@ -80,4 +82,47 @@ class Provenance:
             Reconstructed provenance record.
         """
 
-        return cls(**data)
+        return cls(
+            source_kind=str(data.get("source_kind", "custom")),
+            source_version=_optional_str(data.get("source_version")),
+            extraction_method=_optional_str(data.get("extraction_method")),
+            segmentation_notes=_optional_str(data.get("segmentation_notes")),
+            voxel_size_original=_voxel_size_original(data.get("voxel_size_original")),
+            image_hash=_optional_str(data.get("image_hash")),
+            preprocessing_hash=_optional_str(data.get("preprocessing_hash")),
+            random_seed=_optional_int(data.get("random_seed")),
+            created_at=str(data.get("created_at", datetime.now(timezone.utc).isoformat())),
+            user_notes=_json_object(data.get("user_notes")),
+        )
+
+
+def _optional_str(value: JsonValue) -> str | None:
+    return None if value is None else str(value)
+
+
+def _optional_int(value: JsonValue) -> int | None:
+    return None if value is None else int(value) if isinstance(value, (int, float, str)) else None
+
+
+def _voxel_size_original(value: JsonValue) -> float | tuple[float, float, float] | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) == 3:
+        return (
+            _float_value(value[0]),
+            _float_value(value[1]),
+            _float_value(value[2]),
+        )
+    return None
+
+
+def _json_object(value: JsonValue) -> JsonObject:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _float_value(value: JsonValue) -> float:
+    if isinstance(value, (int, float, str)):
+        return float(value)
+    raise TypeError(f"Expected numeric metadata value, got {type(value).__name__}")

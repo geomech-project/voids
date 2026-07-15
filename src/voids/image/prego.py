@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import cast
 
 import numpy as np
 import porespy as ps
 from numba import njit  # type: ignore[import-untyped]
 from scipy import ndimage as ndi
 
+from voids.image._typing import PoreSpyModule, SignedIntegerDType
 from voids.image.maximal_ball import compute_void_distance_map
 
 
@@ -57,7 +59,7 @@ def _connectivity_structure(ndim: int) -> np.ndarray:
     return np.ones((3,) * ndim, dtype=bool)
 
 
-def _smallest_signed_integer_dtype(max_value: int) -> type[np.signedinteger[Any]]:
+def _smallest_signed_integer_dtype(max_value: int) -> SignedIntegerDType:
     """Return the smallest signed NumPy integer dtype that can store ``max_value``."""
 
     if max_value <= np.iinfo(np.int16).max:
@@ -71,7 +73,7 @@ def _prego_label_dtype(
     *,
     max_label: int,
     shape: tuple[int, ...],
-) -> type[np.signedinteger[Any]]:
+) -> SignedIntegerDType:
     """Return a safe compact dtype for labels and FIFO coordinate queues."""
 
     max_coordinate = max((int(size) - 1 for size in shape), default=0)
@@ -142,7 +144,7 @@ def snow_seed_points(
     peaks: np.ndarray | None = None,
     distance_map_backend: str = "auto",
     edt_parallel_threads: int | None = None,
-    porespy_module: Any = ps,
+    porespy_module: PoreSpyModule = ps,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Find PREGO seed points using the peak-filtering stages of SNOW.
 
@@ -652,7 +654,7 @@ def prego_partitioning(
     settings: PregoSettings | None = None,
     distance_map: np.ndarray | None = None,
     peaks: np.ndarray | None = None,
-    porespy_module: Any = ps,
+    porespy_module: PoreSpyModule = ps,
 ) -> PregoSegmentationResult:
     """Partition a binary pore image with PREGO-style region growing.
 
@@ -804,7 +806,7 @@ def extract_prego_network_dict(
     settings: PregoSettings | None = None,
     distance_map: np.ndarray | None = None,
     peaks: np.ndarray | None = None,
-    porespy_module: Any = ps,
+    porespy_module: PoreSpyModule = ps,
     regions_to_network_kwargs: dict[str, object] | None = None,
 ) -> PregoNetworkDictResult:
     """Run PREGO segmentation and convert regions to a PoreSpy network dict."""
@@ -818,9 +820,12 @@ def extract_prego_network_dict(
     )
     kwargs = dict(regions_to_network_kwargs or {})
     if _regions_have_interfaces(segmentation.regions):
-        network_dict = dict(
-            porespy_module.networks.regions_to_network(segmentation.regions, **kwargs)
+        raw_network_dict = porespy_module.networks.regions_to_network(
+            segmentation.regions, **kwargs
         )
+        if not isinstance(raw_network_dict, Mapping):
+            raise RuntimeError("PoreSpy regions_to_network did not return a mapping")
+        network_dict = dict(cast(Mapping[str, object], raw_network_dict))
     else:
         network_dict = _network_dict_without_interfaces(
             segmentation.regions,

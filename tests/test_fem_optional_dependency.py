@@ -7,11 +7,14 @@ from typing import Any
 
 import numpy as np
 import pytest
+from scipy import sparse
 
-from voids.fem.singlephase import FEMMapProblem, _common
+from voids.fem.singlephase import FEMMapProblem, FEniCSSolverOptions, _common
 from voids.fem.singlephase import solve_brinkman_usfem
+from voids.fem.singlephase import usfem as usfem_module
 from voids.fem.singlephase.upscaling import _backend_from_name, _default_axes
 from voids.image.porosity import PermeabilityMap, PorosityMap
+from voids.linalg import cudss as cudss_linalg
 
 
 def test_fem_backend_reports_clean_missing_dolfinx_message(
@@ -48,7 +51,7 @@ def test_fem_backend_reports_native_windows_limitation(
 
     message = str(exc_info.value)
     assert "PETSc FEM linear backend requires" in message
-    assert "linear_backend='auto' falls back to the SciPy direct backend" in message
+    assert "linear_backend='auto' falls back to the SciPy/SuperLU direct backend" in message
 
 
 def test_fem_auto_linear_backend_uses_scipy_when_windows_lacks_petsc(
@@ -74,11 +77,332 @@ def test_fem_linear_backend_rejects_unknown_name() -> None:
         _common._resolve_linear_backend("not-a-backend", SimpleNamespace())  # type: ignore[arg-type]
 
 
-def test_scipy_fem_backend_rejects_distributed_mesh() -> None:
+def test_fem_linear_system_dtype_rejects_unknown_value() -> None:
+    with pytest.raises(ValueError, match="linear_system_dtype"):
+        _common._resolve_fem_linear_system_dtype("float16")
+
+
+def test_fem_thread_environment_metadata_reports_solver_relevant_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OMP_NUM_THREADS", "4")
+    monkeypatch.delenv("MKL_NUM_THREADS", raising=False)
+
+    metadata = _common._thread_environment_metadata()
+
+    assert metadata["OMP_NUM_THREADS"] == "4"
+    assert "MKL_NUM_THREADS" in metadata
+
+
+def test_petsc_solver_diagnostics_extracts_available_ksp_metadata() -> None:
+    solver = SimpleNamespace(
+        getType=lambda: "fgmres",
+        getConvergedReason=lambda: 2,
+        getIterationNumber=lambda: 17,
+        getResidualNorm=lambda: 1.0e-9,
+    )
+    problem = SimpleNamespace(solver=solver)
+
+    assert _common._petsc_solver_diagnostics(problem) == {
+        "petsc_ksp_type": "fgmres",
+        "petsc_converged_reason": 2,
+        "petsc_iteration_number": 17,
+        "petsc_residual_norm": 1.0e-9,
+    }
+
+
+def test_petsc_solver_diagnostics_tolerates_missing_solver() -> None:
+    assert _common._petsc_solver_diagnostics(SimpleNamespace()) == {}
+
+
+def test_petsc_solver_diagnostics_skips_missing_ksp_methods() -> None:
+    problem = SimpleNamespace(solver=SimpleNamespace(getType=lambda: "preonly"))
+
+    assert _common._petsc_solver_diagnostics(problem) == {"petsc_ksp_type": "preonly"}
+
+
+def test_petsc_solve_raises_when_returned_ksp_diverged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeLinearProblem:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.solver = SimpleNamespace(
+                getType=lambda: "fgmres",
+                getConvergedReason=lambda: -3,
+                getIterationNumber=lambda: 300,
+                getResidualNorm=lambda: 1.0e-5,
+            )
+
+        def solve(self) -> object:
+            return object()
+
+    fake_api = SimpleNamespace(petsc=SimpleNamespace(LinearProblem=FakeLinearProblem))
+    monkeypatch.setattr(_common, "_require_dolfinx_petsc", lambda _api: fake_api)
+    context = SimpleNamespace(api=SimpleNamespace())
+    options = _common.FEniCSSolverOptions(
+        linear_backend="petsc",
+        petsc_options={
+            "ksp_type": "fgmres",
+            "ksp_error_if_not_converged": True,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="PETSc linear solve did not converge"):
+        _common._solve_mixed_problem(
+            context,
+            form=None,
+            rhs=None,
+            bcs=[],
+            options=options,
+            prefix_suffix="probe",
+        )
+
+
+def test_petsc_block_solve_normalizes_tuple_solution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeLinearProblem:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.solver = SimpleNamespace(
+                getConvergedReason=lambda: 4,
+                getIterationNumber=lambda: 1,
+                getResidualNorm=lambda: 0.0,
+            )
+
+        def solve(self) -> tuple[str, str]:
+            return ("u", "p")
+
+    fake_api = SimpleNamespace(petsc=SimpleNamespace(LinearProblem=FakeLinearProblem))
+    monkeypatch.setattr(_common, "_require_dolfinx_petsc", lambda _api: fake_api)
+    context = SimpleNamespace(api=SimpleNamespace())
+
+    solution, _, metadata = _common._solve_block_problem_petsc(
+        context,
+        forms=[[None, None], [None, None]],
+        rhs=[None, None],
+        bcs=[],
+        solution_functions=[],
+        options=_common.FEniCSSolverOptions(linear_backend="petsc"),
+        prefix_suffix="probe",
+        matrix_kind="mpi",
+    )
+
+    assert solution == ["u", "p"]
+    assert metadata["petsc_matrix_kind"] == "mpi"
+
+
+def test_petsc_block_solve_wraps_single_solution_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = object()
+
+    class FakeLinearProblem:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.solver = SimpleNamespace(getConvergedReason=lambda: 4)
+
+        def solve(self) -> object:
+            return sentinel
+
+    fake_api = SimpleNamespace(petsc=SimpleNamespace(LinearProblem=FakeLinearProblem))
+    monkeypatch.setattr(_common, "_require_dolfinx_petsc", lambda _api: fake_api)
+    context = SimpleNamespace(api=SimpleNamespace())
+
+    solution, _, _ = _common._solve_block_problem_petsc(
+        context,
+        forms=[[None]],
+        rhs=[None],
+        bcs=[],
+        solution_functions=[],
+        options=_common.FEniCSSolverOptions(linear_backend="petsc"),
+        prefix_suffix="probe",
+        matrix_kind="mpi",
+    )
+
+    assert solution == [sentinel]
+
+
+def test_petsc_block_solve_raises_when_returned_ksp_diverged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeOptions(dict):
+        def prefixPush(self, _prefix: str) -> None:  # noqa: N802
+            return None
+
+        def prefixPop(self) -> None:  # noqa: N802
+            return None
+
+    class FakeLinearProblem:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.solver = SimpleNamespace(
+                getOptionsPrefix=lambda: "fake_",
+                setFromOptions=lambda: None,
+                getConvergedReason=lambda: -3,
+                getIterationNumber=lambda: 10,
+                getResidualNorm=lambda: 1.0e-5,
+            )
+
+        def solve(self) -> list[object]:
+            return [object(), object()]
+
+    fake_api = SimpleNamespace(
+        petsc=SimpleNamespace(
+            LinearProblem=FakeLinearProblem,
+            PETSc=SimpleNamespace(Options=FakeOptions),
+        )
+    )
+    monkeypatch.setattr(_common, "_require_dolfinx_petsc", lambda _api: fake_api)
+    context = SimpleNamespace(api=SimpleNamespace())
+    options = _common.FEniCSSolverOptions(
+        linear_backend="petsc",
+        petsc_options={
+            "ksp_type": "fgmres",
+            "ksp_error_if_not_converged": True,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="PETSc linear solve did not converge"):
+        _common._solve_block_problem_petsc(
+            context,
+            forms=[[None, None], [None, None]],
+            rhs=[None, None],
+            bcs=[],
+            solution_functions=[],
+            options=options,
+            prefix_suffix="probe",
+            matrix_kind="nest",
+        )
+
+
+def test_petsc_block_solve_defers_nested_options_until_after_fields_are_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[str, Any]] = []
+
+    class FakeOptions(dict):
+        def prefixPush(self, prefix: str) -> None:  # noqa: N802
+            events.append(("prefixPush", prefix))
+
+        def __setitem__(self, key: str, value: Any) -> None:
+            events.append(("set", key, value))
+            super().__setitem__(key, value)
+
+        def __delitem__(self, key: str) -> None:
+            events.append(("del", key))
+            super().__delitem__(key)
+
+        def prefixPop(self) -> None:  # noqa: N802
+            events.append(("prefixPop", None))
+
+    class FakeLinearProblem:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            events.append(("init_petsc_options", kwargs.get("petsc_options")))
+            pc = SimpleNamespace(
+                setFieldSplitIS=lambda *fields: events.append(("setFieldSplitIS", fields))
+            )
+            self.solver = SimpleNamespace(
+                getOptionsPrefix=lambda: "voids_block_",
+                setFromOptions=lambda: events.append(("setFromOptions", None)),
+                getConvergedReason=lambda: 4,
+                getPC=lambda: pc,
+            )
+            self.A = SimpleNamespace(getNestISs=lambda: (("u_is", "p_is"), None))
+            self.u = [SimpleNamespace(name="u"), SimpleNamespace(name="p")]
+
+        def solve(self) -> list[str]:
+            return ["u", "p"]
+
+    fake_api = SimpleNamespace(
+        petsc=SimpleNamespace(
+            LinearProblem=FakeLinearProblem,
+            PETSc=SimpleNamespace(Options=FakeOptions),
+        )
+    )
+    monkeypatch.setattr(_common, "_require_dolfinx_petsc", lambda _api: fake_api)
+    context = SimpleNamespace(api=SimpleNamespace())
+
+    _, _, metadata = _common._solve_block_problem_petsc(
+        context,
+        forms=[[None, None], [None, None]],
+        rhs=[None, None],
+        bcs=[],
+        solution_functions=[],
+        options=_common.FEniCSSolverOptions(
+            linear_backend="petsc",
+            petsc_options={"pc_type": "fieldsplit", "fieldsplit_velocity_pc_type": "lu"},
+        ),
+        prefix_suffix="probe",
+        matrix_kind="nest",
+    )
+
+    assert ("init_petsc_options", None) in events
+    assert events.index(("init_petsc_options", None)) < events.index(("setFromOptions", None))
+    assert ("prefixPush", "voids_block_") in events
+    assert ("set", "pc_type", "fieldsplit") in events
+    assert ("set", "fieldsplit_velocity_pc_type", "lu") in events
+    assert ("setFieldSplitIS", (("u_0", "u_is"), ("p_1", "p_is"))) in events
+    assert events.count(("setFromOptions", None)) == 2
+    assert ("del", "pc_type") in events
+    assert events[-1] == ("prefixPop", None)
+    assert metadata["petsc_options_applied_after_block_setup"] is True
+    assert metadata["petsc_nest_fieldsplit_is_reapplied"] is True
+
+
+def test_standalone_pressure_gauge_requires_petsc() -> None:
+    context = SimpleNamespace(api=SimpleNamespace(petsc=None))
+
+    with pytest.raises(ImportError, match="standalone pressure gauge"):
+        _common._standalone_pressure_gauge_bc(context, pressure_space=None)
+
+
+def test_standalone_pressure_gauge_falls_back_to_first_dof_when_origin_not_found() -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeComm:
+        def allreduce(self, value: Any, op: Any = None) -> Any:
+            return value
+
+        def Allreduce(self, send: Any, receive: Any, op: Any = None) -> None:
+            receive[:] = send
+
+    comm = FakeComm()
+    pressure_space = SimpleNamespace(
+        dofmap=SimpleNamespace(
+            index_map=SimpleNamespace(size_local=1, local_range=(0, 1)),
+            index_map_bs=1,
+        )
+    )
+    context = SimpleNamespace(
+        mesh=SimpleNamespace(
+            geometry=SimpleNamespace(x=np.array([[0.0, 0.0], [1.0, 1.0]]), dim=2),
+            comm=comm,
+        ),
+        api=SimpleNamespace(
+            MPI=SimpleNamespace(MIN="min", MAX="max"),
+            fem=SimpleNamespace(
+                locate_dofs_geometrical=lambda _space, _marker: np.array([], dtype=np.int32),
+                dirichletbc=lambda value, dofs, space: (
+                    captured.update(
+                        value=value,
+                        dofs=dofs,
+                        space=space,
+                    )
+                    or "bc"
+                ),
+            ),
+            petsc=SimpleNamespace(PETSc=SimpleNamespace(ScalarType=float)),
+        ),
+    )
+
+    assert _common._standalone_pressure_gauge_bc(context, pressure_space=pressure_space) == "bc"
+    assert np.array_equal(captured["dofs"], np.array([0], dtype=np.int32))
+    assert captured["space"] is pressure_space
+
+
+def test_serial_direct_fem_backend_rejects_distributed_mesh() -> None:
     context = SimpleNamespace(mesh=SimpleNamespace(comm=SimpleNamespace(size=2)))
 
     with pytest.raises(NotImplementedError, match="serial-only"):
-        _common._solve_mixed_problem_scipy(
+        _common._solve_mixed_problem_serial_direct(
             context,
             mixed_space=None,
             form=None,
@@ -124,15 +448,27 @@ def test_fem_dirichlet_bc_values_fall_back_for_older_dolfinx() -> None:
     assert np.array_equal(array, np.array([0.0, 0.0]))
 
 
-def test_umfpack_fem_backend_dispatches_optional_solver(
+def test_superlu_fem_backend_dispatches_tuned_controls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    class FakeSparseMatrix:
+        nnz = 3
+
+        def tocsc(self) -> FakeSparseMatrix:
+            return self
+
+        def tocsr(self) -> FakeSparseMatrix:
+            return self
+
+        def copy(self) -> FakeSparseMatrix:
+            return self
+
     class FakeMatrix:
         def scatter_reverse(self) -> None:
             return None
 
         def to_scipy(self) -> Any:
-            return SimpleNamespace(copy=lambda: "matrix")
+            return FakeSparseMatrix()
 
     vector = SimpleNamespace(
         array=np.array([1.0]),
@@ -157,19 +493,908 @@ def test_umfpack_fem_backend_dispatches_optional_solver(
         mesh=SimpleNamespace(comm=SimpleNamespace(size=1)),
         api=SimpleNamespace(fem=fem, la=la),
     )
-    fake_umfpack = SimpleNamespace(spsolve=lambda _matrix, _rhs: np.array([2.0]))
+    calls: dict[str, Any] = {}
+
+    class FakeLU:
+        L = SimpleNamespace(nnz=5)
+        U = SimpleNamespace(nnz=7)
+
+        def solve(self, rhs: Any) -> np.ndarray:
+            calls["rhs"] = rhs.copy()
+            return np.array([2.0])
+
+    def fake_splu(matrix: Any, **kwargs: Any) -> FakeLU:
+        calls["matrix"] = matrix
+        calls["kwargs"] = kwargs
+        return FakeLU()
+
+    import scipy.sparse.linalg as scipy_sparse_linalg
+
+    monkeypatch.setattr(scipy_sparse_linalg, "splu", fake_splu)
+
+    with pytest.raises(RuntimeError, match="incompatible size"):
+        _common._solve_mixed_problem_serial_direct(
+            context,
+            mixed_space=None,
+            form=None,
+            rhs=None,
+            bcs=[],
+            linear_backend="superlu",
+            superlu_controls={
+                "permc_spec": "colamd",
+                "diag_pivot_thresh": 0.0,
+                "equil": False,
+            },
+        )
+    assert calls["kwargs"] == {
+        "permc_spec": "COLAMD",
+        "diag_pivot_thresh": 0.0,
+        "options": {"Equil": False},
+    }
+    assert np.array_equal(calls["rhs"], np.array([1.0]))
+
+
+def test_superlu_fem_backend_casts_serial_system_to_float32() -> None:
+    class FakeMatrix:
+        def scatter_reverse(self) -> None:
+            return None
+
+        def to_scipy(self) -> Any:
+            return sparse.csr_matrix(np.array([[2.0]], dtype=np.float64))
+
+    vector = SimpleNamespace(
+        array=np.array([4.0], dtype=np.float64),
+        scatter_reverse=lambda _mode: None,
+    )
+    solution = SimpleNamespace(
+        x=SimpleNamespace(
+            array=np.zeros(1, dtype=np.float64),
+            scatter_forward=lambda: None,
+        )
+    )
+    fem = SimpleNamespace(
+        form=lambda value: value,
+        assemble_matrix=lambda _form, bcs: FakeMatrix(),
+        assemble_vector=lambda _rhs: vector,
+        apply_lifting=lambda _array, _forms, _bcs: None,
+        set_bc=lambda _array, _bcs: None,
+        Function=lambda _space: solution,
+    )
+    la = SimpleNamespace(InsertMode=SimpleNamespace(add="add"))
+    context = SimpleNamespace(
+        mesh=SimpleNamespace(comm=SimpleNamespace(size=1)),
+        api=SimpleNamespace(fem=fem, la=la),
+    )
+
+    _, _, metadata = _common._solve_mixed_problem_serial_direct(
+        context,
+        mixed_space=None,
+        form=None,
+        rhs=None,
+        bcs=[],
+        linear_backend="superlu",
+        linear_system_dtype="float32",
+    )
+
+    assert solution.x.array[0] == pytest.approx(2.0)
+    assert metadata["serial_sparse_linear_system_dtype"] == "float32"
+    assert metadata["serial_sparse_matrix_value_dtype"] == "float32"
+    assert metadata["serial_sparse_rhs_dtype"] == "float32"
+
+
+@pytest.mark.parametrize("linear_backend", ["umfpack", "pardiso"])
+def test_serial_fem_backend_rejects_float32_for_double_only_wrappers(
+    linear_backend: str,
+) -> None:
+    context = SimpleNamespace(mesh=SimpleNamespace(comm=SimpleNamespace(size=1)))
+
+    with pytest.raises(ValueError, match="supports float64 only"):
+        _common._solve_mixed_problem_serial_direct(
+            context,
+            mixed_space=None,
+            form=None,
+            rhs=None,
+            bcs=[],
+            linear_backend=linear_backend,  # type: ignore[arg-type]
+            linear_system_dtype="float32",
+        )
+
+
+@pytest.mark.parametrize(
+    ("controls", "message"),
+    [
+        ({"permc_spec": "bad"}, "Unsupported SuperLU permc_spec"),
+        ({"diag_pivot_thresh": 2.0}, "diag_pivot_thresh"),
+        ({"relax": 0}, "relax"),
+    ],
+)
+def test_superlu_controls_reject_invalid_values(
+    controls: dict[str, Any],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _common._resolve_superlu_controls(controls)
+
+
+def test_umfpack_fem_backend_dispatches_optional_solver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSparseMatrix:
+        nnz = 1
+
+        def __init__(self) -> None:
+            self.data = np.array([1.0])
+            self.indices = np.array([0], dtype=np.int32)
+            self.indptr = np.array([0, 1], dtype=np.int32)
+
+        def tocsc(self) -> FakeSparseMatrix:
+            return self
+
+        def tocsr(self) -> FakeSparseMatrix:
+            return self
+
+        def copy(self) -> FakeSparseMatrix:
+            copied = FakeSparseMatrix()
+            copied.data = self.data.copy()
+            copied.indices = self.indices.copy()
+            copied.indptr = self.indptr.copy()
+            return copied
+
+    class FakeMatrix:
+        def scatter_reverse(self) -> None:
+            return None
+
+        def to_scipy(self) -> Any:
+            return FakeSparseMatrix()
+
+    vector = SimpleNamespace(
+        array=np.array([1.0]),
+        scatter_reverse=lambda _mode: None,
+    )
+    solution = SimpleNamespace(
+        x=SimpleNamespace(
+            array=np.zeros(2),
+            scatter_forward=lambda: None,
+        )
+    )
+    fem = SimpleNamespace(
+        form=lambda value: value,
+        assemble_matrix=lambda _form, bcs: FakeMatrix(),
+        assemble_vector=lambda _rhs: vector,
+        apply_lifting=lambda _array, _forms, _bcs: None,
+        set_bc=lambda _array, _bcs: None,
+        Function=lambda _space: solution,
+    )
+    la = SimpleNamespace(InsertMode=SimpleNamespace(add="add"))
+    context = SimpleNamespace(
+        mesh=SimpleNamespace(comm=SimpleNamespace(size=1)),
+        api=SimpleNamespace(fem=fem, la=la),
+    )
+    calls: dict[str, Any] = {}
+
+    class FakeUmfpackContext:
+        def __init__(self, family: str) -> None:
+            calls["family"] = family
+            self.control = np.zeros(20)
+
+        def numeric(self, matrix: Any) -> None:
+            calls["numeric_indices_dtype"] = str(matrix.indices.dtype)
+            calls["numeric_indptr_dtype"] = str(matrix.indptr.dtype)
+            calls["ordering_control"] = self.control[10]
+            calls["pivot_tolerance_control"] = self.control[3]
+
+        def solve(
+            self,
+            system: Any,
+            matrix: Any,
+            rhs: Any,
+            *,
+            autoTranspose: bool,
+        ) -> np.ndarray:
+            calls["system"] = system
+            calls["solve_indices_dtype"] = str(matrix.indices.dtype)
+            calls["solve_indptr_dtype"] = str(matrix.indptr.dtype)
+            calls["autoTranspose"] = autoTranspose
+            return np.array([2.0])
+
+    fake_umfpack = SimpleNamespace(
+        UMFPACK_A="A",
+        UMFPACK_ORDERING=10,
+        UMFPACK_ORDERING_METIS_GUARD=7,
+        UMFPACK_PIVOT_TOLERANCE=3,
+        UmfpackContext=FakeUmfpackContext,
+    )
 
     monkeypatch.setattr(_common, "import_module", lambda _name: fake_umfpack)
 
     with pytest.raises(RuntimeError, match="incompatible size"):
-        _common._solve_mixed_problem_scipy(
+        _common._solve_mixed_problem_serial_direct(
             context,
             mixed_space=None,
             form=None,
             rhs=None,
             bcs=[],
             linear_backend="umfpack",
+            umfpack_controls={"ordering": "metis_guard", "pivot_tolerance": 1.0e-2},
         )
+    assert calls == {
+        "family": "dl",
+        "numeric_indices_dtype": "int64",
+        "numeric_indptr_dtype": "int64",
+        "ordering_control": 7.0,
+        "pivot_tolerance_control": 1.0e-2,
+        "system": "A",
+        "solve_indices_dtype": "int64",
+        "solve_indptr_dtype": "int64",
+        "autoTranspose": True,
+    }
+
+
+def test_pardiso_fem_backend_dispatches_optional_solver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSparseMatrix:
+        nnz = 1
+
+        def tocsc(self) -> FakeSparseMatrix:
+            return self
+
+        def tocsr(self) -> FakeSparseMatrix:
+            return self
+
+        def copy(self) -> str:
+            return "matrix"
+
+    class FakeMatrix:
+        def scatter_reverse(self) -> None:
+            return None
+
+        def to_scipy(self) -> Any:
+            return FakeSparseMatrix()
+
+    vector = SimpleNamespace(
+        array=np.array([1.0]),
+        scatter_reverse=lambda _mode: None,
+    )
+    solution = SimpleNamespace(
+        x=SimpleNamespace(
+            array=np.zeros(2),
+            scatter_forward=lambda: None,
+        )
+    )
+    fem = SimpleNamespace(
+        form=lambda value: value,
+        assemble_matrix=lambda _form, bcs: FakeMatrix(),
+        assemble_vector=lambda _rhs: vector,
+        apply_lifting=lambda _array, _forms, _bcs: None,
+        set_bc=lambda _array, _bcs: None,
+        Function=lambda _space: solution,
+    )
+    la = SimpleNamespace(InsertMode=SimpleNamespace(add="add"))
+    context = SimpleNamespace(
+        mesh=SimpleNamespace(comm=SimpleNamespace(size=1)),
+        api=SimpleNamespace(fem=fem, la=la),
+    )
+    fake_pypardiso = SimpleNamespace(spsolve=lambda _matrix, _rhs: np.array([2.0]))
+
+    monkeypatch.setattr(_common, "import_module", lambda _name: fake_pypardiso)
+
+    with pytest.raises(RuntimeError, match="incompatible size"):
+        _common._solve_mixed_problem_serial_direct(
+            context,
+            mixed_space=None,
+            form=None,
+            rhs=None,
+            bcs=[],
+            linear_backend="pardiso",
+        )
+
+
+def test_nvmath_cudss_controls_reject_invalid_values() -> None:
+    with pytest.raises(ValueError, match="Unsupported"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"unknown": 1})
+    with pytest.raises(ValueError, match="device_ids"):
+        cudss_linalg.normalize_nvmath_cudss_device_ids("gpu0")
+    with pytest.raises(ValueError, match="device_ids"):
+        cudss_linalg.normalize_nvmath_cudss_device_ids(object())
+    with pytest.raises(ValueError, match="non-negative"):
+        cudss_linalg.normalize_nvmath_cudss_device_ids((-1,))
+    with pytest.raises(ValueError, match="duplicates"):
+        cudss_linalg.normalize_nvmath_cudss_device_ids((0, 0))
+    with pytest.raises(ValueError, match="range 0..5"):
+        cudss_linalg._resolve_nvmath_cudss_algorithm(6, control_name="solve_alg")
+    with pytest.raises(ValueError, match="dtype"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"dtype": "float16"})
+    with pytest.raises(ValueError, match="device_ids"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"device_ids": ()})
+    with pytest.raises(ValueError, match="ir_steps"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"ir_steps": -1})
+    with pytest.raises(ValueError, match="pivot_type"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"pivot_type": "bad"})
+    with pytest.raises(ValueError, match="residual_rtol"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"residual_rtol": 0.0})
+    with pytest.raises(ValueError, match="reordering_alg"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"reordering_alg": "bad"})
+    with pytest.raises(ValueError, match="pivot_threshold"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"pivot_threshold": -1.0})
+    with pytest.raises(ValueError, match="pivot_epsilon"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"pivot_epsilon": float("nan")})
+    with pytest.raises(ValueError, match="nd_nlevels"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"nd_nlevels": -1})
+    with pytest.raises(ValueError, match="host_nthreads"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"host_nthreads": 0})
+    with pytest.raises(ValueError, match="threading_lib"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"threading_lib": ""})
+    with pytest.raises(ValueError, match="hybrid_device_memory_limit"):
+        cudss_linalg.resolve_nvmath_cudss_controls({"hybrid_device_memory_limit": 0})
+    with pytest.raises(ValueError, match="hybrid_mode and hybrid_execute_mode"):
+        cudss_linalg.resolve_nvmath_cudss_controls(
+            {"hybrid_mode": True, "hybrid_execute_mode": True}
+        )
+
+    assert cudss_linalg.resolve_nvmath_cudss_controls({"pivot_type": None})["dtype"] == "float64"
+    assert cudss_linalg.resolve_nvmath_cudss_controls({"threading_lib": None})["dtype"] == "float64"
+    assert cudss_linalg.json_safe_mapping({"plain": 1, "object": (1, 2)}) == {
+        "plain": 1,
+        "object": "(1, 2)",
+    }
+
+
+def test_nvmath_cudss_controls_normalize_advanced_options() -> None:
+    controls = cudss_linalg.nvmath_cudss_controls_from_arguments(
+        dtype="float32",
+        device_ids="all",
+        ir_steps=8,
+        reordering_alg="alg_1",
+        matching_alg="2",
+        factorization_alg=3,
+        solve_alg="alg4",
+        pivot_type="row",
+        pivot_threshold=0.2,
+        pivot_epsilon=1.0e-6,
+        pivot_epsilon_alg="alg_5",
+        nd_nlevels=2,
+        host_nthreads=4,
+        threading_lib="auto",
+        hybrid_mode=True,
+        hybrid_device_memory_limit=20_000_000_000,
+        hybrid_execute_mode=False,
+        use_cuda_register_memory=True,
+        use_superpanels=False,
+        deterministic_mode=True,
+        residual_rtol=1.0e-3,
+    )
+
+    assert controls == {
+        "dtype": "float32",
+        "device_ids": "all",
+        "ir_steps": 8,
+        "use_matching": True,
+        "reordering_alg": 1,
+        "matching_alg": 2,
+        "factorization_alg": 3,
+        "solve_alg": 4,
+        "pivot_type": "row",
+        "pivot_threshold": 0.2,
+        "pivot_epsilon": 1.0e-6,
+        "pivot_epsilon_alg": 5,
+        "nd_nlevels": 2,
+        "host_nthreads": 4,
+        "threading_lib": "auto",
+        "hybrid_mode": True,
+        "hybrid_device_memory_limit": 20_000_000_000,
+        "hybrid_execute_mode": False,
+        "use_cuda_register_memory": True,
+        "use_superpanels": False,
+        "deterministic_mode": True,
+        "check_residual": True,
+        "residual_rtol": 1.0e-3,
+    }
+
+
+def test_nvmath_cudss_backend_reports_missing_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_import_module(name: str) -> Any:
+        if name == "torch":
+            return SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True))
+        if name == "nvmath.bindings.cudss":
+            raise ImportError("simulated missing nvmath")
+        raise AssertionError(name)
+
+    monkeypatch.setattr(cudss_linalg, "import_module", fake_import_module)
+
+    with pytest.raises(ImportError, match="linear_backend='nvmath_cudss' requires"):
+        cudss_linalg.require_nvmath_cudss()
+
+
+def test_nvmath_cudss_backend_reports_missing_cuda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_import_module(name: str) -> Any:
+        if name == "torch":
+            return SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+        if name == "nvmath.bindings.cudss":
+            return SimpleNamespace()
+        raise AssertionError(name)
+
+    monkeypatch.setattr(cudss_linalg, "import_module", fake_import_module)
+
+    with pytest.raises(RuntimeError, match="requires a CUDA-capable GPU"):
+        cudss_linalg.require_nvmath_cudss()
+
+
+def test_nvmath_cudss_device_ids_accept_multiple_devices() -> None:
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            current_device=lambda: 0,
+            device_count=lambda: 2,
+        ),
+    )
+
+    assert cudss_linalg.nvmath_cudss_device_ids(fake_torch, "all") == (0, 1)
+    assert cudss_linalg.nvmath_cudss_device_ids(fake_torch, (0, 1)) == (0, 1)
+    assert cudss_linalg.nvmath_cudss_device_ids(fake_torch, None) == (0,)
+    assert cudss_linalg.nvmath_cudss_device_ids(fake_torch, (0,)) == (0,)
+    assert cudss_linalg.nvmath_cudss_device_ids(fake_torch, (1,)) == (1,)
+    with pytest.raises(ValueError, match="unavailable CUDA device"):
+        cudss_linalg.nvmath_cudss_device_ids(fake_torch, (2,))
+
+    no_device_torch = SimpleNamespace(cuda=SimpleNamespace(device_count=lambda: 0))
+    with pytest.raises(RuntimeError, match="at least one CUDA device"):
+        cudss_linalg.nvmath_cudss_device_ids(no_device_torch, None)
+
+
+class _FakeTorchTensor:
+    def __init__(self, array: Any, registry: dict[int, _FakeTorchTensor]) -> None:
+        self.array = np.asarray(array)
+        self._registry = registry
+
+    def data_ptr(self) -> int:
+        pointer = id(self)
+        self._registry[pointer] = self
+        return pointer
+
+    def dim(self) -> int:
+        return self.array.ndim
+
+    def unsqueeze(self, axis: int) -> _FakeTorchTensor:
+        return _FakeTorchTensor(np.expand_dims(self.array, axis), self._registry)
+
+    def size(self, axis: int) -> int:
+        return int(self.array.shape[axis])
+
+    def t(self) -> _FakeTorchTensor:
+        return _FakeTorchTensor(self.array.T, self._registry)
+
+    def contiguous(self) -> _FakeTorchTensor:
+        return _FakeTorchTensor(np.ascontiguousarray(self.array), self._registry)
+
+    def numel(self) -> int:
+        return int(self.array.size)
+
+    def squeeze(self, axis: int) -> _FakeTorchTensor:
+        return _FakeTorchTensor(np.squeeze(self.array, axis=axis), self._registry)
+
+    def detach(self) -> _FakeTorchTensor:
+        return self
+
+    def cpu(self) -> _FakeTorchTensor:
+        return self
+
+    def numpy(self) -> np.ndarray:
+        return self.array
+
+    def view(self, *shape: int) -> _FakeTorchTensor:
+        return _FakeTorchTensor(self.array.reshape(*shape), self._registry)
+
+    def copy_(self, other: _FakeTorchTensor) -> _FakeTorchTensor:
+        self.array[...] = other.array
+        return self
+
+    def zero_(self) -> _FakeTorchTensor:
+        self.array[...] = 0
+        return self
+
+
+class _FakeTorchCuda:
+    def __init__(self, device_count: int = 2) -> None:
+        self._device_count = device_count
+        self.synced: list[int] = []
+
+    def is_available(self) -> bool:
+        return self._device_count > 0
+
+    def device_count(self) -> int:
+        return self._device_count
+
+    def current_device(self) -> int:
+        return 0
+
+    def set_device(self, _device_id: int) -> None:
+        return None
+
+    def reset_peak_memory_stats(self, _device_id: int) -> None:
+        return None
+
+    def current_stream(self, device_id: int) -> Any:
+        return SimpleNamespace(cuda_stream=100 + device_id)
+
+    def synchronize(self, device_id: int) -> None:
+        self.synced.append(device_id)
+
+    def get_device_name(self, device_id: int) -> str:
+        return f"Fake GPU {device_id}"
+
+    def max_memory_allocated(self, device_id: int) -> int:
+        return 1024 * (device_id + 1)
+
+
+class _FakeTorch:
+    float32 = np.float32
+    float64 = np.float64
+    __version__ = "test"
+    version = SimpleNamespace(cuda="12.test")
+
+    def __init__(self) -> None:
+        self.registry: dict[int, _FakeTorchTensor] = {}
+        self.cuda = _FakeTorchCuda()
+
+    def device(self, name: str) -> str:
+        return name
+
+    def as_tensor(self, array: Any, **kwargs: Any) -> _FakeTorchTensor:
+        dtype = kwargs.get("dtype")
+        return _FakeTorchTensor(np.asarray(array, dtype=dtype), self.registry)
+
+    def zeros(self, shape: tuple[int, ...], **kwargs: Any) -> _FakeTorchTensor:
+        return _FakeTorchTensor(np.zeros(shape, dtype=kwargs.get("dtype")), self.registry)
+
+    def zeros_like(self, tensor: _FakeTorchTensor) -> _FakeTorchTensor:
+        return _FakeTorchTensor(np.zeros_like(tensor.array), self.registry)
+
+
+def _fake_enum(**members: int) -> Any:
+    return SimpleNamespace(
+        **{name: SimpleNamespace(value=value) for name, value in members.items()}
+    )
+
+
+class _FakeCudss:
+    MatrixType = _fake_enum(GENERAL=1)
+    MatrixViewType = _fake_enum(FULL=1)
+    IndexBase = _fake_enum(ZERO=0)
+    Layout = _fake_enum(COL_MAJOR=1)
+    PivotType = _fake_enum(PIVOT_COL=1, PIVOT_ROW=2, PIVOT_NONE=3)
+    Phase = _fake_enum(ANALYSIS=1, FACTORIZATION=2, SOLVE=3)
+    ConfigParam = SimpleNamespace(
+        **{
+            name: name
+            for name in (
+                "DEVICE_COUNT",
+                "DEVICE_INDICES",
+                "REORDERING_ALG",
+                "MATCHING_ALG",
+                "FACTORIZATION_ALG",
+                "SOLVE_ALG",
+                "IR_N_STEPS",
+                "USE_MATCHING",
+                "PIVOT_TYPE",
+                "PIVOT_THRESHOLD",
+                "PIVOT_EPSILON",
+                "PIVOT_EPSILON_ALG",
+                "ND_NLEVELS",
+                "HOST_NTHREADS",
+                "HYBRID_MODE",
+                "HYBRID_EXECUTE_MODE",
+                "USE_CUDA_REGISTER_MEMORY",
+                "USE_SUPERPANELS",
+                "DETERMINISTIC_MODE",
+                "HYBRID_DEVICE_MEMORY_LIMIT",
+            )
+        }
+    )
+    DataParam = SimpleNamespace(MEMORY_ESTIMATES="MEMORY_ESTIMATES")
+
+    def __init__(self, torch: _FakeTorch) -> None:
+        self.torch = torch
+        self.destroyed: list[Any] = []
+        self.fail_phase: int | None = None
+
+    def create(self) -> Any:
+        return SimpleNamespace(kind="single")
+
+    def create_mg(self, count: int, _devices: Any) -> Any:
+        return SimpleNamespace(kind="multi", count=count)
+
+    def set_threading_layer(self, _handle: Any, _path: str) -> None:
+        return None
+
+    def set_stream(self, _handle: Any, _stream: int) -> None:
+        return None
+
+    def matrix_create_csr(self, rows: int, cols: int, nnz: int, *args: Any) -> Any:
+        row_offsets_pointer, _, col_indices_pointer, values_pointer = args[:4]
+        return {
+            "rows": rows,
+            "cols": cols,
+            "nnz": nnz,
+            "row_offsets": self.torch.registry[row_offsets_pointer],
+            "col_indices": self.torch.registry[col_indices_pointer],
+            "values": self.torch.registry[values_pointer],
+        }
+
+    def matrix_create_dn(self, _rows: int, _cols: int, _ld: int, pointer: int, *_args: Any) -> Any:
+        return {"tensor": self.torch.registry[pointer]}
+
+    def config_create(self) -> dict[str, Any]:
+        return {}
+
+    def data_create(self, _handle: Any) -> dict[str, Any]:
+        return {}
+
+    def get_config_param_dtype(self, param: Any) -> Any:
+        return np.float64 if param in {"PIVOT_THRESHOLD", "PIVOT_EPSILON"} else np.int64
+
+    def config_set(self, config: dict[str, Any], param: Any, _pointer: int, size: int) -> None:
+        config[str(param)] = size
+
+    def data_get(self, *_args: Any) -> None:
+        return None
+
+    def execute(
+        self,
+        _handle: Any,
+        phase: int,
+        _config: Any,
+        _data: Any,
+        matrix_desc: Any,
+        solution_desc: Any,
+        rhs_desc: Any,
+    ) -> None:
+        if self.fail_phase == phase:
+            raise RuntimeError("simulated cuDSS failure")
+        if phase != self.Phase.SOLVE.value:
+            return
+        matrix = sparse.csr_matrix(
+            (
+                matrix_desc["values"].array,
+                matrix_desc["col_indices"].array,
+                matrix_desc["row_offsets"].array,
+            ),
+            shape=(matrix_desc["rows"], matrix_desc["cols"]),
+        )
+        rhs = rhs_desc["tensor"].array.T
+        solution = sparse.linalg.spsolve(matrix, rhs)
+        if solution.ndim == 1:
+            solution = solution[:, None]
+        solution_desc["tensor"].array[...] = solution.T
+
+    def data_destroy(self, _handle: Any, value: Any) -> None:
+        self.destroyed.append(value)
+
+    def config_destroy(self, value: Any) -> None:
+        self.destroyed.append(value)
+
+    def matrix_destroy(self, value: Any) -> None:
+        self.destroyed.append(value)
+
+    def destroy(self, value: Any) -> None:
+        self.destroyed.append(value)
+
+
+def _fake_nvmath_runtime(monkeypatch: pytest.MonkeyPatch) -> tuple[_FakeTorch, _FakeCudss]:
+    torch = _FakeTorch()
+    cudss = _FakeCudss(torch)
+    monkeypatch.setattr(cudss_linalg, "require_nvmath_cudss", lambda: (torch, cudss))
+    return torch, cudss
+
+
+def test_nvmath_cudss_solve_and_reusable_factor_with_fake_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    torch, _cudss = _fake_nvmath_runtime(monkeypatch)
+    threading_lib = tmp_path / "libcudss_mtlayer_gomp.so"
+    threading_lib.write_bytes(b"test")
+    matrix = sparse.csr_matrix(np.array([[4.0, 1.0], [1.0, 3.0]]))
+    rhs = np.array([1.0, 2.0])
+    controls = {
+        "device_ids": (0,),
+        "reordering_alg": 1,
+        "matching_alg": 2,
+        "factorization_alg": 3,
+        "solve_alg": 4,
+        "pivot_type": "row",
+        "pivot_threshold": 0.1,
+        "pivot_epsilon": 1.0e-8,
+        "pivot_epsilon_alg": 5,
+        "nd_nlevels": 2,
+        "host_nthreads": 2,
+        "threading_lib": str(threading_lib),
+        "hybrid_mode": True,
+        "hybrid_device_memory_limit": 1024,
+        "hybrid_execute_mode": False,
+        "use_cuda_register_memory": True,
+        "use_superpanels": False,
+        "deterministic_mode": True,
+    }
+
+    solution, metadata = cudss_linalg.solve_nvmath_cudss(matrix, rhs, controls=controls)
+    np.testing.assert_allclose(matrix @ solution, rhs)
+    assert metadata["serial_sparse_nvmath_cudss_device_names"] == ("Fake GPU 0",)
+    assert metadata["serial_sparse_nvmath_cudss_relative_residual"] < 1.0e-12
+
+    matrix_rhs = np.column_stack((rhs, rhs * 2.0))
+    matrix_solution, _ = cudss_linalg.solve_nvmath_cudss(
+        matrix,
+        matrix_rhs,
+        controls={"device_ids": (0, 1), "check_residual": False},
+    )
+    np.testing.assert_allclose(matrix @ matrix_solution, matrix_rhs)
+
+    factor_controls = dict(controls)
+    factor_controls["device_ids"] = (0,)
+    with cudss_linalg.NvmathCudssFactor(matrix, controls=factor_controls) as factor:
+        factor_solution = factor.solve(rhs)
+        np.testing.assert_allclose(matrix @ factor_solution, rhs)
+        factor_metadata = factor.metadata()
+        assert factor_metadata["nvmath_cudss_factor_solve_calls"] == 1
+        assert factor_metadata["nvmath_cudss_factor_device_ids"] == (0,)
+        assert torch.cuda.synced
+    factor.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        factor.solve(rhs)
+
+
+def test_nvmath_cudss_fake_runtime_validation_and_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _torch, cudss = _fake_nvmath_runtime(monkeypatch)
+    rectangular = sparse.csr_matrix(np.ones((2, 3)))
+    with pytest.raises(ValueError, match="square"):
+        cudss_linalg.solve_nvmath_cudss(rectangular, np.ones(2))
+    with pytest.raises(ValueError, match="square"):
+        cudss_linalg.NvmathCudssFactor(rectangular)
+
+    matrix = sparse.eye(2, format="csr")
+    factor = cudss_linalg.NvmathCudssFactor(matrix)
+    with pytest.raises(ValueError, match="expected vector"):
+        factor.solve(np.ones((2, 1)))
+    factor.close()
+
+    cudss.fail_phase = cudss.Phase.ANALYSIS.value
+    with pytest.raises(RuntimeError, match="analysis phase"):
+        cudss_linalg.solve_nvmath_cudss(matrix, np.ones(2))
+    with pytest.raises(RuntimeError, match="analysis phase"):
+        cudss_linalg.NvmathCudssFactor(matrix)
+
+    cudss.fail_phase = None
+    assert cudss_linalg._nvmath_cudss_relative_residual(matrix, np.zeros(2), np.zeros(2)) == 0.0
+    monkeypatch.setattr(cudss_linalg, "_nvmath_cudss_relative_residual", lambda *_args: 1.0)
+    with pytest.raises(RuntimeError, match="residual check failed"):
+        cudss_linalg.solve_nvmath_cudss(matrix, np.ones(2), controls={"residual_rtol": 1.0e-8})
+
+
+def test_nvmath_cudss_auto_threading_layer_for_host_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, str]] = []
+
+    fake_cudss = SimpleNamespace(
+        set_threading_layer=lambda handle, path: calls.append((handle, path)),
+    )
+    monkeypatch.setattr(
+        cudss_linalg,
+        "_find_nvmath_cudss_threading_lib",
+        lambda _cudss: "/tmp/libcudss_mtlayer_gomp.so.0",
+    )
+
+    handle = object()
+    threading_lib = cudss_linalg._set_nvmath_cudss_threading_layer(
+        fake_cudss,
+        handle=handle,
+        controls={"host_nthreads": 4},
+    )
+
+    assert threading_lib == "/tmp/libcudss_mtlayer_gomp.so.0"
+    assert calls == [(handle, "/tmp/libcudss_mtlayer_gomp.so.0")]
+
+    assert (
+        cudss_linalg._set_nvmath_cudss_threading_layer(
+            fake_cudss,
+            handle=object(),
+            controls={},
+        )
+        is None
+    )
+    assert calls == [(handle, "/tmp/libcudss_mtlayer_gomp.so.0")]
+
+
+def test_nvmath_cudss_rejects_host_threading_with_multi_gpu_runtime() -> None:
+    with pytest.raises(RuntimeError, match="host threading controls"):
+        cudss_linalg._validate_nvmath_cudss_runtime_controls(
+            {"host_nthreads": 4},
+            (0, 1),
+        )
+
+    cudss_linalg._validate_nvmath_cudss_runtime_controls(
+        {"host_nthreads": 4},
+        (0,),
+    )
+
+
+def test_nvmath_cudss_fem_backend_dispatches_optional_solver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSparseMatrix:
+        nnz = 1
+
+        def tocsr(self) -> FakeSparseMatrix:
+            return self
+
+        def tocsc(self) -> FakeSparseMatrix:
+            return self
+
+        def copy(self) -> FakeSparseMatrix:
+            return self
+
+    class FakeMatrix:
+        def scatter_reverse(self) -> None:
+            return None
+
+        def to_scipy(self) -> Any:
+            return FakeSparseMatrix()
+
+    vector = SimpleNamespace(
+        array=np.array([1.0]),
+        scatter_reverse=lambda _mode: None,
+    )
+    solution = SimpleNamespace(
+        x=SimpleNamespace(
+            array=np.zeros(2),
+            scatter_forward=lambda: None,
+        )
+    )
+    fem = SimpleNamespace(
+        form=lambda value: value,
+        assemble_matrix=lambda _form, bcs: FakeMatrix(),
+        assemble_vector=lambda _rhs: vector,
+        apply_lifting=lambda _array, _forms, _bcs: None,
+        set_bc=lambda _array, _bcs: None,
+        Function=lambda _space: solution,
+    )
+    la = SimpleNamespace(InsertMode=SimpleNamespace(add="add"))
+    context = SimpleNamespace(
+        mesh=SimpleNamespace(comm=SimpleNamespace(size=1)),
+        api=SimpleNamespace(fem=fem, la=la),
+    )
+    calls: dict[str, Any] = {}
+
+    def fake_solve(matrix: Any, rhs: Any, *, controls: Any) -> tuple[np.ndarray, dict[str, Any]]:
+        calls["matrix"] = matrix
+        calls["rhs"] = rhs.copy()
+        calls["controls"] = dict(controls)
+        return np.array([2.0]), {"serial_sparse_nvmath_cudss_relative_residual": 0.0}
+
+    monkeypatch.setattr(_common, "_solve_nvmath_cudss", fake_solve)
+
+    with pytest.raises(RuntimeError, match="incompatible size"):
+        _common._solve_mixed_problem_serial_direct(
+            context,
+            mixed_space=None,
+            form=None,
+            rhs=None,
+            bcs=[],
+            linear_backend="nvmath_cudss",
+            nvmath_cudss_controls={"device_ids": (1,), "dtype": "float64"},
+        )
+    assert isinstance(calls["matrix"], FakeSparseMatrix)
+    assert np.array_equal(calls["rhs"], np.array([1.0]))
+    assert calls["controls"]["device_ids"] == (1,)
+    assert calls["controls"]["dtype"] == "float64"
+    assert calls["controls"]["use_matching"] is True
+    assert calls["controls"]["ir_steps"] == 5
 
 
 @pytest.mark.parametrize(
@@ -241,3 +1466,374 @@ def test_usfem_rejects_nonpositive_stabilization_controls(
 
     with pytest.raises(ValueError, match=message):
         solve_brinkman_usfem(problem, **kwargs)
+
+
+def test_usfem_schurdiag_sparse_helpers_and_block_assembly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeMatrix:
+        def __init__(self, values: np.ndarray) -> None:
+            self.values = sparse.csr_matrix(values)
+            self.assembled = False
+
+        def assemble(self) -> None:
+            self.assembled = True
+
+        def convert(self, kind: str) -> FakeMatrix:
+            assert kind == "aij"
+            return self
+
+        def getValuesCSR(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            return self.values.indptr, self.values.indices, self.values.data
+
+        def getSize(self) -> tuple[int, int]:
+            return self.values.shape
+
+    converted = usfem_module._petsc_mat_to_csr(FakeMatrix(np.diag([2.0, 3.0])))
+    np.testing.assert_allclose(converted.toarray(), np.diag([2.0, 3.0]))
+
+    matrix = sparse.csr_matrix(([1.0e-6, 2.0, 3.0], ([0, 0, 2], [1, 0, 2])), shape=(3, 3))
+    assert usfem_module._drop_relative_by_row(matrix, 0.0) is matrix
+    dropped = usfem_module._drop_relative_by_row(matrix, 1.0e-3)
+    np.testing.assert_allclose(dropped.toarray(), np.diag([2.0, 0.0, 3.0]))
+
+    with pytest.raises(TypeError, match="rtol must be convertible"):
+        usfem_module._usfem_float_control({"rtol": object()}, "rtol", 1.0)
+    with pytest.raises(TypeError, match="max_it must be convertible"):
+        usfem_module._usfem_int_control({"max_it": object()}, "max_it", 10)
+    assert usfem_module._usfem_float_control({}, "rtol", "0.5") == 0.5
+    assert usfem_module._usfem_int_control({}, "max_it", "7") == 7
+
+    context = SimpleNamespace(mesh=SimpleNamespace(comm=SimpleNamespace(size=2)))
+    with pytest.raises(NotImplementedError, match="single-process"):
+        usfem_module._assemble_usfem_block_csr_system(context, forms=[[1]], rhs=[1], bcs=[])
+
+    matrices = [
+        [FakeMatrix(np.array([[2.0]])), FakeMatrix(np.array([[1.0]]))],
+        [FakeMatrix(np.array([[1.0]])), FakeMatrix(np.array([[-1.0]]))],
+    ]
+
+    class FakeNest:
+        def assemble(self) -> None:
+            pass
+
+        def getNestSubMatrix(self, row: int, column: int) -> FakeMatrix:
+            return matrices[row][column]
+
+    vector = SimpleNamespace(
+        array=np.array([3.0, 0.0]),
+        ghostUpdate=lambda **kwargs: kwargs,
+    )
+    petsc = SimpleNamespace(
+        PETSc=SimpleNamespace(
+            Mat=SimpleNamespace(Type=SimpleNamespace(NEST="nest")),
+            Vec=SimpleNamespace(Type=SimpleNamespace(MPI="mpi")),
+            InsertMode=SimpleNamespace(ADD="add"),
+            ScatterMode=SimpleNamespace(REVERSE="reverse"),
+        ),
+        assemble_matrix=lambda forms, **kwargs: FakeNest(),
+        assemble_vector=lambda rhs, **kwargs: vector,
+        apply_lifting=lambda *args: None,
+        set_bc=lambda *args: None,
+    )
+    api = SimpleNamespace(fem=SimpleNamespace(form=lambda value: value), petsc=petsc)
+    monkeypatch.setattr(usfem_module, "_require_dolfinx_petsc", lambda value: value)
+    context = SimpleNamespace(api=api, mesh=SimpleNamespace(comm=SimpleNamespace(size=1)))
+    blocks = usfem_module._assemble_usfem_block_csr_system(
+        context, forms=[[1, 2], [3, 4]], rhs=[5, 6], bcs=[7]
+    )
+    np.testing.assert_allclose(blocks.a00.toarray(), [[2.0]])
+    np.testing.assert_allclose(blocks.a11.toarray(), [[-1.0]])
+    np.testing.assert_allclose(blocks.rhs, [3.0, 0.0])
+
+
+def test_usfem_schurdiag_solver_happy_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blocks = SimpleNamespace(
+        a00=sparse.csr_matrix(np.diag([2.0, 3.0])),
+        a01=sparse.csr_matrix([[1.0], [1.0]]),
+        a10=sparse.csr_matrix([[1.0, 1.0]]),
+        a11=sparse.csr_matrix([[-1.0]]),
+        rhs=np.array([5.0, 9.0, 0.0]),
+    )
+    monkeypatch.setattr(
+        usfem_module, "_assemble_usfem_block_csr_system", lambda *args, **kwargs: blocks
+    )
+
+    class FakeFactor:
+        def __init__(self, matrix: sparse.csr_matrix, *, controls: object) -> None:
+            self.matrix = matrix.toarray()
+            self.solve_calls = 0
+
+        def solve(self, rhs: np.ndarray) -> np.ndarray:
+            self.solve_calls += 1
+            return np.linalg.solve(self.matrix, rhs)
+
+        def metadata(self) -> dict[str, object]:
+            return {"fake_factor_solve_calls": self.solve_calls}
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(usfem_module, "NvmathCudssFactor", FakeFactor)
+
+    class FakeFunction:
+        def __init__(self, size: int) -> None:
+            self.scatter_calls = 0
+            self.x = SimpleNamespace(array=np.zeros(size), scatter_forward=self._scatter_forward)
+
+        def _scatter_forward(self) -> None:
+            self.scatter_calls += 1
+
+    for velocity_solver in ("exact", "amg"):
+        if velocity_solver == "amg":
+
+            class FakePreconditioner:
+                def __matmul__(self, vector: np.ndarray) -> np.ndarray:
+                    return np.linalg.solve(blocks.a00.toarray(), vector)
+
+            hierarchy = SimpleNamespace(
+                levels=[object(), object()],
+                aspreconditioner=lambda **kwargs: FakePreconditioner(),
+                operator_complexity=lambda: 1.25,
+            )
+            monkeypatch.setitem(
+                sys.modules,
+                "pyamg",
+                SimpleNamespace(smoothed_aggregation_solver=lambda *args, **kwargs: hierarchy),
+            )
+
+        velocity = FakeFunction(2)
+        pressure = FakeFunction(1)
+        options = FEniCSSolverOptions.usfem_schurdiag_cudss_experimental(
+            velocity_solver=velocity_solver, schur_drop_rel=1.0e-12
+        )
+        functions, solve_seconds, metadata = usfem_module._solve_usfem_schurdiag_cudss(
+            SimpleNamespace(),
+            forms=[[1, 2], [3, 4]],
+            rhs=[5, 6],
+            bcs=[],
+            solution_functions=[velocity, pressure],
+            options=options,
+        )
+        assert functions == [velocity, pressure]
+        assert solve_seconds >= 0.0
+        np.testing.assert_allclose(velocity.x.array, [1.0, 2.0], atol=1.0e-10)
+        np.testing.assert_allclose(pressure.x.array, [3.0], atol=1.0e-10)
+        assert velocity.scatter_calls == pressure.scatter_calls == 1
+        assert metadata["usfem_schurdiag_cudss_velocity_solver"] == velocity_solver
+        assert metadata["usfem_schurdiag_cudss_gmres_info"] == 0
+        assert metadata["usfem_schurdiag_cudss_relative_residual"] < 1.0e-12
+
+
+def test_usfem_schurdiag_solver_validation_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blocks = SimpleNamespace(
+        a00=sparse.eye(2, format="csr"),
+        a01=sparse.csr_matrix((2, 1)),
+        a10=sparse.csr_matrix((1, 2)),
+        a11=-sparse.eye(1, format="csr"),
+        rhs=np.ones(3),
+    )
+    monkeypatch.setattr(
+        usfem_module, "_assemble_usfem_block_csr_system", lambda *args, **kwargs: blocks
+    )
+
+    class FakeFactor:
+        def __init__(self, matrix: object, *, controls: object) -> None:
+            pass
+
+        def solve(self, rhs: np.ndarray) -> np.ndarray:
+            return -rhs
+
+        def metadata(self) -> dict[str, object]:
+            return {}
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(usfem_module, "NvmathCudssFactor", FakeFactor)
+    functions = [
+        SimpleNamespace(x=SimpleNamespace(array=np.zeros(2))),
+        SimpleNamespace(x=SimpleNamespace(array=np.zeros(1))),
+    ]
+
+    bad_velocity = FEniCSSolverOptions.usfem_schurdiag_cudss_experimental()
+    bad_velocity.iterative_solver_controls["velocity_solver"] = "bad"
+    with pytest.raises(ValueError, match="velocity_solver"):
+        usfem_module._solve_usfem_schurdiag_cudss(
+            SimpleNamespace(),
+            forms=[],
+            rhs=[],
+            bcs=[],
+            solution_functions=functions,
+            options=bad_velocity,
+        )
+
+    options = FEniCSSolverOptions.usfem_schurdiag_cudss_experimental(velocity_solver="exact")
+    monkeypatch.setattr(usfem_module, "gmres", lambda *args, **kwargs: (np.zeros(3), 4))
+    with pytest.raises(RuntimeError, match="did not converge"):
+        usfem_module._solve_usfem_schurdiag_cudss(
+            SimpleNamespace(),
+            forms=[],
+            rhs=[],
+            bcs=[],
+            solution_functions=functions,
+            options=options,
+        )
+
+    monkeypatch.setattr(usfem_module, "gmres", lambda *args, **kwargs: (np.zeros(3), 0))
+    wrong_velocity = [SimpleNamespace(x=SimpleNamespace(array=np.zeros(1))), functions[1]]
+    with pytest.raises(RuntimeError, match="velocity block size"):
+        usfem_module._solve_usfem_schurdiag_cudss(
+            SimpleNamespace(),
+            forms=[],
+            rhs=[],
+            bcs=[],
+            solution_functions=wrong_velocity,
+            options=options,
+        )
+
+    monkeypatch.setattr(usfem_module, "gmres", lambda *args, **kwargs: (np.zeros(4), 0))
+    with pytest.raises(RuntimeError, match="incompatible solution vector size"):
+        usfem_module._solve_usfem_schurdiag_cudss(
+            SimpleNamespace(),
+            forms=[],
+            rhs=[],
+            bcs=[],
+            solution_functions=functions,
+            options=options,
+        )
+
+
+def test_fem_serial_backend_control_validation_branches() -> None:
+    with pytest.raises(ValueError, match="Unsupported SuperLU control"):
+        _common._superlu_controls_from_arguments(controls={"bad": 1})
+    assert _common._superlu_controls_from_arguments(relax=2, panel_size=4, equil=False) == {
+        "relax": 2,
+        "panel_size": 4,
+        "equil": False,
+    }
+
+    umfpack = FEniCSSolverOptions.umfpack_direct(sym_pivot_tolerance=0.2, scale="sum", block_size=8)
+    assert umfpack.umfpack_controls == {
+        "sym_pivot_tolerance": 0.2,
+        "scale": "sum",
+        "block_size": 8,
+    }
+
+    invalid_presets = (
+        ({"velocity_solver": "bad"}, "velocity_solver"),
+        ({"rtol": 0.0}, "rtol"),
+        ({"atol": -1.0}, "atol"),
+        ({"max_it": 0}, "max_it"),
+        ({"restart": 0}, "restart"),
+        ({"schur_drop_rel": -1.0}, "schur_drop_rel"),
+    )
+    for kwargs, message in invalid_presets:
+        with pytest.raises(ValueError, match=message):
+            FEniCSSolverOptions.usfem_schurdiag_cudss_experimental(**kwargs)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="Unsupported UMFPACK control"):
+        _common._normalize_umfpack_control_key("bad")
+    with pytest.raises(ValueError, match="Unsupported UMFPACK 'ordering' value"):
+        _common._resolve_umfpack_control_value(SimpleNamespace(), "ordering", "bad")
+    with pytest.raises(ValueError, match="requires unavailable constant"):
+        _common._resolve_umfpack_control_value(SimpleNamespace(), "ordering", "amd")
+    with pytest.raises(ValueError, match="requires unavailable constant"):
+        _common._apply_umfpack_controls(
+            SimpleNamespace(), SimpleNamespace(control={}), {"ordering": 1}
+        )
+    assert _common._json_safe_mapping({"object": object()})["object"].startswith("<object object")
+    with pytest.raises(ValueError, match="Unsupported SuperLU control"):
+        _common._resolve_superlu_controls({"bad": 1})
+    with pytest.raises(ValueError, match="must be positive"):
+        _common._resolve_superlu_controls({"relax": 0})
+    assert _common._resolve_superlu_controls({"panel_size": 2}) == {"panel_size": 2}
+    assert (
+        _common._set_nest_fieldsplit_is(
+            SimpleNamespace(
+                A=SimpleNamespace(getNestISs=lambda: ([], [])),
+                solver=SimpleNamespace(getPC=lambda: SimpleNamespace()),
+                u=[],
+            )
+        )
+        is False
+    )
+
+    empty_context = SimpleNamespace(
+        mesh=SimpleNamespace(
+            geometry=SimpleNamespace(x=np.empty((0, 2)), dim=2),
+            comm=SimpleNamespace(
+                Allreduce=lambda source, destination, op: destination.__setitem__(
+                    slice(None), source
+                )
+            ),
+        ),
+        api=SimpleNamespace(MPI=SimpleNamespace(MIN="min", MAX="max")),
+    )
+    origin, upper, _atol = _common._boundary_geometry(empty_context)
+    assert np.all(np.isposinf(origin))
+    assert np.all(np.isneginf(upper))
+
+
+def test_nvmath_cudss_import_threading_and_index_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True))
+    cudss = SimpleNamespace()
+    monkeypatch.setattr(
+        cudss_linalg,
+        "import_module",
+        lambda name: torch if name == "torch" else cudss,
+    )
+    assert cudss_linalg.require_nvmath_cudss() == (torch, cudss)
+
+    module_path = tmp_path / "pkg" / "nvmath" / "bindings" / "cudss.py"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text("")
+    threading_lib = tmp_path / "pkg" / "nvidia" / "cu13" / "lib" / "libcudss_mtlayer_gomp.so"
+    threading_lib.parent.mkdir(parents=True)
+    threading_lib.write_bytes(b"test")
+    assert cudss_linalg._find_nvmath_cudss_threading_lib(
+        SimpleNamespace(__file__=str(module_path))
+    ) == str(threading_lib)
+    assert cudss_linalg._find_nvmath_cudss_threading_lib(SimpleNamespace()) is None
+
+    with pytest.raises(RuntimeError, match="missing cuDSS threading"):
+        cudss_linalg._resolve_nvmath_cudss_threading_lib(
+            cudss, {"threading_lib": str(tmp_path / "missing.so")}
+        )
+    monkeypatch.setenv("CUDSS_THREADING_LIB", str(threading_lib))
+    assert cudss_linalg._resolve_nvmath_cudss_threading_lib(cudss, {"host_nthreads": 2}) == str(
+        threading_lib
+    )
+    monkeypatch.delenv("CUDSS_THREADING_LIB")
+    monkeypatch.setattr(cudss_linalg, "_find_nvmath_cudss_threading_lib", lambda _: None)
+    with pytest.raises(RuntimeError, match="no cuDSS threading layer"):
+        cudss_linalg._resolve_nvmath_cudss_threading_lib(cudss, {"host_nthreads": 2})
+
+    class OversizedCSR:
+        shape = (np.iinfo(np.int32).max + 1, np.iinfo(np.int32).max + 1)
+        nnz = 0
+
+    matrix = SimpleNamespace(tocsr=lambda: OversizedCSR())
+    fake_torch, fake_cudss = _fake_nvmath_runtime(monkeypatch)
+    with pytest.raises(ValueError, match="32-bit CSR indices"):
+        cudss_linalg.NvmathCudssFactor(matrix)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="32-bit CSR indices"):
+        cudss_linalg.solve_nvmath_cudss(matrix, np.ones(1))  # type: ignore[arg-type]
+    assert fake_torch is not None and fake_cudss is not None
+
+
+def test_nvmath_cudss_reusable_factor_multi_gpu_fake_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch, _cudss = _fake_nvmath_runtime(monkeypatch)
+    matrix = sparse.csr_matrix([[2.0]])
+    with cudss_linalg.NvmathCudssFactor(matrix, controls={"device_ids": (0, 1)}) as factor:
+        np.testing.assert_allclose(factor.solve(np.array([4.0])), [2.0])
+    assert 0 in torch.cuda.synced and 1 in torch.cuda.synced

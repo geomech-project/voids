@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import cast
 import warnings
 
 import numpy as np
 
 from voids.image.network_extraction import infer_sample_axes
+from voids.lbm.singlephase._typing import XLBOptionOverride
 from voids.physics.singlephase import FluidSinglePhase
 
 ISOTHERMAL_LATTICE_CS2 = 1.0 / 3.0
@@ -347,7 +349,7 @@ class XLBOptions:
     steady_rtol: float = 1.0e-3
 
     @classmethod
-    def steady_stokes_defaults(cls, **overrides: float | int | str) -> "XLBOptions":
+    def steady_stokes_defaults(cls, **overrides: XLBOptionOverride) -> "XLBOptions":
         """Return a conservative preset for the steady creeping-flow limit.
 
         Notes
@@ -364,7 +366,7 @@ class XLBOptions:
         preset, not as a fit to experimental permeability.
         """
 
-        values: dict[str, Any] = {
+        values: dict[str, XLBOptionOverride] = {
             "formulation": "steady_stokes_limit",
             "lattice_viscosity": 0.10,
             "pressure_drop_lattice": DEFAULT_STOKES_PRESSURE_DROP_LATTICE,
@@ -375,7 +377,8 @@ class XLBOptions:
             "steady_rtol": 1.0e-4,
         }
         values.update(overrides)
-        return cls(**values)
+        constructor = cast(Callable[..., XLBOptions], cls)
+        return constructor(**values)
 
 
 @dataclass(slots=True)

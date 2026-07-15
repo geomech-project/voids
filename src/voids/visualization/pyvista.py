@@ -1,13 +1,65 @@
 from __future__ import annotations
 
+from collections.abc import Callable, MutableMapping
 import warnings
-from typing import Any
+from typing import Protocol, cast
 
 import numpy as np
-import pyvista as pv
 
 from voids.core.network import Network
 from voids.visualization._sizing import resolve_size_values
+
+
+class _PolyDataLike(Protocol):
+    point_data: MutableMapping[str, object]
+    cell_data: MutableMapping[str, object]
+
+    def set_active_scalars(self, name: str, *, preference: str) -> object: ...
+
+    def tube(self, **kwargs: object) -> "_PolyDataLike": ...
+
+    def glyph(self, **kwargs: object) -> "_PolyDataLike": ...
+
+
+class _PlotterLike(Protocol):
+    def add_mesh(self, mesh: object, **kwargs: object) -> object: ...
+
+    def add_axes(self) -> object: ...
+
+    def show(self, *, auto_close: bool = True) -> object: ...
+
+    def screenshot(self, screenshot: str) -> object: ...
+
+
+class _PyVistaModule(Protocol):
+    def PolyData(self, *args: object, **kwargs: object) -> _PolyDataLike: ...
+
+    def Plotter(self, *args: object, **kwargs: object) -> _PlotterLike: ...
+
+    def Sphere(self, *args: object, **kwargs: object) -> object: ...
+
+
+pv: _PyVistaModule | None
+try:  # pragma: no cover - exercised when optional VTK/PyVista deps are broken
+    import pyvista as _pyvista
+except ImportError as exc:  # pragma: no cover
+    pv = None
+    _PYVISTA_IMPORT_ERROR: ImportError | None = exc
+else:
+    pv = cast(_PyVistaModule, _pyvista)
+    _PYVISTA_IMPORT_ERROR = None
+
+
+def _require_pyvista() -> _PyVistaModule:
+    """Return the PyVista module or raise a clean optional-dependency error."""
+
+    if pv is None:
+        raise ImportError(
+            "PyVista visualization requires a working 'pyvista' / VTK installation. "
+            "The import failed while loading PyVista; in Pixi environments this can "
+            "also indicate that VTK could not find the TBB runtime library."
+        ) from _PYVISTA_IMPORT_ERROR
+    return pv
 
 
 def _line_cells_from_conns(conns: np.ndarray) -> np.ndarray:
@@ -49,7 +101,7 @@ def network_to_pyvista_polydata(
     point_scalars: str | np.ndarray | None = None,
     cell_scalars: str | np.ndarray | None = None,
     include_all_numeric_fields: bool = False,
-) -> pv.PolyData:
+) -> _PolyDataLike:
     """Convert a network to ``pyvista.PolyData``.
 
     Parameters
@@ -75,9 +127,10 @@ def network_to_pyvista_polydata(
         If an explicit scalar array has the wrong shape.
     """
 
+    pyvista = _require_pyvista()
     points = np.asarray(net.pore_coords, dtype=float)
     line_cells = _line_cells_from_conns(net.throat_conns)
-    poly: pv.PolyData = pv.PolyData(points, lines=line_cells)
+    poly = pyvista.PolyData(points, lines=line_cells)
 
     poly.point_data["pore.id"] = np.arange(net.Np, dtype=np.int64)
     poly.cell_data["throat.id"] = np.arange(net.Nt, dtype=np.int64)
@@ -135,8 +188,8 @@ def plot_network_pyvista(
     screenshot: str | None = None,
     show_axes: bool = True,
     notebook: bool | None = None,
-    **add_mesh_kwargs: Any,
-) -> tuple[pv.Plotter, pv.PolyData]:
+    **add_mesh_kwargs: object,
+) -> tuple[_PlotterLike, _PolyDataLike]:
     """Render a pore network with PyVista.
 
     Parameters
@@ -196,6 +249,7 @@ def plot_network_pyvista(
     a :class:`UserWarning` is emitted to notify callers.
     """
 
+    pyvista = _require_pyvista()
     poly = network_to_pyvista_polydata(
         net,
         point_scalars=point_scalars,
@@ -205,7 +259,7 @@ def plot_network_pyvista(
 
     if notebook is None:
         notebook = False
-    pl = pv.Plotter(off_screen=off_screen, notebook=notebook)
+    pl = pyvista.Plotter(off_screen=off_screen, notebook=notebook)
 
     line_scalars_name = "throat.scalar" if "throat.scalar" in poly.cell_data else None
     point_scalars_name = "pore.scalar" if "pore.scalar" in poly.point_data else None
@@ -231,12 +285,12 @@ def plot_network_pyvista(
         )
 
     if show_lines and net.Nt > 0:
-        line_mesh = poly
+        line_mesh: _PolyDataLike = poly
         render_tubes_effective = (
             render_tubes or use_variable_throat_sizes or tube_radius is not None
         )
         if render_tubes_effective:
-            kwargs: dict[str, Any] = {}
+            kwargs: dict[str, object] = {}
             if use_variable_throat_sizes:
                 kwargs["scalars"] = "throat.render_radius"
                 kwargs["absolute"] = True
@@ -244,7 +298,8 @@ def plot_network_pyvista(
             elif tube_radius is not None:
                 kwargs["radius"] = float(tube_radius)
             try:
-                line_mesh = poly.tube(**kwargs)
+                tube = cast(Callable[..., _PolyDataLike], poly.tube)
+                line_mesh = tube(**kwargs)
             except Exception as exc:
                 line_mesh = poly
                 msg = (
@@ -257,7 +312,7 @@ def plot_network_pyvista(
                         "without the tube filter."
                     )
                 warnings.warn(msg, stacklevel=2)
-        line_kwargs: dict[str, Any] = {
+        line_kwargs: dict[str, object] = {
             "scalars": line_scalars_name,
             "show_scalar_bar": (line_scalars_name is not None),
             **add_mesh_kwargs,
@@ -266,15 +321,16 @@ def plot_network_pyvista(
             line_kwargs["line_width"] = line_width_value
             # Use line-tube approximation when tubes were requested but unavailable.
             line_kwargs["render_lines_as_tubes"] = render_tubes_effective
-        pl.add_mesh(line_mesh, **line_kwargs)
+        add_mesh = cast(Callable[..., object], pl.add_mesh)
+        add_mesh(line_mesh, **line_kwargs)
 
     if show_points and net.Np > 0:
         if use_variable_point_sizes:
-            point_mesh = pv.PolyData(np.asarray(net.pore_coords, dtype=float))
+            point_mesh = pyvista.PolyData(np.asarray(net.pore_coords, dtype=float))
             point_mesh.point_data["pore.render_diameter"] = poly.point_data["pore.render_diameter"]
             if point_scalars_name is not None:
                 point_mesh.point_data[point_scalars_name] = poly.point_data[point_scalars_name]
-            sphere = pv.Sphere(radius=0.5)
+            sphere = pyvista.Sphere(radius=0.5)
             point_mesh = point_mesh.glyph(
                 scale="pore.render_diameter",
                 orient=False,

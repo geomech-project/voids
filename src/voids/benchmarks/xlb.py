@@ -8,7 +8,13 @@ for backward compatibility with older notebooks.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import csv
+import json
+import time
+import warnings
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -40,6 +46,7 @@ from voids.lbm.singlephase.xlb import (
     _resolve_lattice_pressure_bc as _resolve_lattice_pressure_bc,
     _superficial_velocity_profile as _superficial_velocity_profile,
 )
+from voids.image.porosity import PorosityMap
 from voids.physics.petrophysics import absolute_porosity, effective_porosity
 from voids.physics.singlephase import (
     FluidSinglePhase,
@@ -48,6 +55,7 @@ from voids.physics.singlephase import (
     SinglePhaseResult,
     solve,
 )
+from voids.visualization.fields import plot_vector_midplanes, write_structured_vector_field
 
 
 def solve_binary_volume_with_xlb(
@@ -256,6 +264,207 @@ def benchmark_segmented_volume_with_xlb(
     )
 
 
+def _write_csv_records(
+    path: str | Path,
+    rows: Sequence[dict[str, object]],
+    *,
+    columns: Sequence[str],
+) -> None:
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(columns))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def export_xlb_direct_simulation_artifacts(
+    phases: np.ndarray,
+    *,
+    voxel_size: float,
+    flow_axes: Sequence[str],
+    options: XLBOptions,
+    output_dir: str | Path,
+    output_prefix: str,
+    sample_name: str,
+    m2_per_md: float,
+    directional_path: str | Path | None = None,
+    status_path: str | Path | None = None,
+    field_outputs_path: str | Path | None = None,
+    quiver_stride: int = 8,
+) -> list[dict[str, object]]:
+    """Run direct-image XLB solves and export benchmark artifacts.
+
+    This helper is intentionally process-friendly: notebooks can call it from a
+    short-lived Python worker so JAX/XLB GPU allocations are released before
+    other GPU solvers, such as cuDSS-backed FEM, run in the main notebook kernel.
+    """
+
+    arr = _as_binary_volume(phases)
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    directional_destination = (
+        Path(directional_path)
+        if directional_path is not None
+        else destination / f"{output_prefix}_xlb_lbm_directional.csv"
+    )
+    status_destination = (
+        Path(status_path)
+        if status_path is not None
+        else destination / f"{output_prefix}_xlb_lbm_status.json"
+    )
+    field_outputs_destination = (
+        Path(field_outputs_path)
+        if field_outputs_path is not None
+        else destination / f"{output_prefix}_xlb_lbm_field_outputs.csv"
+    )
+
+    method = "Direct-image LBM DNS (XLB, Stokes-limit preset)"
+    family = "direct_image_dns"
+    grid = PorosityMap(
+        values=np.asarray(arr, dtype=float),
+        cell_size=(float(voxel_size),) * arr.ndim,
+        metadata={
+            "field_role": "voxel_grid_for_direct_image_lbm_exports",
+            "phase_convention": "1=void_or_pore, 0=solid",
+        },
+    )
+
+    directional_columns = [
+        "family",
+        "formulation",
+        "method",
+        "solver_backend",
+        "axis",
+        "K_m2",
+        "K_mD",
+        "solve_seconds",
+        "xlb_steps",
+        "xlb_converged",
+        "xlb_convergence_metric",
+        "xlb_mach_max",
+        "xlb_re_voxel_max",
+        "xlb_lattice_viscosity",
+        "xlb_pressure_drop_lattice",
+        "warning_count",
+        "warnings",
+    ]
+    field_columns = ["family", "formulation", "method", "axis", "field", "kind", "path"]
+
+    directional_rows: list[dict[str, object]] = []
+    field_rows: list[dict[str, object]] = []
+    status: dict[str, object] = {
+        "status": "ok",
+        "options": asdict(options),
+        "runs": [],
+    }
+
+    def write_progress() -> None:
+        _write_csv_records(
+            directional_destination,
+            directional_rows,
+            columns=directional_columns,
+        )
+        _write_csv_records(
+            field_outputs_destination,
+            field_rows,
+            columns=field_columns,
+        )
+        status_destination.write_text(json.dumps(status, indent=2), encoding="utf-8")
+
+    try:
+        for axis in flow_axes:
+            start = time.perf_counter()
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                result = solve_binary_volume_with_xlb(
+                    arr,
+                    voxel_size=voxel_size,
+                    flow_axis=axis,
+                    options=options,
+                )
+            formulation = f"xlb_{result.formulation}"
+            solve_seconds = float(time.perf_counter() - start)
+            directional_rows.append(
+                {
+                    "family": family,
+                    "formulation": formulation,
+                    "method": method,
+                    "solver_backend": f"xlb:{result.backend}",
+                    "axis": axis,
+                    "K_m2": float(result.permeability),
+                    "K_mD": float(result.permeability / m2_per_md),
+                    "solve_seconds": solve_seconds,
+                    "xlb_steps": int(result.n_steps),
+                    "xlb_converged": bool(result.converged),
+                    "xlb_convergence_metric": float(result.convergence_metric),
+                    "xlb_mach_max": float(result.max_mach_lattice),
+                    "xlb_re_voxel_max": float(result.reynolds_voxel_max),
+                    "xlb_lattice_viscosity": float(result.lattice_viscosity),
+                    "xlb_pressure_drop_lattice": float(result.lattice_pressure_drop),
+                    "warning_count": int(len(caught)),
+                    "warnings": "; ".join(str(item.message) for item in caught),
+                }
+            )
+
+            vtu_path = destination / f"{output_prefix}_xlb_lbm_velocity_{axis}.vtu"
+            write_structured_vector_field(
+                result.velocity_lattice,
+                grid,
+                vtu_path,
+                extra_cell_data={"axial_velocity_lattice": result.axial_velocity_lattice},
+            )
+            field_rows.append(
+                {
+                    "family": family,
+                    "formulation": formulation,
+                    "method": method,
+                    "axis": axis,
+                    "field": "velocity",
+                    "kind": "paraview_vtu",
+                    "path": str(vtu_path),
+                }
+            )
+
+            plot_path = destination / f"{output_prefix}_xlb_lbm_velocity_midplanes_{axis}.png"
+            plot_vector_midplanes(
+                result.velocity_lattice,
+                title=f"{sample_name} XLB/LBM velocity, flow {axis}",
+                path=plot_path,
+                quiver_stride=quiver_stride,
+                colorbar_label="velocity magnitude [lattice units]",
+            )
+            field_rows.append(
+                {
+                    "family": family,
+                    "formulation": formulation,
+                    "method": method,
+                    "axis": axis,
+                    "field": "velocity",
+                    "kind": "midplane_quiver_png",
+                    "path": str(plot_path),
+                }
+            )
+
+            runs = status["runs"]
+            if isinstance(runs, list):
+                runs.append(
+                    {
+                        "axis": axis,
+                        "status": "ok",
+                        "solve_seconds": solve_seconds,
+                    }
+                )
+            write_progress()
+    except Exception as exc:
+        status["status"] = "failed"
+        status["message"] = f"{type(exc).__name__}: {exc}"
+        write_progress()
+        raise
+
+    return directional_rows
+
+
 __all__ = [
     "DEFAULT_PRESSURE_DROP_LATTICE",
     "DEFAULT_REFERENCE_DENSITY_LATTICE",
@@ -267,5 +476,6 @@ __all__ = [
     "XLBDirectSimulationResult",
     "XLBOptions",
     "benchmark_segmented_volume_with_xlb",
+    "export_xlb_direct_simulation_artifacts",
     "solve_binary_volume_with_xlb",
 ]

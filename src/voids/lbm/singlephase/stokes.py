@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 
 from voids.lbm.singlephase.xlb import (
@@ -10,9 +8,10 @@ from voids.lbm.singlephase.xlb import (
     XLBOptions,
     solve_binary_volume_with_xlb,
 )
+from voids.lbm.singlephase._typing import XLBOptionOverride
 
 
-def steady_stokes_options(**overrides: Any) -> XLBOptions:
+def steady_stokes_options(**overrides: XLBOptionOverride) -> XLBOptions:
     """Return XLB options configured for the steady Stokes-limit formulation."""
 
     return XLBOptions.steady_stokes_defaults(**overrides)

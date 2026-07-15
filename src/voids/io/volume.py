@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import struct
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import h5py
 import numpy as np
@@ -13,6 +13,7 @@ import tifffile
 from scipy.io import netcdf_file
 from skimage import measure
 
+from voids._typing import JsonObject, JsonValue
 from voids.image._utils import normalize_shape
 
 _VOLUME_SCHEMA_VERSION = "voids.volume.v1"
@@ -59,7 +60,7 @@ class SurfaceMesh:
 
     vertices: np.ndarray
     faces: np.ndarray
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: JsonObject = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate and normalize mesh arrays."""
@@ -102,7 +103,7 @@ class VolumeData:
     values: np.ndarray
     voxel_size: float | Sequence[float] = 1.0
     units: dict[str, str] = field(default_factory=lambda: {"length": "voxel"})
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: JsonObject = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate the array and normalize physical spacing metadata."""
@@ -127,7 +128,7 @@ class VolumeData:
         return tuple(int(v) for v in self.values.shape)
 
 
-def _json_default(value: Any) -> Any:
+def _json_default(value: object) -> object:
     if isinstance(value, np.ndarray):
         return value.tolist()
     if isinstance(value, np.integer):
@@ -139,8 +140,62 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
 
 
-def _json_dumps(value: Any) -> str:
+def _json_dumps(value: object) -> str:
     return json.dumps(value, default=_json_default, sort_keys=True)
+
+
+def _json_value(value: object) -> JsonValue:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [_json_value(item) for item in value]
+    raise ValueError(f"volume metadata contains non-JSON value {type(value).__name__!r}")
+
+
+def _json_object(value: object, *, name: str = "volume metadata") -> JsonObject:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} must be a JSON object")
+    return {str(key): _json_value(item) for key, item in value.items()}
+
+
+def _metadata_sequence(value: object, *, name: str) -> tuple[JsonValue, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        raise ValueError(f"{name} must be a JSON array")
+    return tuple(_json_value(item) for item in value)
+
+
+def _metadata_string_mapping(value: object, *, name: str) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} must be a JSON object")
+    return {str(key): str(item) for key, item in value.items()}
+
+
+def _metadata_shape(value: object, *, name: str) -> tuple[int, ...]:
+    shape: list[int] = []
+    for item in _metadata_sequence(value, name=name):
+        if not isinstance(item, int) or isinstance(item, bool):
+            raise ValueError(f"{name} entries must be integers")
+        shape.append(int(item))
+    return tuple(shape)
+
+
+def _metadata_dtype(value: object, *, name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string")
+    return value
+
+
+def _metadata_voxel_size(value: object, *, name: str) -> float | tuple[float, ...]:
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    sizes: list[float] = []
+    for item in _metadata_sequence(value, name=name):
+        if not isinstance(item, int | float) or isinstance(item, bool):
+            raise ValueError(f"{name} entries must be numeric")
+        sizes.append(float(item))
+    return tuple(sizes)
 
 
 def _normalize_format(path: str | Path, file_format: str | None) -> str:
@@ -191,7 +246,7 @@ def _binary_volume_mask(
     return arr.astype(bool, copy=False)
 
 
-def _ensure_integer_dtype_restore(values: np.ndarray, target_dtype: np.dtype[Any]) -> None:
+def _ensure_integer_dtype_restore(values: np.ndarray, target_dtype: np.dtype[np.integer]) -> None:
     supported_source = (
         values.dtype == np.dtype(bool)
         or np.issubdtype(values.dtype, np.integer)
@@ -211,7 +266,7 @@ def _ensure_integer_dtype_restore(values: np.ndarray, target_dtype: np.dtype[Any
 
 def _restore_metadata_dtype(
     values: np.ndarray,
-    stored_metadata: dict[str, Any],
+    stored_metadata: JsonObject,
     *,
     dtype_was_explicit: bool,
 ) -> np.ndarray:
@@ -220,13 +275,15 @@ def _restore_metadata_dtype(
     dtype_name = stored_metadata.get("dtype")
     if dtype_name is None:
         return values
+    if not isinstance(dtype_name, str):
+        raise ValueError("volume metadata dtype must be a string")
     target_dtype = np.dtype(dtype_name)
     if values.dtype == target_dtype:
         return values
     if target_dtype == np.dtype(bool):
         return _binary_volume_mask(values, allowed_ndim=(2, 3))
     if np.issubdtype(target_dtype, np.integer):
-        _ensure_integer_dtype_restore(values, target_dtype)
+        _ensure_integer_dtype_restore(values, cast(np.dtype[np.integer], target_dtype))
         return values.astype(target_dtype, copy=False)
     if np.can_cast(values.dtype, target_dtype, casting="same_kind"):
         return values.astype(target_dtype, copy=False)
@@ -241,7 +298,7 @@ def _raw_sidecar_path(path: Path) -> Path:
     return _volume_sidecar_path(path)
 
 
-def _metadata_from_json(value: Any) -> dict[str, Any]:
+def _metadata_from_json(value: object) -> JsonObject:
     if value is None:
         return {}
     if isinstance(value, np.ndarray):
@@ -255,9 +312,7 @@ def _metadata_from_json(value: Any) -> dict[str, Any]:
     if not text:
         return {}
     loaded = json.loads(text)
-    if not isinstance(loaded, dict):
-        raise ValueError("volume metadata must be a JSON object")
-    return cast(dict[str, Any], loaded)
+    return _json_object(loaded)
 
 
 def _load_volume_metadata(
@@ -266,7 +321,7 @@ def _load_volume_metadata(
     *,
     hdf5_dataset: str = "volume",
     netcdf_variable: str = "volume",
-) -> dict[str, Any]:
+) -> JsonObject:
     if fmt in {"raw", "npy", "tiff"}:
         sidecar = _volume_sidecar_path(path)
         if sidecar.exists():
@@ -288,11 +343,11 @@ def _load_volume_metadata(
 def _volume_metadata(
     volume: np.ndarray,
     *,
-    metadata: dict[str, Any] | None,
+    metadata: JsonObject | None,
     voxel_size: float | Sequence[float],
     units: dict[str, str],
-    stored_dtype: np.dtype[Any] | None = None,
-) -> dict[str, Any]:
+    stored_dtype: np.dtype[np.generic] | None = None,
+) -> JsonObject:
     arr = np.asarray(volume)
     spacing = _normalize_voxel_size(voxel_size, ndim=arr.ndim)
     return {
@@ -310,13 +365,13 @@ def _volume_metadata(
 def _coerce_volume_input(
     volume: VolumeData | np.ndarray,
     *,
-    metadata: dict[str, Any] | None,
+    metadata: JsonObject | None,
     voxel_size: float | Sequence[float] | None,
     units: dict[str, str] | None,
-) -> tuple[np.ndarray, tuple[float, ...], dict[str, str], dict[str, Any]]:
+) -> tuple[np.ndarray, tuple[float, ...], dict[str, str], JsonObject]:
     if isinstance(volume, VolumeData):
         arr = np.asarray(volume.values)
-        resolved_metadata = dict(volume.metadata)
+        resolved_metadata: JsonObject = dict(volume.metadata)
         resolved_spacing = _normalize_voxel_size(
             volume.voxel_size if voxel_size is None else voxel_size,
             ndim=arr.ndim,
@@ -341,8 +396,8 @@ def save_volume(
     path: str | Path,
     *,
     file_format: str | None = None,
-    metadata: dict[str, Any] | None = None,
-    raw_dtype: str | np.dtype[Any] | None = None,
+    metadata: JsonObject | None = None,
+    raw_dtype: str | np.dtype[np.generic] | None = None,
     hdf5_dataset: str = "volume",
     netcdf_variable: str = "volume",
     voxel_size: float | Sequence[float] | None = None,
@@ -500,7 +555,7 @@ def load_volume(
     *,
     file_format: str | None = None,
     shape: Sequence[int] | None = None,
-    dtype: str | np.dtype[Any] | None = None,
+    dtype: str | np.dtype[np.generic] | None = None,
     hdf5_dataset: str = "volume",
     netcdf_variable: str = "volume",
 ) -> np.ndarray:
@@ -511,11 +566,19 @@ def load_volume(
 
     if fmt == "raw":
         sidecar_metadata = _load_volume_metadata(source, fmt)
-        resolved_shape = tuple(int(v) for v in (shape or sidecar_metadata.get("shape", ())))
+        resolved_shape = (
+            tuple(int(v) for v in shape)
+            if shape is not None
+            else _metadata_shape(sidecar_metadata.get("shape", ()), name="volume metadata shape")
+        )
         if not resolved_shape:
             raise ValueError("shape is required to load raw volume without sidecar metadata")
         normalize_shape(resolved_shape, allowed_ndim=(2, 3))
-        resolved_dtype = np.dtype(dtype or sidecar_metadata.get("stored_dtype", np.uint8))
+        stored_dtype = _metadata_dtype(
+            sidecar_metadata.get("stored_dtype", str(np.dtype(np.uint8))),
+            name="volume metadata stored_dtype",
+        )
+        resolved_dtype = np.dtype(dtype if dtype is not None else stored_dtype)
         data = np.fromfile(source, dtype=resolved_dtype)
         expected = int(np.prod(np.asarray(resolved_shape, dtype=np.int64)))
         if data.size != expected:
@@ -552,12 +615,12 @@ def load_volume_data(
     *,
     file_format: str | None = None,
     shape: Sequence[int] | None = None,
-    dtype: str | np.dtype[Any] | None = None,
+    dtype: str | np.dtype[np.generic] | None = None,
     hdf5_dataset: str = "volume",
     netcdf_variable: str = "volume",
     voxel_size: float | Sequence[float] | None = None,
     units: dict[str, str] | None = None,
-    metadata: dict[str, Any] | None = None,
+    metadata: JsonObject | None = None,
 ) -> VolumeData:
     """Load a volume together with voxel spacing, units, and metadata.
 
@@ -587,14 +650,27 @@ def load_volume_data(
         stored_metadata,
         dtype_was_explicit=dtype is not None,
     )
-    resolved_metadata = dict(stored_metadata.get("metadata", {}))
+    resolved_metadata = _json_object(
+        stored_metadata.get("metadata", {}),
+        name="volume metadata.metadata",
+    )
     if metadata:
         resolved_metadata.update(metadata)
-    resolved_units = dict(
-        units if units is not None else stored_metadata.get("units", {"length": "voxel"})
+    resolved_units = (
+        dict(units)
+        if units is not None
+        else _metadata_string_mapping(
+            stored_metadata.get("units", {"length": "voxel"}),
+            name="volume metadata units",
+        )
     )
     resolved_voxel_size = (
-        voxel_size if voxel_size is not None else stored_metadata.get("voxel_size", 1.0)
+        voxel_size
+        if voxel_size is not None
+        else _metadata_voxel_size(
+            stored_metadata.get("voxel_size", 1.0),
+            name="volume metadata voxel_size",
+        )
     )
     return VolumeData(
         values=values,
@@ -683,7 +759,7 @@ def save_volume_bundle(
     *,
     stem: str = "synthetic_case",
     formats: Sequence[str] = ("raw", "npy", "h5", "stl", "obj"),
-    metadata: dict[str, Any] | None = None,
+    metadata: JsonObject | None = None,
     voxel_size: float | Sequence[float] | None = None,
     units: dict[str, str] | None = None,
 ) -> dict[str, Path]:

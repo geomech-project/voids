@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import voids.visualization as visualization_mod
+from voids.visualization import pyvista as pyvista_mod
 from voids.visualization._sizing import resolve_size_values, scale_sizes_to_pixels
 from voids.visualization.plotly import _rgb_with_opacity, plot_network_plotly
 from voids.visualization.pyvista import (
@@ -15,6 +17,19 @@ from voids.visualization.pyvista import (
     plot_network_pyvista,
 )
 from voids.simulators.run_singlephase import main
+
+
+def test_visualization_lazy_exports_and_missing_pyvista_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert callable(visualization_mod.__getattr__("network_to_pyvista_polydata"))
+    assert callable(visualization_mod.__getattr__("plot_network_pyvista"))
+    with pytest.raises(AttributeError, match="has no attribute"):
+        visualization_mod.__getattr__("missing")
+
+    monkeypatch.setattr(pyvista_mod, "pv", None)
+    with pytest.raises(ImportError, match="PyVista visualization requires"):
+        pyvista_mod._require_pyvista()
 
 
 def test_plotly_validates_scalar_inputs_and_sampling(line_network) -> None:

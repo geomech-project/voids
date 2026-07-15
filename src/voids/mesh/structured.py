@@ -3,10 +3,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal, cast
 
 import numpy as np
 
+from voids.mesh._typing import MeshIOModule
 from voids.image.porosity import PermeabilityMap, PorosityMap
 
 MapMeshElement = Literal["auto", "quad", "triangle", "hexahedron", "tetra", "tetrahedron"]
@@ -56,7 +57,7 @@ class StructuredMapMesh:
 
         return int(self.cells[0][1].shape[0])
 
-    def to_meshio(self, *, include_cell_data: bool = True) -> Any:
+    def to_meshio(self, *, include_cell_data: bool = True) -> object:
         """Return a ``meshio.Mesh`` object.
 
         Parameters
@@ -308,7 +309,7 @@ def write_structured_map_meshes(
     return paths
 
 
-def _import_meshio() -> Any:
+def _import_meshio() -> MeshIOModule:
     try:
         import meshio  # type: ignore[import-untyped]
     except ImportError as exc:  # pragma: no cover - exercised only without optional dep
@@ -316,7 +317,7 @@ def _import_meshio() -> Any:
             "Structured mesh export requires meshio. Install it with "
             "`pip install meshio` or use the Pixi environment."
         ) from exc
-    return meshio
+    return cast(MeshIOModule, meshio)
 
 
 def _validate_map_grid(map_obj: PorosityMap | PermeabilityMap) -> None:
@@ -553,7 +554,7 @@ def _write_mesh(
     return destination
 
 
-def _as_netgen_geometry_mesh(mesh: StructuredMapMesh) -> Any:
+def _as_netgen_geometry_mesh(mesh: StructuredMapMesh) -> object:
     """Return a Netgen-safe meshio mesh with geometry and one integer cell tag."""
 
     meshio = _import_meshio()

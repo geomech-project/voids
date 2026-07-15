@@ -9,6 +9,8 @@ import pytest
 from scipy import sparse
 
 import voids.linalg.solve as solve_mod
+from voids.core import provenance as provenance_mod
+from voids.core import sample as sample_mod
 from voids._logging import logger
 from voids._testing import set_seed
 from voids.core.sample import SampleGeometry
@@ -43,6 +45,44 @@ def test_set_seed_resets_python_and_numpy_rngs() -> None:
     second = (random.random(), float(np.random.random()))
 
     assert first == second
+
+
+def test_metadata_conversion_helpers_cover_scalar_tuple_and_invalid_values() -> None:
+    assert provenance_mod._voxel_size_original(None) is None
+    assert provenance_mod._voxel_size_original(2) == 2.0
+    assert provenance_mod._voxel_size_original([1, "2", 3.0]) == (1.0, 2.0, 3.0)
+    assert provenance_mod._voxel_size_original("bad") is None
+    with pytest.raises(TypeError, match="Expected numeric metadata"):
+        provenance_mod._float_value({})
+
+    assert sample_mod._scalar_or_tuple(None) is None
+    assert sample_mod._scalar_or_tuple("2") == 2.0
+    assert sample_mod._scalar_or_tuple([1, "2", 3.0]) == (1.0, 2.0, 3.0)
+    assert sample_mod._scalar_or_tuple([1, 2]) is None
+    with pytest.raises(TypeError, match="Expected numeric metadata"):
+        sample_mod._float_value({})
+
+
+def test_sparse_solver_control_helper_validation_and_forwarding() -> None:
+    with pytest.raises(ValueError, match="dtype"):
+        solve_mod._resolve_linear_system_dtype(1)
+    with pytest.raises(ValueError, match="dtype"):
+        solve_mod._resolve_linear_system_dtype("not-a-dtype")
+    assert solve_mod._superlu_kwargs(
+        {
+            "permc_spec": "COLAMD",
+            "diag_pivot_thresh": 0.5,
+            "relax": 4,
+            "panel_size": 8,
+            "equil": False,
+        }
+    ) == {
+        "permc_spec": "COLAMD",
+        "diag_pivot_thresh": 0.5,
+        "relax": 4,
+        "panel_size": 8,
+        "options": {"Equil": False},
+    }
 
 
 def test_sample_geometry_resolves_tuple_voxel_volume() -> None:
@@ -103,7 +143,7 @@ def test_scipy_backend_exports_expected_callables() -> None:
     assert SCIPY.gmres is not None
 
 
-@pytest.mark.parametrize("method", ["direct", "cg", "gmres"])
+@pytest.mark.parametrize("method", ["direct", "superlu", "cg", "gmres"])
 def test_solve_linear_system_supports_all_methods(method: str) -> None:
     """Test all supported linear-solver backends on an identity system."""
 
@@ -115,6 +155,39 @@ def test_solve_linear_system_supports_all_methods(method: str) -> None:
     assert np.allclose(x, b)
     assert info["method"] == method
     assert info["info"] == 0
+    assert info["linear_system_dtype"] == "float64"
+
+
+@pytest.mark.parametrize("method", ["direct", "superlu", "cg", "gmres"])
+def test_solve_linear_system_supports_cpu_single_precision(method: str) -> None:
+    """Portable CPU sparse backends can factor or iterate on float32 values."""
+
+    A = sparse.csr_matrix(np.array([[3.0, -1.0], [-1.0, 3.0]], dtype=np.float64))
+    b = np.array([2.0, 4.0], dtype=np.float64)
+
+    x, info = solve_linear_system(
+        A,
+        b,
+        method=method,
+        solver_parameters={"dtype": "float32"},
+    )
+
+    assert x.dtype == np.dtype("float32")
+    assert np.allclose(A @ x, b, rtol=5.0e-6, atol=5.0e-7)
+    assert info["method"] == method
+    assert info["info"] == 0
+    assert info["linear_system_dtype"] == "float32"
+
+
+def test_solve_linear_system_rejects_unsupported_dtype() -> None:
+    """Precision selection is intentionally limited to real single/double values."""
+
+    with pytest.raises(ValueError, match="dtype must be 'float32' or 'float64'"):
+        solve_linear_system(
+            sparse.csr_matrix(np.eye(2)),
+            np.array([1.0, 2.0]),
+            solver_parameters={"dtype": "float16"},
+        )
 
 
 def test_solve_linear_system_umfpack_available_or_raises_import_error() -> None:
@@ -317,7 +390,66 @@ def test_solve_linear_system_pardiso_success_metadata_with_fake_backend(
     x, info = solve_linear_system(A, b, method="pardiso")
 
     assert np.allclose(A @ x, b)
-    assert info == {"method": "pardiso", "backend": "pypardiso", "info": 0}
+    assert info == {
+        "method": "pardiso",
+        "backend": "pypardiso",
+        "info": 0,
+        "linear_system_dtype": "float64",
+    }
+
+
+@pytest.mark.parametrize("method", ["umfpack", "pardiso"])
+def test_solve_linear_system_rejects_float32_for_double_only_wrappers(method: str) -> None:
+    """Some optional CPU wrappers expose only double precision at runtime."""
+
+    with pytest.raises(ValueError, match="supports float64 only"):
+        solve_linear_system(
+            sparse.csr_matrix(np.eye(2)),
+            np.array([1.0, 2.0]),
+            method=method,
+            solver_parameters={"dtype": "float32"},
+        )
+
+
+def test_solve_linear_system_nvmath_cudss_dispatches_shared_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CUDA direct backend is exposed through the shared sparse solver API."""
+
+    calls: dict[str, object] = {}
+
+    def fake_solve_nvmath_cudss(
+        matrix: sparse.spmatrix,
+        rhs: np.ndarray,
+        *,
+        controls: object = None,
+    ) -> tuple[np.ndarray, dict[str, object]]:
+        calls["matrix_format"] = matrix.getformat()
+        calls["rhs"] = rhs.copy()
+        calls["controls"] = dict(controls or {})
+        return np.asarray(sparse.linalg.spsolve(matrix, rhs), dtype=float), {
+            "serial_sparse_nvmath_cudss_relative_residual": 0.0,
+        }
+
+    monkeypatch.setattr(solve_mod, "solve_nvmath_cudss", fake_solve_nvmath_cudss)
+
+    A = sparse.csr_matrix(np.array([[3.0, -1.0], [-1.0, 3.0]]))
+    b = np.array([2.0, 4.0])
+    x, info = solve_linear_system(
+        A,
+        b,
+        method="nvmath_cudss",
+        solver_parameters={"device_ids": (0,), "dtype": "float64"},
+    )
+
+    assert np.allclose(A @ x, b)
+    assert calls["matrix_format"] == "csr"
+    assert np.array_equal(calls["rhs"], b)
+    assert calls["controls"] == {"device_ids": (0,), "dtype": "float64"}
+    assert info["method"] == "nvmath_cudss"
+    assert info["backend"] == "nvmath.bindings.cudss"
+    assert info["info"] == 0
+    assert info["serial_sparse_nvmath_cudss_relative_residual"] == 0.0
 
 
 def test_solve_linear_system_umfpack_produces_same_result_as_direct() -> None:

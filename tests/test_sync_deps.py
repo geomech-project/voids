@@ -71,6 +71,49 @@ def test_project_targets_are_generated_from_core_feature_and_platform_tables() -
     ]
 
 
+def test_cuda_platform_targets_use_base_platform_markers_and_dedupe() -> None:
+    module = _load_sync_deps_module()
+
+    pixi_data = {
+        "feature": {
+            "core": {
+                "dependencies": {
+                    "numpy": "*",
+                },
+            },
+        },
+        "target": {
+            "linux-64": {
+                "dependencies": {"mkl": ">=2023"},
+                "pypi-dependencies": {"pypardiso": ">=0.4"},
+            },
+            "linux-64-cuda": {
+                "dependencies": {"mkl": ">=2023"},
+                "pypi-dependencies": {"pypardiso": ">=0.4"},
+            },
+            "win-64-cuda": {
+                "dependencies": {"mkl": ">=2023"},
+            },
+        },
+    }
+
+    targets, empty_features = module._sync_targets_from_pixi(pixi_data)
+
+    assert empty_features == ["core"]
+    assert targets == [
+        module.SyncTarget(
+            section="project",
+            key="dependencies",
+            requirements=(
+                "numpy",
+                "mkl>=2023; sys_platform == 'linux'",
+                "pypardiso>=0.4; sys_platform == 'linux'",
+                "mkl>=2023; sys_platform == 'win32'",
+            ),
+        )
+    ]
+
+
 def test_feature_targets_are_generated_from_pixi_features_with_policy_exceptions() -> None:
     module = _load_sync_deps_module()
 
@@ -125,6 +168,34 @@ def test_feature_targets_are_generated_from_pixi_features_with_policy_exceptions
         "pyamg>=5.3",
     )
     assert empty_features == ["core", "docs", "fem"]
+
+
+def test_feature_platforms_mark_gpu_extra_and_exclude_cuda_version() -> None:
+    module = _load_sync_deps_module()
+
+    pixi_data = {
+        "feature": {
+            "gpu": {
+                "platforms": ["linux-64-cuda", "win-64-cuda"],
+                "dependencies": {
+                    "cuda-version": "12.6.*",
+                    "nvmath-python": "*",
+                },
+                "pypi-dependencies": {
+                    "torch-sla": {"version": "*", "extras": ["all"]},
+                },
+            },
+        }
+    }
+
+    targets, empty_features = module._sync_targets_from_pixi(pixi_data)
+
+    rendered = {(target.section, target.key): target.requirements for target in targets}
+    assert empty_features == []
+    assert rendered[("project.optional-dependencies", "gpu")] == (
+        "nvmath-python; sys_platform == 'linux' or sys_platform == 'win32'",
+        "torch-sla[all]; sys_platform == 'linux' or sys_platform == 'win32'",
+    )
 
 
 def test_sync_pyproject_text_removes_empty_conda_only_feature_extras() -> None:

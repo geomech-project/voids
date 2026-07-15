@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 
+from voids.benchmarks._typing import BenchmarkDetailValue
 from voids.benchmarks._shared import (
     make_benchmark_pressure_bc,
     resolve_benchmark_pressures,
@@ -19,6 +20,20 @@ from voids.image.network_extraction import (
     NetworkExtractionResult,
     extract_spanning_pore_network,
 )
+
+
+def _detail_float(details: Mapping[str, BenchmarkDetailValue], key: str) -> float:
+    value = details[key]
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"benchmark detail {key!r} must be numeric")
+    return float(value)
+
+
+def _detail_int(details: Mapping[str, BenchmarkDetailValue], key: str) -> int:
+    value = details[key]
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"benchmark detail {key!r} must be integral")
+    return int(value)
 
 
 def _as_binary_volume(phases: np.ndarray) -> np.ndarray:
@@ -91,7 +106,7 @@ class SegmentedVolumeCrosscheckResult:
     effective_porosity: float
     summary: SinglePhaseCrosscheckSummary
 
-    def to_record(self) -> dict[str, Any]:
+    def to_record(self) -> dict[str, BenchmarkDetailValue]:
         """Return scalar diagnostics suitable for tabulation."""
 
         details = dict(self.summary.details)
@@ -102,16 +117,16 @@ class SegmentedVolumeCrosscheckResult:
             "phi_eff": float(self.effective_porosity),
             "Np": int(self.extract.net.Np),
             "Nt": int(self.extract.net.Nt),
-            "k_voids": float(details["k_voids"]),
-            "k_openpnm": float(details["k_ref"]),
+            "k_voids": _detail_float(details, "k_voids"),
+            "k_openpnm": _detail_float(details, "k_ref"),
             "k_abs_diff": float(self.summary.permeability_abs_diff),
             "k_rel_diff": float(self.summary.permeability_rel_diff),
-            "Q_voids": float(details["Q_voids"]),
-            "Q_openpnm": float(details["Q_ref"]),
+            "Q_voids": _detail_float(details, "Q_voids"),
+            "Q_openpnm": _detail_float(details, "Q_ref"),
             "Q_abs_diff": float(self.summary.total_flow_abs_diff),
             "Q_rel_diff": float(self.summary.total_flow_rel_diff),
-            "n_inlet_pores": int(details["n_inlet_pores"]),
-            "n_outlet_pores": int(details["n_outlet_pores"]),
+            "n_inlet_pores": _detail_int(details, "n_inlet_pores"),
+            "n_outlet_pores": _detail_int(details, "n_outlet_pores"),
             "conductance_model": str(
                 details.get("conductance_model", self.options.conductance_model)
             ),

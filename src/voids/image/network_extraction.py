@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import numpy as np
 import porespy as ps
 
+from voids._typing import JsonObject, JsonValue
 from voids.core.network import Network
 from voids.version import __version__ as _voids_version
 from voids.core.provenance import Provenance
@@ -14,6 +16,7 @@ from voids.core.sample import SampleGeometry
 from voids.core.validation import validate_network
 from voids.geom.hydraulic import DEFAULT_G_REF
 from voids.graph import spanning_subnetwork
+from voids.image._typing import PoreSpyNetworkModule
 from voids.image.maximal_ball import (
     MaximalBallSettings,
     extract_maximal_ball_network_dict,
@@ -157,7 +160,7 @@ def _snow2_network_dict(
     phases: np.ndarray,
     *,
     snow2_kwargs: dict[str, object] | None,
-    porespy_module: Any = ps,
+    porespy_module: PoreSpyNetworkModule = ps,
 ) -> dict[str, object]:
     """Run ``porespy.networks.snow2`` and normalize its network mapping output.
 
@@ -175,8 +178,9 @@ def _snow2_network_dict(
 
     kwargs = dict(snow2_kwargs or {})
     snow = porespy_module.networks.snow2(phases=phases, **kwargs)
-    if hasattr(snow, "network"):
-        return dict(snow.network)
+    network = getattr(snow, "network", None)
+    if network is not None:
+        return dict(network)
     if isinstance(snow, dict) and "network" in snow:
         return dict(snow["network"])
     if isinstance(snow, dict) and "throat.conns" in snow and "pore.coords" in snow:
@@ -186,7 +190,10 @@ def _snow2_network_dict(
         regions = snow.get("regions", None)
     if regions is None:
         raise RuntimeError("Could not find a network dict or regions in snow2 result")
-    return dict(porespy_module.networks.regions_to_network(regions))
+    raw_network = porespy_module.networks.regions_to_network(regions)
+    if not isinstance(raw_network, Mapping):
+        raise RuntimeError("PoreSpy regions_to_network did not return a mapping")
+    return dict(cast(Mapping[str, object], raw_network))
 
 
 def _normalize_extraction_backend(backend: str) -> str:
@@ -240,13 +247,29 @@ def _normalize_construction_backend(backend: str) -> str:
     return aliases[normalized]
 
 
+def _json_value_from_object(value: object) -> JsonValue:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, np.ndarray):
+        return _json_value_from_object(value.tolist())
+    if isinstance(value, Mapping):
+        return {str(k): _json_value_from_object(v) for k, v in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(_json_value_from_object(item) for item in value)
+    return str(value)
+
+
+def _json_notes(notes: dict[str, object] | None) -> JsonObject:
+    return {} if not notes else {str(k): _json_value_from_object(v) for k, v in notes.items()}
+
+
 def _merge_provenance_notes(provenance: Provenance, notes: dict[str, object] | None) -> Provenance:
     """Return provenance with extra user notes merged in."""
 
     if not notes:
         return provenance
     merged = Provenance.from_metadata(provenance.to_metadata())
-    merged.user_notes = {**merged.user_notes, **dict(notes)}
+    merged.user_notes = {**merged.user_notes, **_json_notes(notes)}
     return merged
 
 
@@ -921,7 +944,7 @@ def extract_spanning_pore_network(
         source_version=source_version,
         extraction_method=backend_normalized,
         random_seed=repair_seed if geometry_repairs is not None else None,
-        user_notes=dict(provenance_notes or {}),
+        user_notes=_json_notes(provenance_notes),
     )
     net_full = from_porespy(
         network_dict,

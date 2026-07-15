@@ -1,10 +1,38 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 
 from voids.visualization.plotly import plot_network_plotly
 from voids.visualization.pyvista import network_to_pyvista_polydata, plot_network_pyvista
+
+
+def test_visualization_package_import_does_not_eagerly_load_pyvista() -> None:
+    """Importing non-PyVista visualization helpers should not load VTK/PyVista."""
+
+    code = "\n".join(
+        [
+            "import sys",
+            "import voids.visualization as visualization",
+            "assert visualization.plot_scalar_midplanes is not None",
+            "assert 'voids.visualization.pyvista' not in sys.modules",
+        ]
+    )
+    env = os.environ.copy()
+    env.pop("LD_PRELOAD", None)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_pyvista_visualization_api_clean_import_error(line_network):
