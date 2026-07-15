@@ -173,7 +173,9 @@ docs-serve = "pixi run -e docs mkdocs serve"
 NO_MKDOCS_2_WARNING = "1"
 
 [environments]
-default = { features = ["core", "dev", "viz", "notebooks", "thermo", "lbm", "fem", "solvers", "intel"], solve-group = "default" }
-test = { features = ["core", "dev", "viz", "thermo", "lbm", "fem", "solvers", "intel", "test"], solve-group = "default" }
-docs = { features = ["docs"], solve-group = "docs" }
+default = { features = ["core", "dev", "viz", "notebooks", "thermo", "lbm", "fem", "solvers"], solve-group = "default" }
+test = { features = ["core", "dev", "viz", "thermo", "lbm", "fem", "solvers", "test"], solve-group = "default" }
+test-intel = { features = ["core", "dev", "viz", "thermo", "lbm", "fem", "solvers", "test", "intel"], solve-group = "default" }
+intel = { features = ["core", "dev", "viz", "notebooks", "thermo", "lbm", "fem", "solvers", "intel"], solve-group = "default" }
 gpu = { features = ["core", "dev", "viz", "notebooks", "thermo", "lbm", "fem", "solvers", "intel", "gpu", "test"], solve-group = "default" }
+docs = { features = ["docs"], solve-group = "docs" }
