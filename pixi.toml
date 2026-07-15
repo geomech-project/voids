@@ -105,6 +105,8 @@ pyamg = ">=5.3"
 
 [feature.intel.dependencies]
 mkl = ">=2023"
+
+[feature.intel.pypi-dependencies]
 pypardiso = ">=0.4"
 
 [feature.gpu.dependencies]
