@@ -24,6 +24,7 @@ from voids.fem.singlephase._common import (  # noqa: E402
     _brinkman_nondimensional_scales,
     _constant_permeability_value,
     _require_dolfinx_core,
+    _require_dolfinx_petsc,
     _resolve_brinkman_nondimensionalization,
 )
 import voids.fem.singlephase.usfem as usfem_module  # noqa: E402
@@ -35,6 +36,13 @@ except ImportError as exc:
     requires_fem_stack = pytest.mark.skip(reason=str(exc))
 else:
     requires_fem_stack = pytest.mark.skipif(False, reason="")
+
+try:
+    _require_dolfinx_petsc()
+except ImportError as exc:
+    requires_petsc_fem_stack = pytest.mark.skip(reason=str(exc))
+else:
+    requires_petsc_fem_stack = pytest.mark.skipif(False, reason="")
 
 
 def _constant_problem(shape: tuple[int, ...], permeability: float = 2.0) -> FEMMapProblem:
@@ -602,7 +610,7 @@ def test_fem_brinkman_unit_darcy_nondimensional_rejects_heterogeneous_map(
         )
 
 
-@requires_fem_stack
+@requires_petsc_fem_stack
 def test_fem_usfem_block_mpi_matches_monolithic_usfem_constant_3d() -> None:
     problem = _constant_problem((2, 2, 2), permeability=1.5)
     options = FEniCSSolverOptions.direct_parallel(
@@ -633,7 +641,7 @@ def test_fem_usfem_block_mpi_matches_monolithic_usfem_constant_3d() -> None:
     assert block.metadata["petsc_matrix_kind"] == "mpi"
 
 
-@requires_fem_stack
+@requires_petsc_fem_stack
 def test_fem_usfem_block_nondimensional_matches_monolithic_constant_3d() -> None:
     problem = _constant_problem((2, 2, 2), permeability=1.5)
     options = FEniCSSolverOptions.direct_parallel(
@@ -666,7 +674,7 @@ def test_fem_usfem_block_nondimensional_matches_monolithic_constant_3d() -> None
     assert block.metadata["block_matrix_kind"] == "mpi"
 
 
-@requires_fem_stack
+@requires_petsc_fem_stack
 def test_fem_usfem_block_builds_diagonal_preconditioner_forms(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -700,7 +708,7 @@ def test_fem_usfem_block_builds_diagonal_preconditioner_forms(
     assert result.metadata["petsc_matrix_kind"] == "nest"
 
 
-@requires_fem_stack
+@requires_petsc_fem_stack
 def test_fem_usfem_block_dispatches_schurdiag_cudss_preset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
