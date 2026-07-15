@@ -135,7 +135,7 @@ important ones are:
 
 ---
 
-## Current Scope (v0.1.x)
+## Current Scope (v0)
 
 | Feature | Status |
 |---|---|

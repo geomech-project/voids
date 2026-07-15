@@ -1,19 +1,25 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: voids
-abstract: "Scientific Python package for pore network modeling (PNM) aimed at research workflows where reproducibility, explicit assumptions, and validation matter."
-version: 0.1.11
+abstract: "Scientific Python package for porous media modeling aimed at research workflows where reproducibility, explicit assumptions, and validation matter."
+version: 0.2.0
 doi: 10.5281/zenodo.18937647
 license: LGPL-2.1-only
 url: "https://geomech-project.github.io/voids/"
 repository-code: "https://github.com/geomech-project/voids"
 keywords:
-  - pore-network-modeling
-  - pnm
   - porous-media
-  - scientific-computing
+  - pore-network-modeling
+  - pore-network-extraction
+  - finite-element
+  - finite-volume
+  - lattice-boltzmann
 authors:
   - family-names: Volpatto
     given-names: Diego
     email: volpatto@lncc.br
+    affiliation: "Laboratório Nacional de Computação Científica (LNCC)"
+  - family-names: Valentin
+    given-names: Frederic
+    email: valentin@lncc.br
     affiliation: "Laboratório Nacional de Computação Científica (LNCC)"
