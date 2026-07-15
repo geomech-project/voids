@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -614,16 +615,16 @@ def test_fem_brinkman_unit_darcy_nondimensional_rejects_heterogeneous_map(
 def test_fem_usfem_block_mpi_matches_monolithic_usfem_constant_3d() -> None:
     problem = _constant_problem((2, 2, 2), permeability=1.5)
     options = FEniCSSolverOptions.direct_parallel(
-        "superlu_dist",
-        petsc_options_prefix="test_usfem_block_superlu_",
+        "mumps",
+        petsc_options_prefix="test_usfem_block_mumps_",
     )
 
     monolithic = solve_brinkman_usfem(
         problem,
         flow_axis="x",
         options=FEniCSSolverOptions.direct_parallel(
-            "superlu_dist",
-            petsc_options_prefix="test_usfem_monolithic_superlu_",
+            "mumps",
+            petsc_options_prefix="test_usfem_monolithic_mumps_",
         ),
     )
     block = solve_brinkman_usfem_block(
@@ -645,16 +646,16 @@ def test_fem_usfem_block_mpi_matches_monolithic_usfem_constant_3d() -> None:
 def test_fem_usfem_block_nondimensional_matches_monolithic_constant_3d() -> None:
     problem = _constant_problem((2, 2, 2), permeability=1.5)
     options = FEniCSSolverOptions.direct_parallel(
-        "superlu_dist",
-        petsc_options_prefix="test_usfem_block_nondim_superlu_",
+        "mumps",
+        petsc_options_prefix="test_usfem_block_nondim_mumps_",
     )
 
     monolithic = solve_brinkman_usfem(
         problem,
         flow_axis="x",
         options=FEniCSSolverOptions.direct_parallel(
-            "superlu_dist",
-            petsc_options_prefix="test_usfem_monolithic_nondim_superlu_",
+            "mumps",
+            petsc_options_prefix="test_usfem_monolithic_nondim_mumps_",
         ),
         nondimensional=BrinkmanNondimensionalization(velocity_scale="unit_darcy"),
     )
@@ -672,6 +673,25 @@ def test_fem_usfem_block_nondimensional_matches_monolithic_constant_3d() -> None
     assert block.metadata["nondimensional"] is True
     assert block.metadata["nondimensional_velocity_scale_type"] == "unit_darcy"
     assert block.metadata["block_matrix_kind"] == "mpi"
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="SuperLU_DIST integration is exercised on the Linux CI runner",
+)
+@requires_petsc_fem_stack
+def test_fem_usfem_superlu_dist_backend_smoke() -> None:
+    result = solve_brinkman_usfem(
+        _constant_problem((2, 2), permeability=1.5),
+        flow_axis="x",
+        options=FEniCSSolverOptions.direct_parallel(
+            "superlu_dist",
+            petsc_options_prefix="test_usfem_superlu_dist_smoke_",
+        ),
+    )
+
+    assert result.permeability == pytest.approx(1.5, rel=5.0e-4)
+    assert result.metadata["solver_preset"] == "direct_parallel"
 
 
 @requires_petsc_fem_stack
