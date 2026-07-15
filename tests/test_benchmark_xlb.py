@@ -21,6 +21,32 @@ import voids.benchmarks.xlb as xlb_mod
 from voids.physics.singlephase import FluidSinglePhase
 
 
+def test_export_xlb_artifacts_records_failure_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fail_solve(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("simulated XLB failure")
+
+    monkeypatch.setattr(xlb_mod, "solve_binary_volume_with_xlb", fail_solve)
+    status_path = tmp_path / "status.json"
+    with pytest.raises(RuntimeError, match="simulated XLB failure"):
+        xlb_mod.export_xlb_direct_simulation_artifacts(
+            np.ones((2, 2), dtype=np.uint8),
+            voxel_size=1.0,
+            flow_axes=("x",),
+            options=XLBOptions(),
+            output_dir=tmp_path,
+            output_prefix="probe",
+            sample_name="probe",
+            m2_per_md=1.0,
+            status_path=status_path,
+        )
+    status = json.loads(status_path.read_text())
+    assert status["status"] == "failed"
+    assert status["message"] == "RuntimeError: simulated XLB failure"
+
+
 def _make_fake_xlb_api(
     velocity_samples: list[float | np.ndarray],
 ) -> tuple[dict[str, object], dict[str, object]]:

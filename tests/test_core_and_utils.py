@@ -9,6 +9,8 @@ import pytest
 from scipy import sparse
 
 import voids.linalg.solve as solve_mod
+from voids.core import provenance as provenance_mod
+from voids.core import sample as sample_mod
 from voids._logging import logger
 from voids._testing import set_seed
 from voids.core.sample import SampleGeometry
@@ -43,6 +45,44 @@ def test_set_seed_resets_python_and_numpy_rngs() -> None:
     second = (random.random(), float(np.random.random()))
 
     assert first == second
+
+
+def test_metadata_conversion_helpers_cover_scalar_tuple_and_invalid_values() -> None:
+    assert provenance_mod._voxel_size_original(None) is None
+    assert provenance_mod._voxel_size_original(2) == 2.0
+    assert provenance_mod._voxel_size_original([1, "2", 3.0]) == (1.0, 2.0, 3.0)
+    assert provenance_mod._voxel_size_original("bad") is None
+    with pytest.raises(TypeError, match="Expected numeric metadata"):
+        provenance_mod._float_value({})
+
+    assert sample_mod._scalar_or_tuple(None) is None
+    assert sample_mod._scalar_or_tuple("2") == 2.0
+    assert sample_mod._scalar_or_tuple([1, "2", 3.0]) == (1.0, 2.0, 3.0)
+    assert sample_mod._scalar_or_tuple([1, 2]) is None
+    with pytest.raises(TypeError, match="Expected numeric metadata"):
+        sample_mod._float_value({})
+
+
+def test_sparse_solver_control_helper_validation_and_forwarding() -> None:
+    with pytest.raises(ValueError, match="dtype"):
+        solve_mod._resolve_linear_system_dtype(1)
+    with pytest.raises(ValueError, match="dtype"):
+        solve_mod._resolve_linear_system_dtype("not-a-dtype")
+    assert solve_mod._superlu_kwargs(
+        {
+            "permc_spec": "COLAMD",
+            "diag_pivot_thresh": 0.5,
+            "relax": 4,
+            "panel_size": 8,
+            "equil": False,
+        }
+    ) == {
+        "permc_spec": "COLAMD",
+        "diag_pivot_thresh": 0.5,
+        "relax": 4,
+        "panel_size": 8,
+        "options": {"Equil": False},
+    }
 
 
 def test_sample_geometry_resolves_tuple_voxel_volume() -> None:

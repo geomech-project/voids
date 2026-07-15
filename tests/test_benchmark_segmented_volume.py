@@ -11,6 +11,14 @@ from voids.benchmarks import benchmark_segmented_volume_with_openpnm
 from voids.physics.singlephase import FluidSinglePhase
 
 
+@pytest.mark.parametrize("value", [None, True])
+def test_benchmark_numeric_details_reject_non_numeric_values(value: object) -> None:
+    with pytest.raises(ValueError, match="must be numeric"):
+        segmented_volume_mod._detail_float({"value": value}, "value")
+    with pytest.raises(ValueError, match="must be integral"):
+        segmented_volume_mod._detail_int({"value": value}, "value")
+
+
 def test_benchmark_segmented_volume_with_openpnm_returns_consistent_scalars() -> None:
     """Test end-to-end extraction plus OpenPNM comparison on a tiny segmented volume."""
 
