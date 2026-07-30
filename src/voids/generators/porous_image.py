@@ -950,9 +950,14 @@ def insert_centered_superellipsoidal_vug(
     resolved_exponent = float(exponent)
     if not np.isfinite(resolved_exponent) or resolved_exponent < 1.0:
         raise ValueError("exponent must be finite and at least 1")
-    if isinstance(margin_vox, bool) or int(margin_vox) != margin_vox or margin_vox < 0:
+    if isinstance(margin_vox, bool):
         raise ValueError("margin_vox must be a nonnegative integer")
-    margin = int(margin_vox)
+    try:
+        margin = int(margin_vox)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("margin_vox must be a nonnegative integer") from exc
+    if margin != margin_vox or margin < 0:
+        raise ValueError("margin_vox must be a nonnegative integer")
 
     out = arr.copy()
     vug_mask = np.zeros(arr.shape, dtype=bool)

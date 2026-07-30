@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -56,6 +57,14 @@ except ImportError as exc:
     requires_fem_stack = pytest.mark.skip(reason=str(exc))
 else:
     requires_fem_stack = pytest.mark.skipif(False, reason="")
+
+
+def _skip_native_gmsh_on_windows() -> None:
+    if sys.platform == "win32":
+        pytest.skip(
+            "Gmsh 4.15 native initialization aborts the Windows CI process; "
+            "native Gmsh coverage runs on Linux and macOS"
+        )
 
 
 def _dummy_solution_factory(_ufl: object, _domain: object) -> tuple[int, int]:
@@ -868,6 +877,11 @@ def test_gmsh_mesh_size_and_conversion_validation() -> None:
             comm=SimpleNamespace(rank=0, size=1),
             model_rank=1,
         )
+
+
+@requires_fem_stack
+def test_generate_dolfinx_gmsh_mesh_finalizes_after_model_failure() -> None:
+    _skip_native_gmsh_on_windows()
     gmsh_module = require_gmsh()
     if gmsh_module.isInitialized():
         gmsh_module.finalize()
@@ -990,6 +1004,7 @@ def test_body_fitted_vug_mesh_rejects_incomplete_gmsh_models(
 @requires_fem_stack
 @pytest.mark.parametrize("dimension", [2, 3])
 def test_body_fitted_vug_mesh_preserves_physical_tags(dimension: int) -> None:
+    _skip_native_gmsh_on_windows()
     pytest.importorskip("gmsh")
     benchmark = CenteredVugBenchmark(
         dimension=dimension,  # type: ignore[arg-type]
@@ -1005,6 +1020,7 @@ def test_body_fitted_vug_mesh_preserves_physical_tags(dimension: int) -> None:
 
 @requires_fem_stack
 def test_matrix_only_body_fitted_vug_mesh_has_no_internal_interface() -> None:
+    _skip_native_gmsh_on_windows()
     pytest.importorskip("gmsh")
     tagged = make_body_fitted_centered_vug_mesh(
         CenteredVugBenchmark(dimension=2, resolution=4, radius=0.0)
@@ -1018,6 +1034,7 @@ def test_matrix_only_body_fitted_vug_mesh_has_no_internal_interface() -> None:
 
 @requires_fem_stack
 def test_physical_centered_vug_flow_models_recover_matrix_baseline() -> None:
+    _skip_native_gmsh_on_windows()
     pytest.importorskip("gmsh")
     options = FEniCSSolverOptions.superlu_direct()
     matrix_case = CenteredVugFlowCase2D(area_fraction=0.0, mesh_resolution=8)
@@ -1080,6 +1097,7 @@ def test_physical_centered_vug_flow_models_recover_matrix_baseline() -> None:
 
 @requires_fem_stack
 def test_body_fitted_vug_usfem_matches_taylor_hood_flux_in_2d() -> None:
+    _skip_native_gmsh_on_windows()
     pytest.importorskip("gmsh")
     benchmark = CenteredVugBenchmark(dimension=2, resolution=8)
     options = FEniCSSolverOptions.superlu_direct()
@@ -1104,7 +1122,6 @@ def test_body_fitted_vug_usfem_matches_taylor_hood_flux_in_2d() -> None:
 
 @requires_fem_stack
 def test_petsc_paths_and_float32_rejections() -> None:
-    pytest.importorskip("gmsh")
     petsc_options = FEniCSSolverOptions.direct_reference()
     mms_result = run_mms_convergence(
         boundary_layer_case_2d(viscosity=0.1),
@@ -1137,6 +1154,12 @@ def test_petsc_paths_and_float32_rejections() -> None:
             options=float32_petsc,
         )
 
+
+@requires_fem_stack
+def test_petsc_body_fitted_vug_paths() -> None:
+    _skip_native_gmsh_on_windows()
+    pytest.importorskip("gmsh")
+    petsc_options = FEniCSSolverOptions.direct_reference()
     physical_flow_result = run_centered_vug_flow_case(
         CenteredVugFlowCase2D(area_fraction=0.0, mesh_resolution=8),
         model="darcy_brinkman",

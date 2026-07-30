@@ -350,6 +350,9 @@ def test_insert_centered_superellipsoidal_vug_matches_requested_voxel_fraction()
         ({"volume_fraction": 0.1, "margin_vox": -1}, "margin_vox"),
         ({"volume_fraction": 0.1, "margin_vox": 1.5}, "margin_vox"),
         ({"volume_fraction": 0.1, "margin_vox": True}, "margin_vox"),
+        ({"volume_fraction": 0.1, "margin_vox": float("inf")}, "margin_vox"),
+        ({"volume_fraction": 0.1, "margin_vox": float("nan")}, "margin_vox"),
+        ({"volume_fraction": 0.1, "margin_vox": None}, "margin_vox"),
     ],
 )
 def test_insert_centered_superellipsoidal_vug_validates_controls(
