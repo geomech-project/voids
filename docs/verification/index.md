@@ -17,7 +17,11 @@ quantity closely enough for the intended scientific use.
 
 The software-verification studies live under [Verification](software.md):
 
-- [FEM manufactured-solution verification](mms.md)
+- [FEM manufactured-solution and vug verification overview](mms.md)
+- [2D FEM manufactured-solution report](mms_2d.md)
+- [3D FEM manufactured-solution report](mms_3d.md)
+- [2D body-fitted vug report](vug_2d.md)
+- [3D body-fitted synthetic vug benchmark](vug_3d.md)
 - [OpenPNM extracted-network cross-check](openpnm.md)
 - [External reference CNM benchmark](pnflow.md)
 - [XLB direct-image permeability benchmark](xlb.md)

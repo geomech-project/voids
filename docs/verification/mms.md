@@ -1,5 +1,19 @@
 # Finite-Element Manufactured-Solution Verification
 
+The detailed illustrated reports are:
+
+- [2D manufactured-solution convergence](mms_2d.md), with five mesh levels
+  and measured-slope triangles;
+- [3D manufactured-solution convergence](mms_3d.md), with five tetrahedral
+  mesh levels and measured-slope triangles;
+- [2D body-fitted synthetic vug family](vug_2d.md), with pressure, velocity,
+  centerline, and upscaling galleries;
+- [3D body-fitted synthetic vug benchmark](vug_3d.md), with pressure,
+  velocity, discretization, mesh-sensitivity, and upscaling results.
+
+The vug benchmarks are deliberately separated from MMS because their exact
+flow fields are unknown.
+
 `voids.examples.mms` provides reproducible two- and three-dimensional
 manufactured solutions for the constant-coefficient Brinkman problem,
 
