@@ -229,8 +229,8 @@
 # %%
 from __future__ import annotations
 
-from dataclasses import replace
 import json
+from dataclasses import replace
 
 import matplotlib
 
@@ -247,10 +247,10 @@ else:
     interactive_shell.run_line_magic("matplotlib", "inline")
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm, Normalize
-from matplotlib.patches import Circle
 import numpy as np
 import pandas as pd
+from matplotlib.colors import LogNorm, Normalize
+from matplotlib.patches import Circle
 
 try:
     from IPython.display import display

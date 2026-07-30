@@ -101,7 +101,7 @@ configuration = {
     "vug_margin_vox": vug_margin_vox,
     "output_dir": str(output_dir_relative),
 }
-configuration
+display(configuration)
 
 # %% [markdown]
 # ## Generate the common porous matrix
@@ -136,7 +136,7 @@ matrix_summary = {
     "void_voxels": int(np.count_nonzero(matrix_void)),
     "solid_voxels": int(matrix_void.size - np.count_nonzero(matrix_void)),
 }
-matrix_summary
+display(matrix_summary)
 
 
 # %% [markdown]
@@ -370,4 +370,4 @@ verification = {
     "manifest": str(summary_path.relative_to(project_root)),
     "output_directory": str(output_dir_relative),
 }
-verification
+display(verification)
