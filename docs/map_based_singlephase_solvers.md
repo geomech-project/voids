@@ -176,11 +176,15 @@ and outlet faces:
 \]
 
 Transverse side walls impose only zero normal velocity. They do not impose full
-no-slip tangential velocity. The pressure field is determined up to a constant,
-so the implementation applies one pressure gauge degree of freedom during the
-linear solve and then subtracts the volume-mean pressure for the returned
-pressure field. The computed velocity and outlet flux are driven by the imposed
-pressure drop.
+no-slip tangential velocity. These natural pressure-traction data are part of
+the momentum boundary condition and make the pressure block nonsingular; an
+additional point-pressure gauge would overconstrain the discrete boundary-value
+problem and is not applied. For reporting and plotting, `voids` subtracts the
+volume mean from the solved pressure field after the solve. The returned field
+therefore preserves pressure differences, not the absolute inlet/outlet
+levels. The computed velocity and outlet flux are driven by the imposed
+pressure drop. Result metadata records `pressure_constraint="natural_traction"`
+and `returned_pressure_normalization="zero_mean"`.
 
 The default PETSc configuration uses direct LU factorization with MUMPS in the
 Pixi `fem` stack. Solver options are exposed through `FEniCSSolverOptions`, and
@@ -379,8 +383,12 @@ pressure:
 \[
 V_h = [\mathrm{CG}_1]^d,
 \qquad
-Q_h = \mathrm{DG}_1 .
+Q_h = \mathrm{DG}_k,\qquad k\in\{0,1\}.
 \]
+
+`pressure_degree=1` is the backward-compatible default.
+`pressure_degree=0` exposes the P1/DG0 pair used by the manufactured-solution
+and centered-vug verification studies.
 
 It starts from the same Brinkman bilinear form and adds two stabilization terms:
 
@@ -437,7 +445,29 @@ If \(\gamma\le 0\), the implementation uses the viscous limiting denominator
 
 - `tau_factor` for \(\alpha_\tau\),
 - `m_t` for \(m_T\), defaulting to \(1/3\),
-- `alpha_edge` for the pressure-jump coefficient scale.
+- `tau_gamma_cap` for an optional strict bound
+  \(\gamma\tau_T\le\theta<1\),
+- `alpha_edge` for the free multiplier in the classic and shifted
+  pressure-jump laws.
+
+For CG1/DG0, \(\nabla p_h\), \(\nabla q_h\), and the cellwise velocity
+Laplacians vanish. The reaction contribution then changes the cell drag from
+\(\gamma\) to
+
+\[
+\gamma_{\mathrm{eff}}=\gamma(1-\gamma\tau_T).
+\]
+
+In a high-drag cell, the uncapped coefficient can satisfy
+\(\gamma\tau_T\approx1\) and nearly remove the physical resistance. This is a
+method failure, not a solver tolerance effect. `tau_factor=0` disables the
+cell term while retaining facet pressure-jump stabilization.
+`tau_gamma_cap=theta`, with \(0<\theta<1\), instead guarantees
+\(\gamma_{\mathrm{eff}}\ge(1-\theta)\gamma>0\). The package does not choose
+\(\theta\) automatically because that changes the numerical method. It emits a
+runtime warning when the map-based estimate of the uncapped
+\(\max_T(\gamma\tau_T)\) is at least \(0.9\), and records that estimate in
+result metadata.
 
 For an interior face with averaged face diameter \(h_f\),
 
@@ -452,10 +482,10 @@ For an interior face with averaged face diameter \(h_f\),
 \sqrt{\frac{\gamma_{\max}h_f^2}{\nu_{\max}}}.
 \]
 
-The face coefficient is
+With `facet_law="reaction_diffusion"` (the default), the face coefficient is
 
 \[
-\tau_f = \alpha_{\mathrm{edge}}
+\tau_f =
 \frac{h_f}{\nu_{\max}\alpha_f^2}
 \left(
 1 - \frac{2}{\alpha_f}\tanh\frac{\alpha_f}{2}
@@ -467,8 +497,37 @@ For very small \(\alpha_f\), the limiting expression is used:
 
 \[
 \tau_f =
-\alpha_{\mathrm{edge}}\frac{h_f}{12\nu_{\max}}.
+\frac{h_f}{12\nu_{\max}}.
 \]
+
+This reaction--diffusion law is parameter-free: \(\alpha_f\) is fixed by
+\(\gamma_{\max}\), \(h_f\), and \(\nu_{\max}\). It is not the user
+`alpha_edge` multiplier. Conflating those two quantities silently changes the
+derived subscale coefficient. Passing a nondefault `alpha_edge` with this law
+therefore emits a warning and records `alpha_edge_active=False`.
+
+Two explicit alternatives are available:
+
+\[
+\tau_f^{\mathrm{classic}}
+=
+\alpha_{\mathrm{edge}}\frac{h_f}{12\nu_{\max}},
+\qquad
+\tau_f^{\mathrm{shifted}}
+=
+\alpha_{\mathrm{edge}}
+\frac{h_f}{12(\nu_{\max}+\gamma_{\max}h_f^2)}.
+\]
+
+`facet_size_mode="cell_diameter"` uses the neighboring-cell diameter
+convention. `"facet_measure"` uses edge length in 2D and
+\(\sqrt{|F|}\) in 3D. The 3D value has the right dimensions but is not the
+geometric diameter of a general triangular facet. The selected `facet_law`,
+`facet_size_mode`, `tau_gamma_cap`, and `pressure_degree` are recorded in
+result metadata.
+The three-dimensional reference-face coefficient used by the MMS runner is
+restricted to that structured verification workflow; it is not a selectable
+law in the general heterogeneous-map solver.
 
 The pressure-jump term is important because the pressure space is discontinuous.
 The residual term controls the Darcy-Brinkman momentum residual on each cell.
@@ -482,6 +541,10 @@ to a different package, or unusually small/negative permeabilities as a
 numerical diagnostic, not as a physical prediction. A full-size USFEM row should
 therefore be reported only when the exact solver backend, thread settings,
 workspace options, and convergence/failure diagnostics are recorded.
+
+The exact-solution definitions, measured norms, expected orders, and the known
+high-contrast P1/DG0 negative result are documented in
+[FEM Manufactured-Solution Verification](verification/mms.md).
 
 ---
 

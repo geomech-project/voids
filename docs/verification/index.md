@@ -17,6 +17,7 @@ quantity closely enough for the intended scientific use.
 
 The software-verification studies live under [Verification](software.md):
 
+- [FEM manufactured-solution verification](mms.md)
 - [OpenPNM extracted-network cross-check](openpnm.md)
 - [External reference CNM benchmark](pnflow.md)
 - [XLB direct-image permeability benchmark](xlb.md)

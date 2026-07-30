@@ -104,6 +104,7 @@ nav:
     - Overview: verification/index.md
     - Verification:
       - Software Verification Overview: verification/software.md
+      - FEM Manufactured Solutions: verification/mms.md
       - OpenPNM Extracted-Network Cross-Check: verification/openpnm.md
       - External Reference CNM Benchmark: verification/pnflow.md
       - XLB Direct-Image Permeability Benchmark: verification/xlb.md
