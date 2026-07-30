@@ -19,7 +19,12 @@ from voids.fem.singlephase.upscaling import (
     upscale_permeability_fem,
     upscale_principal_permeabilities_fem,
 )
-from voids.fem.singlephase.usfem import solve_brinkman_usfem, solve_brinkman_usfem_block
+from voids.fem.singlephase.usfem import (
+    USFEMFacetLaw,
+    USFEMFacetSizeMode,
+    solve_brinkman_usfem,
+    solve_brinkman_usfem_block,
+)
 
 __all__ = [
     "FEMMapProblem",
@@ -31,6 +36,8 @@ __all__ = [
     "BrinkmanVelocityScale",
     "LinearSolverBackend",
     "LinearSystemDType",
+    "USFEMFacetLaw",
+    "USFEMFacetSizeMode",
     "solve_brinkman_taylor_hood",
     "solve_brinkman_usfem",
     "solve_brinkman_usfem_block",

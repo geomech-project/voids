@@ -358,6 +358,30 @@ def test_usfem_block_rejects_unknown_preconditioner_before_backend_import() -> N
         )
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"tau_factor": -1.0}, "tau_factor"),
+        ({"tau_factor": float("nan")}, "tau_factor"),
+        ({"m_t": float("inf")}, "m_t"),
+        ({"alpha_edge": float("nan")}, "alpha_edge"),
+        ({"facet_size_mode": "bad"}, "facet_size_mode"),
+        ({"tau_gamma_cap": 0.0}, "tau_gamma_cap"),
+        ({"tau_gamma_cap": 1.0}, "tau_gamma_cap"),
+        ({"tau_gamma_cap": 1.1}, "tau_gamma_cap"),
+    ],
+)
+def test_usfem_block_validates_stabilization_controls(
+    kwargs: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        solve_brinkman_usfem_block(
+            _constant_problem((2, 2), permeability=2.0),
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+
 @requires_fem_stack
 def test_usfem_block_rejects_serial_linear_backend() -> None:
     with pytest.raises(NotImplementedError, match="supports only the PETSc backend"):
@@ -425,10 +449,92 @@ def test_fem_usfem_brinkman_recovers_constant_3d_permeability_with_superlu_direc
 
     assert result.permeability == pytest.approx(1.5, rel=5.0e-4)
     assert result.metadata["linear_backend"] == "superlu"
+    assert result.metadata["pressure_constraint"] == "natural_traction"
+    assert result.metadata["returned_pressure_normalization"] == "zero_mean"
     assert result.metadata["serial_sparse_solver_backend"] == "scipy.sparse.linalg.splu"
     assert result.metadata["serial_sparse_matrix_format"] == "csc"
     assert np.all(np.isfinite(result.velocity.x.array))
     assert np.all(np.isfinite(result.pressure.x.array))
+
+
+@requires_fem_stack
+@pytest.mark.parametrize(
+    ("pressure_degree", "facet_law"),
+    [(0, "classic"), (1, "shifted")],
+)
+def test_fem_usfem_supports_pressure_degrees_and_facet_laws(
+    pressure_degree: int,
+    facet_law: str,
+) -> None:
+    result = solve_brinkman_usfem(
+        _constant_problem((2, 2), permeability=1.5),
+        pressure_degree=pressure_degree,  # type: ignore[arg-type]
+        facet_law=facet_law,  # type: ignore[arg-type]
+        options=FEniCSSolverOptions.superlu_direct(),
+    )
+
+    assert result.permeability > 0.0
+    assert result.metadata["pressure_degree"] == pressure_degree
+    assert result.metadata["facet_law"] == facet_law
+
+
+@requires_fem_stack
+def test_fem_usfem_reaction_diffusion_ignores_free_alpha_edge() -> None:
+    problem = _constant_problem((2, 2), permeability=1.5)
+    options = FEniCSSolverOptions.superlu_direct()
+    baseline = solve_brinkman_usfem(
+        problem,
+        alpha_edge=1.0,
+        facet_law="reaction_diffusion",
+        facet_size_mode="facet_measure",
+        options=options,
+    )
+    with pytest.warns(RuntimeWarning, match="alpha_edge is ignored"):
+        changed_alpha = solve_brinkman_usfem(
+            problem,
+            alpha_edge=7.0,
+            facet_law="reaction_diffusion",
+            facet_size_mode="facet_measure",
+            options=options,
+        )
+
+    assert changed_alpha.flow_rate == pytest.approx(baseline.flow_rate, rel=1.0e-13)
+    assert changed_alpha.permeability == pytest.approx(baseline.permeability, rel=1.0e-13)
+    assert changed_alpha.metadata["facet_size_mode"] == "facet_measure"
+    assert changed_alpha.metadata["alpha_edge_active"] is False
+
+
+@requires_fem_stack
+def test_fem_usfem_allows_cell_tau_zero_and_gamma_cap() -> None:
+    problem = _constant_problem((2, 2), permeability=1.0e-8)
+    options = FEniCSSolverOptions.superlu_direct()
+    with pytest.warns(RuntimeWarning, match="nearly cancel physical drag"):
+        uncapped = solve_brinkman_usfem(
+            problem,
+            pressure_degree=0,
+            facet_law="shifted",
+            options=options,
+        )
+    without_cell_tau = solve_brinkman_usfem(
+        problem,
+        pressure_degree=0,
+        tau_factor=0.0,
+        facet_law="shifted",
+        options=options,
+    )
+    capped = solve_brinkman_usfem(
+        problem,
+        pressure_degree=0,
+        tau_gamma_cap=0.5,
+        facet_law="shifted",
+        options=options,
+    )
+
+    assert uncapped.metadata["p1dg0_uncapped_max_tau_gamma"] > 0.9
+    assert np.isfinite(without_cell_tau.flow_rate)
+    assert np.isfinite(capped.flow_rate)
+    assert without_cell_tau.metadata["tau_factor"] == 0.0
+    assert capped.metadata["tau_gamma_cap"] == 0.5
 
 
 @requires_fem_stack

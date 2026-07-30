@@ -33,5 +33,8 @@ after interpolation to first-order visualization spaces for ParaView
 compatibility. For pressure diagnostics, `reference_pressure_to_outlet` removes
 arbitrary pressure gauges by shifting the field so the outlet layer has a
 prescribed reference pressure, while preserving all pressure differences.
+`sample_dolfinx_function_at_points` evaluates solved functions at explicit
+coordinates, which avoids approximating line profiles from neighboring raster
+rows.
 
 ::: voids.visualization.fields

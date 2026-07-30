@@ -99,6 +99,9 @@ intel = [
   "mkl>=2023; sys_platform == 'linux' or sys_platform == 'win32'",
   "pypardiso>=0.4; sys_platform == 'linux' or sys_platform == 'win32'",
 ]
+fem = [
+  "gmsh",
+]
 [project.urls]
 Homepage = "https://github.com/geomech-project/voids"
 Documentation = "https://geomech-project.github.io/voids/"

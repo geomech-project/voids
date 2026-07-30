@@ -183,6 +183,44 @@ def write_dolfinx_function_xdmf(
     return destination
 
 
+def write_fem_result_xdmf(
+    result: Any,
+    path: str | Path,
+    *,
+    velocity_name: str = "velocity",
+    pressure_name: str = "pressure",
+) -> Path:
+    """Write one FEM velocity/pressure result to ParaView-readable XDMF/HDF5.
+
+    The solved fields are not modified. High-order fields are interpolated to
+    first-order Lagrange visualization copies because that layout is robustly
+    supported by DOLFINx XDMF output.
+    """
+
+    from dolfinx.io import XDMFFile
+
+    if not velocity_name or not pressure_name:
+        raise ValueError("velocity_name and pressure_name must be non-empty")
+    try:
+        velocity = result.velocity
+        pressure = result.pressure
+    except AttributeError as exc:
+        raise TypeError("result must provide velocity and pressure functions") from exc
+
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    export_velocity = _linear_dolfinx_export_function(velocity, name=velocity_name)
+    export_pressure = _linear_dolfinx_export_function(pressure, name=pressure_name)
+    mesh = export_velocity.function_space.mesh
+    if export_pressure.function_space.mesh is not mesh:
+        raise ValueError("velocity and pressure must use the same DOLFINx mesh")
+    with XDMFFile(mesh.comm, str(destination), "w") as handle:
+        handle.write_mesh(mesh)
+        handle.write_function(export_velocity)
+        handle.write_function(export_pressure)
+    return destination
+
+
 def sample_dolfinx_function_on_grid(
     function: Any,
     *,
@@ -192,8 +230,6 @@ def sample_dolfinx_function_on_grid(
     fill_value: float = np.nan,
 ) -> np.ndarray:
     """Sample a DOLFINx scalar or vector function at regular cell centers."""
-
-    from dolfinx import geometry
 
     grid_shape = tuple(int(value) for value in shape)
     if len(grid_shape) not in {2, 3}:
@@ -209,34 +245,78 @@ def sample_dolfinx_function_on_grid(
     ]
     meshgrid = np.meshgrid(*axes, indexing="ij")
     points = np.column_stack([component.reshape(-1, order="C") for component in meshgrid])
-    if len(grid_shape) == 2:
-        points = np.column_stack([points, np.zeros(points.shape[0], dtype=float)])
+    sampled = sample_dolfinx_function_at_points(
+        function,
+        points,
+        fill_value=fill_value,
+    )
+    if sampled.ndim == 1:
+        return sampled.reshape(grid_shape, order="C")
+    return sampled.reshape((sampled.shape[0], *grid_shape), order="C")
+
+
+def sample_dolfinx_function_at_points(
+    function: Any,
+    points: np.ndarray,
+    *,
+    fill_value: float = np.nan,
+) -> np.ndarray:
+    """Evaluate a DOLFINx function at arbitrary 2D or 3D points.
+
+    Scalar functions return ``(num_points,)``. Vector functions follow the
+    package's component-first convention and return
+    ``(num_components, num_points)``. Points outside the mesh receive
+    ``fill_value``.
+    """
+
+    from dolfinx import geometry
+
+    coordinates = np.asarray(points, dtype=float)
+    if coordinates.ndim != 2 or coordinates.shape[1] not in {2, 3}:
+        raise ValueError("points must have shape (num_points, 2 or 3)")
+    if coordinates.shape[0] == 0:
+        raise ValueError("points must contain at least one coordinate")
+    if not np.all(np.isfinite(coordinates)):
+        raise ValueError("points must contain only finite coordinates")
+    evaluation_points = coordinates
+    if coordinates.shape[1] == 2:
+        evaluation_points = np.column_stack(
+            [coordinates, np.zeros(coordinates.shape[0], dtype=float)]
+        )
 
     mesh = function.function_space.mesh
     tree = geometry.bb_tree(mesh, mesh.topology.dim)
-    candidate_cells = geometry.compute_collisions_points(tree, points)
-    colliding_cells = geometry.compute_colliding_cells(mesh, candidate_cells, points)
+    candidate_cells = geometry.compute_collisions_points(tree, evaluation_points)
+    colliding_cells = geometry.compute_colliding_cells(
+        mesh,
+        candidate_cells,
+        evaluation_points,
+    )
 
     valid_indices: list[int] = []
     cells: list[int] = []
-    for point_index in range(points.shape[0]):
+    for point_index in range(evaluation_points.shape[0]):
         links = colliding_cells.links(np.int32(point_index))
         if len(links) > 0:
             valid_indices.append(point_index)
             cells.append(int(links[0]))
     if not valid_indices:
-        raise RuntimeError("no grid sample points were found inside the DOLFINx mesh")
+        raise RuntimeError("no sample points were found inside the DOLFINx mesh")
 
-    valid_points = points[np.asarray(valid_indices, dtype=np.int64)]
+    valid_points = evaluation_points[np.asarray(valid_indices, dtype=np.int64)]
     values = np.asarray(function.eval(valid_points, np.asarray(cells, dtype=np.int32)), dtype=float)
     if values.ndim == 1:
         values = values[:, np.newaxis]
 
-    flat = np.full((points.shape[0], values.shape[1]), float(fill_value), dtype=float)
+    flat = np.full(
+        (evaluation_points.shape[0], values.shape[1]),
+        float(fill_value),
+        dtype=float,
+    )
     flat[np.asarray(valid_indices, dtype=np.int64)] = values
     if values.shape[1] == 1:
-        return flat[:, 0].reshape(grid_shape, order="C")
-    return np.moveaxis(flat.reshape((*grid_shape, values.shape[1]), order="C"), -1, 0)
+        return flat[:, 0]
+    return np.moveaxis(flat, -1, 0)
 
 
 def plot_scalar_midplanes(
@@ -483,8 +563,10 @@ __all__ = [
     "plot_vector_midplanes",
     "reference_pressure_to_outlet",
     "reconstruct_tpfa_cell_velocity",
+    "sample_dolfinx_function_at_points",
     "sample_dolfinx_function_on_grid",
     "vector_magnitude",
     "write_dolfinx_function_xdmf",
+    "write_fem_result_xdmf",
     "write_structured_vector_field",
 ]

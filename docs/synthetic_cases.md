@@ -102,6 +102,35 @@ with_vug, vug_mask = insert_spherical_vug(
 
 The operation is a boolean union, so existing pores remain void.
 
+For sweeps that specify vug support as a fraction of the complete voxel volume,
+use a centered superellipsoid:
+
+```python
+from voids.generators import insert_centered_superellipsoidal_vug
+
+with_vug, vug_mask = insert_centered_superellipsoidal_vug(
+    case.void,
+    volume_fraction=0.40,
+    exponent=2.5,
+    margin_vox=1,
+)
+```
+
+The mask contains
+`round(volume_fraction * case.void.size)` voxels. An exponent of `2` is
+spherical; larger exponents progressively approach a rounded cube. This matters
+for high fractions: an enclosed sphere can occupy no more than
+\(\pi/6\approx0.524\) of a cube. The generator rejects a requested fraction
+that cannot fit inside the configured exponent and boundary margin instead of
+silently clipping it. When the requested count intersects a tied outer score
+shell, deterministic tie selection preserves the exact voxel count but can
+break perfect reflection symmetry only on that final shell.
+
+The executed
+[`52_mwe_synthetic_3d_matrix_centered_vug_volume_fraction`](https://github.com/geomech-project/voids/blob/main/notebooks/52_mwe_synthetic_3d_matrix_centered_vug_volume_fraction.ipynb)
+notebook demonstrates a \(300^3\), 10 µm sweep through vug fraction 0.60 and
+includes a live central-slice atlas.
+
 ---
 
 ## Export And Import

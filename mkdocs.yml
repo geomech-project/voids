@@ -104,6 +104,12 @@ nav:
     - Overview: verification/index.md
     - Verification:
       - Software Verification Overview: verification/software.md
+      - FEM MMS and Vug Verification:
+        - Overview: verification/mms.md
+        - 2D Manufactured Solution: verification/mms_2d.md
+        - 3D Manufactured Solution: verification/mms_3d.md
+        - 2D Body-Fitted Vug: verification/vug_2d.md
+        - 3D Body-Fitted Vug: verification/vug_3d.md
       - OpenPNM Extracted-Network Cross-Check: verification/openpnm.md
       - External Reference CNM Benchmark: verification/pnflow.md
       - XLB Direct-Image Permeability Benchmark: verification/xlb.md

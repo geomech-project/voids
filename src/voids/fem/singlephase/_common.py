@@ -1144,7 +1144,12 @@ def _build_context(
 
 
 def _mixed_space(
-    api: _DolfinxAPI, domain: Any, *, velocity_degree: int, pressure_family: str
+    api: _DolfinxAPI,
+    domain: Any,
+    *,
+    velocity_degree: int,
+    pressure_family: str,
+    pressure_degree: int = 1,
 ) -> Any:
     velocity_element = api.basix_ufl.element(
         "Lagrange",
@@ -1152,7 +1157,11 @@ def _mixed_space(
         velocity_degree,
         shape=(domain.geometry.dim,),
     )
-    pressure_element = api.basix_ufl.element(pressure_family, domain.basix_cell(), 1)
+    pressure_element = api.basix_ufl.element(
+        pressure_family,
+        domain.basix_cell(),
+        pressure_degree,
+    )
     return api.fem.functionspace(
         domain,
         api.basix_ufl.mixed_element([velocity_element, pressure_element]),
@@ -2067,6 +2076,7 @@ def _solve_with_form_builder(
     options: FEniCSSolverOptions | None,
     velocity_degree: int,
     pressure_family: str,
+    pressure_degree: int = 1,
     method: str,
     formulation: str,
     prefix_suffix: str,
@@ -2098,6 +2108,7 @@ def _solve_with_form_builder(
         context.mesh,
         velocity_degree=velocity_degree,
         pressure_family=pressure_family,
+        pressure_degree=pressure_degree,
     )
     u, p = context.api.ufl.TrialFunctions(W)
     v, q = context.api.ufl.TestFunctions(W)
@@ -2114,7 +2125,6 @@ def _solve_with_form_builder(
         else boundary_pressure_outlet,
     )
     bcs = _side_wall_bcs(context, W, flow_axis=flow_axis)
-    bcs.append(_pressure_gauge_bc(context, W))
     if selected_linear_backend == "petsc":
         solution, solve_seconds, solver_metadata = _solve_mixed_problem(
             context,
@@ -2158,8 +2168,11 @@ def _solve_with_form_builder(
             "linear_system_dtype": requested_linear_system_dtype,
             "velocity_degree": velocity_degree,
             "pressure_family": pressure_family,
+            "pressure_degree": pressure_degree,
             "porosity_floor": problem.porosity_floor,
             "permeability_floor": problem.permeability_floor,
+            "pressure_constraint": "natural_traction",
+            "returned_pressure_normalization": "zero_mean",
             "petsc_options": dict(solver_options.petsc_options),
             "petsc_options_prefix": solver_options.petsc_options_prefix,
             "superlu_controls": dict(solver_options.superlu_controls),

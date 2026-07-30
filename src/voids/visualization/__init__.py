@@ -7,9 +7,11 @@ from voids.visualization.fields import (
     plot_vector_midplanes,
     reference_pressure_to_outlet,
     reconstruct_tpfa_cell_velocity,
+    sample_dolfinx_function_at_points,
     sample_dolfinx_function_on_grid,
     vector_magnitude,
     write_dolfinx_function_xdmf,
+    write_fem_result_xdmf,
     write_structured_vector_field,
 )
 from voids.visualization.plotly import plot_network_plotly
@@ -44,8 +46,10 @@ __all__ = [
     "plot_vector_midplanes",
     "reference_pressure_to_outlet",
     "reconstruct_tpfa_cell_velocity",
+    "sample_dolfinx_function_at_points",
     "sample_dolfinx_function_on_grid",
     "vector_magnitude",
     "write_dolfinx_function_xdmf",
+    "write_fem_result_xdmf",
     "write_structured_vector_field",
 ]

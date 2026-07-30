@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from time import perf_counter
 from typing import Literal, cast
+import warnings
 
 import numpy as np
 from scipy.sparse import bmat, csr_matrix, diags
@@ -27,7 +28,6 @@ from voids.fem.singlephase._common import (
     _result_from_velocity_pressure,
     _solve_block_problem_petsc,
     _solve_with_form_builder,
-    _standalone_pressure_gauge_bc,
     _thread_environment_metadata,
     _validate_pressure_drop,
     _velocity_side_wall_bcs,
@@ -43,6 +43,8 @@ from voids.linalg.cudss import NvmathCudssFactor
 
 
 _ControlScalar = str | bytes | int | float | bool
+USFEMFacetLaw = Literal["classic", "reaction_diffusion", "shifted"]
+USFEMFacetSizeMode = Literal["cell_diameter", "facet_measure"]
 
 
 def _ufl_constant(context: _FEMContext, value: float) -> _UFLExpression:
@@ -363,6 +365,7 @@ def _interior_pressure_tau(
     nu_eff: _UFLExpression,
     *,
     alpha_edge: float,
+    facet_law: USFEMFacetLaw,
 ) -> _UFLExpression:
     ufl = cast(_UFLAlgebra, context.api.ufl)
     tiny = _ufl_constant(context, 1.0e-12)
@@ -374,21 +377,106 @@ def _interior_pressure_tau(
         ufl.max_value(gamma("+"), gamma("-")),
         _ufl_constant(context, 0.0),
     )
+    if facet_law == "classic":
+        return alpha * h_f / (twelve * nu_max)
+    if facet_law == "shifted":
+        return alpha * h_f / (twelve * (nu_max + gamma_max * h_f * h_f))
     alpha_f = ufl.sqrt(gamma_max * h_f * h_f / nu_max)
-    return alpha * ufl.conditional(
+    # Here alpha_f is fixed by the local reaction-diffusion problem; it is
+    # unrelated to the free alpha_edge multiplier used by the other laws.
+    return ufl.conditional(
         ufl.gt(alpha_f, tiny),
         h_f / (nu_max * alpha_f * alpha_f) * (1.0 - (two / alpha_f) * ufl.tanh(alpha_f / two)),
         h_f / (twelve * nu_max),
     )
 
 
-def _validate_usfem_controls(*, tau_factor: float, m_t: float, alpha_edge: float) -> None:
-    if tau_factor <= 0.0:
-        raise ValueError("tau_factor must be positive")
-    if m_t <= 0.0:
-        raise ValueError("m_t must be positive")
-    if alpha_edge <= 0.0:
-        raise ValueError("alpha_edge must be positive")
+def _cap_tau_gamma_product(
+    context: _FEMContext,
+    tau: _UFLExpression,
+    gamma: _UFLExpression,
+    *,
+    tau_gamma_cap: float | None,
+) -> _UFLExpression:
+    if tau_gamma_cap is None:
+        return tau
+    ufl = cast(_UFLAlgebra, context.api.ufl)
+    gamma_safe = ufl.max_value(gamma, _ufl_constant(context, 1.0e-300))
+    return ufl.min_value(
+        tau,
+        _ufl_constant(context, float(tau_gamma_cap)) / gamma_safe,
+    )
+
+
+def _facet_size_expression(
+    context: _FEMContext,
+    mode: USFEMFacetSizeMode,
+) -> _UFLExpression:
+    ufl = cast(_UFLAlgebra, context.api.ufl)
+    if mode == "cell_diameter":
+        return ufl.avg(ufl.CellDiameter(context.mesh))
+    facet_measure = ufl.FacetArea(context.mesh)
+    if context.mesh.topology.dim == 2:
+        return ufl.avg(facet_measure)
+    return ufl.avg(ufl.sqrt(facet_measure))
+
+
+def _p1dg0_max_uncapped_tau_gamma(
+    problem: FEMMapProblem,
+    *,
+    tau_factor: float,
+    m_t: float,
+) -> float:
+    permeability = np.maximum(
+        np.asarray(problem.permeability_map.values, dtype=float),
+        float(problem.permeability_floor),
+    )
+    if problem.porosity_map is None:
+        porosity = np.ones_like(permeability)
+    else:
+        porosity = np.maximum(
+            np.asarray(problem.porosity_map.values, dtype=float),
+            float(problem.porosity_floor),
+        )
+    cell_diameter_squared = float(
+        np.sum(np.square(np.asarray(problem.permeability_map.cell_size, dtype=float)))
+    )
+    gamma = float(problem.viscosity) / permeability
+    nu_eff = float(problem.viscosity) / porosity
+    pe_t = 4.0 * nu_eff / (gamma * cell_diameter_squared * float(m_t))
+    denominator = gamma * cell_diameter_squared * np.maximum(1.0, pe_t) + 4.0 * nu_eff / float(m_t)
+    return float(np.max(float(tau_factor) * gamma * cell_diameter_squared / denominator))
+
+
+def _validate_usfem_controls(
+    *,
+    tau_factor: float,
+    m_t: float,
+    alpha_edge: float,
+    facet_law: USFEMFacetLaw = "reaction_diffusion",
+    facet_size_mode: USFEMFacetSizeMode = "cell_diameter",
+    tau_gamma_cap: float | None = None,
+) -> None:
+    if tau_factor < 0.0 or not np.isfinite(tau_factor):
+        raise ValueError("tau_factor must be nonnegative and finite")
+    if m_t <= 0.0 or not np.isfinite(m_t):
+        raise ValueError("m_t must be positive and finite")
+    if alpha_edge <= 0.0 or not np.isfinite(alpha_edge):
+        raise ValueError("alpha_edge must be positive and finite")
+    if facet_law not in {"classic", "reaction_diffusion", "shifted"}:
+        raise ValueError("facet_law must be one of 'classic', 'reaction_diffusion', or 'shifted'")
+    if facet_law == "reaction_diffusion" and not np.isclose(alpha_edge, 1.0):
+        warnings.warn(
+            "alpha_edge is ignored by the parameter-free reaction_diffusion facet law",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    if facet_size_mode not in {"cell_diameter", "facet_measure"}:
+        raise ValueError("facet_size_mode must be either 'cell_diameter' or 'facet_measure'")
+    if tau_gamma_cap is not None and (
+        tau_gamma_cap <= 0.0 or tau_gamma_cap >= 1.0 or not np.isfinite(tau_gamma_cap)
+    ):
+        raise ValueError("tau_gamma_cap must satisfy 0 < tau_gamma_cap < 1")
 
 
 def _usfem_stabilization_terms(
@@ -397,20 +485,29 @@ def _usfem_stabilization_terms(
     tau_factor: float,
     m_t: float,
     alpha_edge: float,
+    facet_law: USFEMFacetLaw = "reaction_diffusion",
     gamma: _UFLExpression | None = None,
     nu_eff: _UFLExpression | None = None,
+    facet_size: _UFLExpression | None = None,
+    tau_gamma_cap: float | None = None,
 ) -> tuple[_UFLExpression, _UFLExpression, _UFLExpression, _UFLExpression]:
     ufl = cast(_UFLAlgebra, context.api.ufl)
     gamma = cast(_UFLExpression, context.coefficients["gamma"]) if gamma is None else gamma
     nu_eff = cast(_UFLExpression, context.coefficients["nu_eff"]) if nu_eff is None else nu_eff
     h = ufl.CellDiameter(context.mesh)
-    h_f = ufl.avg(h)
-    tau = _ufl_constant(context, float(tau_factor)) * _paper_tau(
+    h_f = ufl.avg(h) if facet_size is None else facet_size
+    tau = _cap_tau_gamma_product(
         context,
-        h,
+        _ufl_constant(context, float(tau_factor))
+        * _paper_tau(
+            context,
+            h,
+            gamma,
+            nu_eff,
+            m_t=m_t,
+        ),
         gamma,
-        nu_eff,
-        m_t=m_t,
+        tau_gamma_cap=tau_gamma_cap,
     )
     tau_f = _interior_pressure_tau(
         context,
@@ -418,6 +515,7 @@ def _usfem_stabilization_terms(
         gamma,
         nu_eff,
         alpha_edge=alpha_edge,
+        facet_law=facet_law,
     )
     return gamma, nu_eff, tau, tau_f
 
@@ -431,18 +529,63 @@ def solve_brinkman_usfem(
     tau_factor: float = 1.0,
     m_t: float = 1.0 / 3.0,
     alpha_edge: float = 1.0,
+    facet_law: USFEMFacetLaw = "reaction_diffusion",
+    facet_size_mode: USFEMFacetSizeMode = "cell_diameter",
+    tau_gamma_cap: float | None = None,
+    pressure_degree: Literal[0, 1] = 1,
     options: FEniCSSolverOptions | None = None,
     nondimensional: bool | BrinkmanNondimensionalization = False,
 ) -> FEMSinglePhaseResult:
     """Solve a stabilized Darcy-Brinkman micro-continuum model.
 
-    The formulation uses CG1 velocity and DG1 pressure fields. It augments the
-    Brinkman weak form with a residual-based cell stabilization term and an
+    The formulation uses CG1 velocity and discontinuous pressure fields. DG1 is
+    the backward-compatible default; pass ``pressure_degree=0`` for the
+    low-order CG1 x DG0 pair used in manufactured-solution and vug studies. It
+    augments the Brinkman weak form with a residual-based cell stabilization term and an
     interior pressure-jump penalty. The coefficients are intended for
     porosity/permeability maps obtained from a segmented image.
+
+    Set ``tau_factor=0`` to disable the cell residual while retaining the
+    pressure-jump term. In high-contrast CG1 x DG0 studies,
+    ``tau_gamma_cap`` can enforce ``gamma * tau_K <= tau_gamma_cap`` and avoid
+    near-cancellation of the physical drag. ``facet_size_mode="facet_measure"``
+    uses edge length in 2D and the square root of facet area in 3D; the latter
+    is a measure-based length, not an exact triangular-facet diameter.
     """
 
-    _validate_usfem_controls(tau_factor=tau_factor, m_t=m_t, alpha_edge=alpha_edge)
+    _validate_usfem_controls(
+        tau_factor=tau_factor,
+        m_t=m_t,
+        alpha_edge=alpha_edge,
+        facet_law=facet_law,
+        facet_size_mode=facet_size_mode,
+        tau_gamma_cap=tau_gamma_cap,
+    )
+    if pressure_degree not in {0, 1}:
+        raise ValueError("pressure_degree must be either 0 or 1")
+    uncapped_max_tau_gamma = (
+        _p1dg0_max_uncapped_tau_gamma(
+            problem,
+            tau_factor=tau_factor,
+            m_t=m_t,
+        )
+        if pressure_degree == 0
+        else None
+    )
+    if (
+        uncapped_max_tau_gamma is not None
+        and tau_factor > 0.0
+        and tau_gamma_cap is None
+        and uncapped_max_tau_gamma >= 0.9
+    ):
+        warnings.warn(
+            "The uncapped CG1 x DG0 cell term has estimated "
+            f"max(gamma * tau_K)={uncapped_max_tau_gamma:.3g}; it can nearly "
+            "cancel physical drag. Set tau_gamma_cap below 1 or use "
+            "tau_factor=0 as an explicit sensitivity branch.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     nondimensional_options = _resolve_brinkman_nondimensionalization(nondimensional)
     scales = None
     if nondimensional_options is not None:
@@ -485,8 +628,11 @@ def solve_brinkman_usfem(
             tau_factor=tau_factor,
             m_t=m_t,
             alpha_edge=alpha_edge,
+            facet_law=facet_law,
             gamma=gamma_override,
             nu_eff=nu_eff_override,
+            facet_size=_facet_size_expression(context, facet_size_mode),
+            tau_gamma_cap=tau_gamma_cap,
         )
         residual_u = gamma * u + ufl.grad(p) - nu_eff * ufl.div(ufl.grad(u))
         residual_vq = gamma * v - ufl.grad(q) - nu_eff * ufl.div(ufl.grad(v))
@@ -507,8 +653,9 @@ def solve_brinkman_usfem(
         options=options,
         velocity_degree=1,
         pressure_family="DG",
-        method="Darcy-Brinkman USFEM CG1 x DG1",
-        formulation="brinkman_usfem_p1dg1",
+        pressure_degree=pressure_degree,
+        method=f"Darcy-Brinkman USFEM CG1 x DG{pressure_degree}",
+        formulation=f"brinkman_usfem_p1dg{pressure_degree}",
         prefix_suffix=f"brinkman_usfem_{flow_axis}",
         form_builder=form_builder,
         boundary_pressure_inlet=None if scales is None else 1.0,
@@ -522,6 +669,11 @@ def solve_brinkman_usfem(
             "tau_factor": float(tau_factor),
             "m_t": float(m_t),
             "alpha_edge": float(alpha_edge),
+            "alpha_edge_active": facet_law in {"classic", "shifted"},
+            "facet_law": facet_law,
+            "facet_size_mode": facet_size_mode,
+            "tau_gamma_cap": (None if tau_gamma_cap is None else float(tau_gamma_cap)),
+            "p1dg0_uncapped_max_tau_gamma": uncapped_max_tau_gamma,
         }
     )
     return result
@@ -536,6 +688,9 @@ def solve_brinkman_usfem_block(
     tau_factor: float = 1.0,
     m_t: float = 1.0 / 3.0,
     alpha_edge: float = 1.0,
+    facet_law: USFEMFacetLaw = "reaction_diffusion",
+    facet_size_mode: USFEMFacetSizeMode = "cell_diameter",
+    tau_gamma_cap: float | None = None,
     options: FEniCSSolverOptions | None = None,
     matrix_kind: Literal["mpi", "nest"] = "mpi",
     preconditioner: Literal["none", "diagonal"] = "none",
@@ -559,7 +714,14 @@ def solve_brinkman_usfem_block(
     if preconditioner not in {"none", "diagonal"}:
         raise ValueError("preconditioner must be either 'none' or 'diagonal'")
     _validate_pressure_drop(pressure_inlet, pressure_outlet)
-    _validate_usfem_controls(tau_factor=tau_factor, m_t=m_t, alpha_edge=alpha_edge)
+    _validate_usfem_controls(
+        tau_factor=tau_factor,
+        m_t=m_t,
+        alpha_edge=alpha_edge,
+        facet_law=facet_law,
+        facet_size_mode=facet_size_mode,
+        tau_gamma_cap=tau_gamma_cap,
+    )
     nondimensional_options = _resolve_brinkman_nondimensionalization(nondimensional)
 
     solver_options = options or FEniCSSolverOptions()
@@ -626,8 +788,11 @@ def solve_brinkman_usfem_block(
         tau_factor=tau_factor,
         m_t=m_t,
         alpha_edge=alpha_edge,
+        facet_law=facet_law,
         gamma=gamma_override,
         nu_eff=nu_eff_override,
+        facet_size=_facet_size_expression(context, facet_size_mode),
+        tau_gamma_cap=tau_gamma_cap,
     )
 
     def residual_velocity_part(w: _UFLExpression) -> _UFLExpression:
@@ -656,7 +821,6 @@ def solve_brinkman_usfem_block(
     rhs_pressure = _ufl_constant(context, 0.0) * q * dx
 
     bcs = _velocity_side_wall_bcs(context, velocity_space, flow_axis=flow_axis)
-    bcs.append(_standalone_pressure_gauge_bc(context, pressure_space))
     preconditioner_forms = None
     if preconditioner == "diagonal":
         preconditioner_forms = [[a00, None], [None, a11]]
@@ -703,6 +867,8 @@ def solve_brinkman_usfem_block(
             "solver_preset": solver_options.solver_preset,
             "velocity_degree": 1,
             "pressure_family": "DG",
+            "pressure_constraint": "natural_traction",
+            "returned_pressure_normalization": "zero_mean",
             "porosity_floor": problem.porosity_floor,
             "permeability_floor": problem.permeability_floor,
             "petsc_options": dict(solver_options.petsc_options),
@@ -722,9 +888,18 @@ def solve_brinkman_usfem_block(
             "tau_factor": float(tau_factor),
             "m_t": float(m_t),
             "alpha_edge": float(alpha_edge),
+            "alpha_edge_active": facet_law in {"classic", "shifted"},
+            "facet_law": facet_law,
+            "facet_size_mode": facet_size_mode,
+            "tau_gamma_cap": (None if tau_gamma_cap is None else float(tau_gamma_cap)),
         }
     )
     return result
 
 
-__all__ = ["solve_brinkman_usfem", "solve_brinkman_usfem_block"]
+__all__ = [
+    "USFEMFacetLaw",
+    "USFEMFacetSizeMode",
+    "solve_brinkman_usfem",
+    "solve_brinkman_usfem_block",
+]
