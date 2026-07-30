@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pytest
@@ -298,4 +299,92 @@ def test_generate_spanning_multiscale_blobs_matrix_can_fail_cleanly(
             axis_index=0,
             seed_start=0,
             max_tries=1,
+        )
+
+
+def test_insert_centered_superellipsoidal_vug_matches_requested_voxel_fraction() -> None:
+    """The vug sweep helper should be exact, enclosed, and deterministic."""
+
+    base = np.zeros((20, 22, 24), dtype=bool)
+    base[1, 1, 1] = True
+    fraction = 0.20
+
+    out, mask = pimg.insert_centered_superellipsoidal_vug(
+        base,
+        volume_fraction=fraction,
+        exponent=2.5,
+        margin_vox=1,
+    )
+    repeated, repeated_mask = pimg.insert_centered_superellipsoidal_vug(
+        base,
+        volume_fraction=fraction,
+        exponent=2.5,
+        margin_vox=1,
+    )
+
+    expected_count = int(np.floor(fraction * base.size + 0.5))
+    assert np.count_nonzero(mask) == expected_count
+    assert np.array_equal(mask, repeated_mask)
+    assert np.array_equal(out, repeated)
+    assert out[1, 1, 1]
+    assert np.all(out[mask])
+    assert not np.any(mask[[0, -1], :, :])
+    assert not np.any(mask[:, [0, -1], :])
+    assert not np.any(mask[:, :, [0, -1]])
+
+    unchanged, empty_mask = pimg.insert_centered_superellipsoidal_vug(
+        base,
+        volume_fraction=0.0,
+    )
+    assert np.array_equal(unchanged, base)
+    assert not np.any(empty_mask)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"volume_fraction": float("nan")}, "volume_fraction"),
+        ({"volume_fraction": -0.1}, "volume_fraction"),
+        ({"volume_fraction": 1.0}, "volume_fraction"),
+        ({"volume_fraction": 0.1, "exponent": 0.5}, "exponent"),
+        ({"volume_fraction": 0.1, "margin_vox": -1}, "margin_vox"),
+        ({"volume_fraction": 0.1, "margin_vox": 1.5}, "margin_vox"),
+        ({"volume_fraction": 0.1, "margin_vox": True}, "margin_vox"),
+    ],
+)
+def test_insert_centered_superellipsoidal_vug_validates_controls(
+    kwargs: dict[str, Any],
+    message: str,
+) -> None:
+    """Invalid geometry controls should fail before allocating a large mask."""
+
+    with pytest.raises(ValueError, match=message):
+        pimg.insert_centered_superellipsoidal_vug(
+            np.zeros((12, 12, 12), dtype=bool),
+            **kwargs,
+        )
+
+    with pytest.raises(ValueError, match="3D"):
+        pimg.insert_centered_superellipsoidal_vug(
+            np.zeros((12, 12), dtype=bool),
+            volume_fraction=0.1,
+        )
+
+
+def test_insert_centered_superellipsoidal_vug_rejects_unenclosed_fraction() -> None:
+    """A request that cannot preserve the configured margin should fail."""
+
+    base = np.zeros((12, 12, 12), dtype=bool)
+    with pytest.raises(ValueError, match="exceeds the largest enclosed"):
+        pimg.insert_centered_superellipsoidal_vug(
+            base,
+            volume_fraction=0.9,
+            exponent=2.0,
+            margin_vox=1,
+        )
+    with pytest.raises(ValueError, match="leaves no room"):
+        pimg.insert_centered_superellipsoidal_vug(
+            base,
+            volume_fraction=0.1,
+            margin_vox=6,
         )

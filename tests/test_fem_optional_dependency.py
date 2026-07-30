@@ -1453,7 +1453,7 @@ def test_fem_validate_pressure_drop() -> None:
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"tau_factor": 0.0}, "tau_factor must be positive"),
+        ({"tau_factor": -1.0}, "tau_factor must be nonnegative"),
         ({"m_t": 0.0}, "m_t must be positive"),
         ({"alpha_edge": 0.0}, "alpha_edge must be positive"),
     ],
@@ -1466,6 +1466,15 @@ def test_usfem_rejects_nonpositive_stabilization_controls(
 
     with pytest.raises(ValueError, match=message):
         solve_brinkman_usfem(problem, **kwargs)
+
+
+def test_usfem_rejects_unknown_facet_law_and_pressure_degree() -> None:
+    problem = FEMMapProblem(PermeabilityMap(np.ones((2, 2)), cell_size=1.0))
+
+    with pytest.raises(ValueError, match="facet_law must be one of"):
+        solve_brinkman_usfem(problem, facet_law="other")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="pressure_degree must be either"):
+        solve_brinkman_usfem(problem, pressure_degree=2)  # type: ignore[arg-type]
 
 
 def test_usfem_schurdiag_sparse_helpers_and_block_assembly(

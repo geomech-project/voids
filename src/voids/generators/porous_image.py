@@ -902,6 +902,105 @@ def insert_spherical_vug(
     )
 
 
+def insert_centered_superellipsoidal_vug(
+    matrix_void: np.ndarray,
+    *,
+    volume_fraction: float,
+    exponent: float = 4.0,
+    margin_vox: int = 1,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Insert a centered, enclosed superellipsoidal vug by voxel fraction.
+
+    Parameters
+    ----------
+    matrix_void :
+        Input 3D boolean image where ``True`` denotes void.
+    volume_fraction :
+        Fraction of the complete image support assigned to the vug. The
+        requested voxel count is ``round(volume_fraction * matrix_void.size)``.
+    exponent :
+        Superellipsoid exponent. ``2`` gives a sphere; values greater than
+        ``2`` give a rounded-cube shape. Values below ``1`` are rejected.
+    margin_vox :
+        Minimum nominal matrix margin between the largest admissible
+        superellipsoid and every image boundary.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray]
+        ``(updated_void, vug_mask)``. The mask has the requested voxel count
+        whenever the fraction fits inside the admissible centered shape.
+
+    Notes
+    -----
+    A sphere fully contained in a cube can occupy at most :math:`\\pi/6` of
+    the cube. A rounded-cube superellipsoid allows larger enclosed fractions
+    while preserving one shape family across a sweep. Selection is
+    deterministic. If the requested count cuts through a tied outer score
+    shell, only that final shell can lose exact reflection symmetry.
+    """
+
+    arr = np.asarray(matrix_void, dtype=bool)
+    if arr.ndim != 3:
+        raise ValueError("matrix_void must be a 3D array")
+
+    fraction = float(volume_fraction)
+    if not np.isfinite(fraction) or not (0.0 <= fraction < 1.0):
+        raise ValueError("volume_fraction must be finite and in [0, 1)")
+    resolved_exponent = float(exponent)
+    if not np.isfinite(resolved_exponent) or resolved_exponent < 1.0:
+        raise ValueError("exponent must be finite and at least 1")
+    if isinstance(margin_vox, bool) or int(margin_vox) != margin_vox or margin_vox < 0:
+        raise ValueError("margin_vox must be a nonnegative integer")
+    margin = int(margin_vox)
+
+    out = arr.copy()
+    vug_mask = np.zeros(arr.shape, dtype=bool)
+    target_count = int(np.floor(fraction * arr.size + 0.5))
+    if target_count == 0:
+        return out, vug_mask
+
+    shape = np.asarray(arr.shape, dtype=float)
+    half_widths = (shape - 1.0) / 2.0 - float(margin)
+    if np.any(half_widths <= 0.0):
+        raise ValueError("margin_vox leaves no room for a centered vug")
+
+    axis_scores: list[np.ndarray] = []
+    for size, half_width in zip(arr.shape, half_widths):
+        center = (float(size) - 1.0) / 2.0
+        coordinate = np.abs(np.arange(size, dtype=np.float32) - center)
+        axis_scores.append(
+            np.asarray((coordinate / float(half_width)) ** resolved_exponent, dtype=np.float32)
+        )
+    score = (
+        axis_scores[0][:, None, None]
+        + axis_scores[1][None, :, None]
+        + axis_scores[2][None, None, :]
+    )
+    maximum_count = int(np.count_nonzero(score <= 1.0))
+    if target_count > maximum_count:
+        maximum_fraction = maximum_count / arr.size
+        raise ValueError(
+            "volume_fraction exceeds the largest enclosed superellipsoid for "
+            f"this shape, exponent, and margin; maximum is {maximum_fraction:.6g}"
+        )
+
+    partitioned = np.partition(score.reshape(-1), target_count - 1)
+    cutoff = float(partitioned[target_count - 1])
+    vug_mask = score < cutoff
+    remaining = target_count - int(np.count_nonzero(vug_mask))
+    if remaining:
+        tied = np.flatnonzero(score.reshape(-1) == cutoff)
+        if tied.size < remaining:  # pragma: no cover - partition guarantees this
+            raise RuntimeError("Could not resolve the superellipsoid cutoff shell")
+        vug_mask.reshape(-1)[tied[:remaining]] = True
+
+    if np.any(vug_mask & (score > 1.0)):  # pragma: no cover - guarded by maximum_count
+        raise RuntimeError("Constructed vug extends outside the admissible support")
+    out[vug_mask] = True
+    return out, vug_mask
+
+
 def insert_elliptical_vug_2d(
     matrix_void: np.ndarray,
     *,
