@@ -1,6 +1,6 @@
 [workspace]
 name = "voids"
-version = "0.2.0"
+version = "0.2.1"
 description = "Scientific Python package for digital porous media research"
 channels = ["conda-forge"]
 platforms = [
