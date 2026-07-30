@@ -1121,7 +1121,15 @@ def test_body_fitted_vug_usfem_matches_taylor_hood_flux_in_2d() -> None:
 
 
 @requires_fem_stack
-def test_petsc_paths_and_float32_rejections() -> None:
+def test_petsc_mms_path() -> None:
+    pytest.importorskip(
+        "petsc4py",
+        reason="The PETSc MMS path requires petsc4py",
+    )
+    pytest.importorskip(
+        "dolfinx.fem.petsc",
+        reason="The PETSc MMS path requires the DOLFINx PETSc bindings",
+    )
     petsc_options = FEniCSSolverOptions.direct_reference()
     mms_result = run_mms_convergence(
         boundary_layer_case_2d(viscosity=0.1),
@@ -1132,6 +1140,9 @@ def test_petsc_paths_and_float32_rejections() -> None:
     )
     assert mms_result.metadata["linear_backend"] == "petsc"
 
+
+@requires_fem_stack
+def test_petsc_float32_rejections() -> None:
     float32_petsc = FEniCSSolverOptions(
         linear_backend="petsc",
         linear_system_dtype="float32",
