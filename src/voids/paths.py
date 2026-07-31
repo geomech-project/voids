@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT_ENV = "VOIDS_PROJECT_ROOT"
+PIXI_PROJECT_ROOT_ENV = "PIXI_PROJECT_ROOT"
 NOTEBOOKS_PATH_ENV = "VOIDS_NOTEBOOKS_PATH"
 EXAMPLES_PATH_ENV = "VOIDS_EXAMPLES_PATH"
 DATA_PATH_ENV = "VOIDS_DATA_PATH"
@@ -40,7 +41,7 @@ def _repo_root_from_source_tree() -> Path:
 
 
 def _resolve_path(env_name: str, relative_to_root: str) -> Path:
-    """Resolve a project path from the environment or a source-tree fallback.
+    """Resolve a consumer project path without requiring the ``voids`` checkout.
 
     Parameters
     ----------
@@ -59,23 +60,29 @@ def _resolve_path(env_name: str, relative_to_root: str) -> Path:
     value = os.getenv(env_name)
     if value:
         return Path(value).expanduser().resolve()
+
+    pixi_project_root = os.getenv(PIXI_PROJECT_ROOT_ENV)
+    if pixi_project_root:
+        return (Path(pixi_project_root).expanduser() / relative_to_root).resolve()
+
     return (_repo_root_from_source_tree() / relative_to_root).resolve()
 
 
 def project_root() -> Path:
-    """Return the project root directory.
+    """Return the active consumer project root directory.
 
     Returns
     -------
     pathlib.Path
-        Absolute path to the repository root.
+        Absolute path to the active Pixi project, an explicit
+        ``VOIDS_PROJECT_ROOT``, or the editable ``voids`` checkout.
     """
 
     return _resolve_path(PROJECT_ROOT_ENV, ".")
 
 
 def notebooks_path() -> Path:
-    """Return the notebooks directory.
+    """Return the active consumer project's notebooks directory.
 
     Returns
     -------

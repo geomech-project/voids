@@ -111,13 +111,18 @@ python -m pip install -e .
 Optional extras:
 
 ```bash
-python -m pip install -e ".[dev,viz,test,lbm,docs]"
+python -m pip install -e ".[dev,viz,test,lbm,solvers,fem]"
 ```
 
 Assumptions to keep in mind:
 
-- FEniCSx is not installed by a PyPI extra; plain pip users must provide a
-  compatible DOLFINx/FEniCSx installation before using `voids.fem`
+- the PyPI `solvers` extra installs portable Python solver helpers such as
+  PyAMG; it does not source-build SuiteSparse/UMFPACK
+- the PyPI `fem` extra installs the Gmsh Python package, but PyPI does not
+  distribute DOLFINx; plain pip users must provide a compatible FEniCSx stack
+- the repository's Pixi package definition builds a conda artifact whose
+  runtime metadata includes DOLFINx, Gmsh, PyAMG, and binary UMFPACK, so a
+  published conda build can provide the complete native stack transitively
 - repository development, notebook kernels, and documentation builds are covered
   in [Development](#development)
 
@@ -312,7 +317,9 @@ pixi install
 pixi run -e default python -c "import voids; print(voids.__version__)"
 ```
 
-Pixi activation also provides project path variables used by notebooks:
+Pixi activation also provides ``PIXI_PROJECT_ROOT``. The path helpers use this
+standard variable automatically when ``voids`` is installed as a dependency.
+The following ``voids``-specific variables remain explicit overrides:
 
 - `VOIDS_PROJECT_ROOT`
 - `VOIDS_NOTEBOOKS_PATH`

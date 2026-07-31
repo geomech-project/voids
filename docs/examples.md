@@ -19,9 +19,11 @@ pixi run register-kernels   # register Jupyter kernels once
 jupyter lab                  # open JupyterLab
 ```
 
-The notebooks rely on environment variables set by Pixi activation
-(`VOIDS_PROJECT_ROOT`, `VOIDS_DATA_PATH`, etc.), so they should be launched from
-within a Pixi-managed shell.
+The notebooks rely on project paths resolved from Pixi's standard
+``PIXI_PROJECT_ROOT``. Explicit ``VOIDS_PROJECT_ROOT`` and ``VOIDS_DATA_PATH``
+values override that default when a workflow intentionally uses data outside
+the active project, so notebooks should be launched from within a Pixi-managed
+shell.
 
 In practice:
 

@@ -46,7 +46,12 @@ compact JSON summary.
 
 ## Notebook Environment Variables
 
-Pixi activation sets project path variables used by the notebooks:
+The path helpers first honor these explicit overrides, then Pixi's standard
+``PIXI_PROJECT_ROOT``. Consequently, an installed ``voids`` package resolves
+paths relative to the consuming Pixi project without copying this repository's
+activation configuration.
+
+The ``voids`` development environment sets these project path variables:
 
 | Variable | Description |
 |---|---|

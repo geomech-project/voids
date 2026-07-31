@@ -3,6 +3,7 @@ name = "voids"
 version = "0.2.1"
 description = "Scientific Python package for digital porous media research"
 channels = ["conda-forge"]
+preview = ["pixi-build"]
 platforms = [
   "osx-arm64",
   "linux-64",
@@ -10,6 +11,27 @@ platforms = [
   { name = "linux-64-cuda", platform = "linux-64", cuda = "12.0" },
   { name = "win-64-cuda", platform = "win-64", cuda = "12.0" },
 ]
+
+# Build a conda package for consumers that need native scientific runtimes.
+# PyPI metadata cannot express conda-only dependencies such as DOLFINx, while a
+# conda package can carry the complete FEM and sparse-solver stack transitively.
+[package]
+name = { workspace = true }
+version = { workspace = true }
+
+[package.build.backend]
+name = "pixi-build-python"
+version = "0.*"
+channels = ["https://prefix.dev/conda-forge"]
+
+[package.build.config]
+ignore-pypi-mapping = false
+
+[package.run-dependencies]
+fenics-dolfinx = ">=0.9,<0.11"
+python-gmsh = "*"
+scikit-umfpack = "*"
+pyamg = ">=5.3"
 
 [feature.docs]
 platforms = ["linux-64", "win-64", "osx-arm64"]
