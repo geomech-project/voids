@@ -1,6 +1,6 @@
 [workspace]
 name = "voids"
-version = "0.2.0"
+version = "0.2.1"
 description = "Scientific Python package for digital porous media research"
 channels = ["conda-forge"]
 platforms = [
@@ -94,6 +94,8 @@ jax = ">=0.8,<0.10"
 
 [feature.fem.dependencies]
 fenics-dolfinx = ">=0.9,<0.11"
+gmsh = "*"
+python-gmsh = "*"
 
 [feature.solvers.dependencies]
 suitesparse = "*"

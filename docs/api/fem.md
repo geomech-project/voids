@@ -30,6 +30,9 @@ result metadata with any reported USFEM permeability.
 For the governing equations, boundary conditions, spaces, stabilization terms,
 and permeability reporting convention, see
 [Map-Based Single-Phase Solvers](../map_based_singlephase_solvers.md).
+For executable exact-solution refinement studies, expected convergence rates,
+and the centered-vug benchmark, see
+[FEM Manufactured-Solution Verification](../verification/mms.md).
 
 ---
 

@@ -9,6 +9,11 @@ boundary-conforming mesh of the original segmented pore/bone interface. For the
 map definitions, schemes, Kozeny-Carman closure, export assumptions, and
 solver-facing caveats, see [Porosity Maps](../porosity_maps.md).
 
+The optional Gmsh helpers build in-memory CAD models and preserve physical tags
+when converting to DOLFINx. They require both the Gmsh executable and Python
+bindings; the centered-vug workflow is described in
+[FEM Manufactured-Solution Verification](../verification/mms.md#centered-vug-benchmark).
+
 ## API
 
 ::: voids.mesh

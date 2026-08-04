@@ -43,6 +43,7 @@ FEATURE_EXCLUDED_PACKAGE_NAMES = {
 PYPI_NAME_OVERRIDES = {
     "coolprop": "CoolProp",
     "matplotlib-base": "matplotlib",
+    "python-gmsh": "gmsh",
 }
 PYPI_SPECIFIER_OVERRIDES = {
     "matplotlib-base": ">=3.8",

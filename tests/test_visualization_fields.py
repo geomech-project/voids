@@ -15,9 +15,11 @@ from voids.visualization.fields import (
     plot_vector_midplanes,
     reference_pressure_to_outlet,
     reconstruct_tpfa_cell_velocity,
+    sample_dolfinx_function_at_points,
     sample_dolfinx_function_on_grid,
     vector_magnitude,
     write_dolfinx_function_xdmf,
+    write_fem_result_xdmf,
     write_structured_vector_field,
 )
 
@@ -251,6 +253,65 @@ def test_write_dolfinx_function_xdmf_uses_linear_export(
     assert capture["function"] is fake_export
 
 
+def test_write_fem_result_xdmf_writes_velocity_and_pressure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    capture: dict[str, Any] = {"functions": []}
+    fake_dolfinx = ModuleType("dolfinx")
+    fake_dolfinx.__path__ = []
+    fake_io = ModuleType("dolfinx.io")
+
+    class FakeXDMFFile:
+        def __init__(self, comm: object, path: str, mode: str) -> None:
+            capture["xdmf_init"] = (comm, path, mode)
+
+        def __enter__(self) -> "FakeXDMFFile":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            capture["closed"] = True
+
+        def write_mesh(self, mesh: object) -> None:
+            capture["mesh"] = mesh
+
+        def write_function(self, function: object) -> None:
+            capture["functions"].append(function)
+
+    fake_io.XDMFFile = FakeXDMFFile
+    monkeypatch.setitem(sys.modules, "dolfinx", fake_dolfinx)
+    monkeypatch.setitem(sys.modules, "dolfinx.io", fake_io)
+
+    mesh = SimpleNamespace(comm="COMM")
+    exports = {
+        "velocity": SimpleNamespace(function_space=SimpleNamespace(mesh=mesh)),
+        "pressure": SimpleNamespace(function_space=SimpleNamespace(mesh=mesh)),
+    }
+    monkeypatch.setattr(
+        fields_mod,
+        "_linear_dolfinx_export_function",
+        lambda function, *, name=None: exports[str(name)],
+    )
+    result = SimpleNamespace(velocity=object(), pressure=object())
+    path = tmp_path / "solution.xdmf"
+
+    written = write_fem_result_xdmf(result, path)
+
+    assert written == path
+    assert capture["xdmf_init"] == ("COMM", str(path), "w")
+    assert capture["mesh"] is mesh
+    assert capture["functions"] == [exports["velocity"], exports["pressure"]]
+    with pytest.raises(ValueError, match="non-empty"):
+        write_fem_result_xdmf(result, path, velocity_name="")
+    with pytest.raises(TypeError, match="velocity and pressure"):
+        write_fem_result_xdmf(SimpleNamespace(), path)
+
+    other_mesh = SimpleNamespace(comm="COMM")
+    exports["pressure"] = SimpleNamespace(function_space=SimpleNamespace(mesh=other_mesh))
+    with pytest.raises(ValueError, match="same DOLFINx mesh"):
+        write_fem_result_xdmf(result, path)
+
+
 def test_linear_dolfinx_export_function_builds_scalar_and_vector_spaces(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -365,19 +426,39 @@ def test_sample_dolfinx_function_on_grid_with_fake_geometry(
         shape=(2, 2),
         cell_size=1.0,
     )
+    sampled_line = sample_dolfinx_function_at_points(
+        FakeFunction(vector=True),
+        np.array([[0.25, 0.5], [0.75, 0.5]]),
+    )
+    sampled_3d_points = sample_dolfinx_function_at_points(
+        FakeFunction(),
+        np.array([[0.25, 0.5, 0.75]]),
+    )
 
     assert sampled_scalar.shape == (2, 2)
     assert sampled_scalar[0, 0] == pytest.approx(31.5)
     assert sampled_vector.shape == (2, 2, 2)
     assert sampled_vector[0, 0, 0] == pytest.approx(0.5)
+    assert sampled_line.shape == (2, 2)
+    assert np.allclose(sampled_line[:, 0], [0.25, 0.5])
+    assert sampled_3d_points == pytest.approx([0.75])
 
     with pytest.raises(ValueError, match="shape must describe"):
         sample_dolfinx_function_on_grid(FakeFunction(), shape=(2,), cell_size=1.0)
     with pytest.raises(ValueError, match="origin dimensionality"):
         sample_dolfinx_function_on_grid(FakeFunction(), shape=(2, 2), cell_size=1.0, origin=(0.0,))
+    with pytest.raises(ValueError, match="shape"):
+        sample_dolfinx_function_at_points(FakeFunction(), np.array([0.5, 0.5]))
+    with pytest.raises(ValueError, match="at least one"):
+        sample_dolfinx_function_at_points(FakeFunction(), np.empty((0, 2)))
+    with pytest.raises(ValueError, match="finite"):
+        sample_dolfinx_function_at_points(
+            FakeFunction(),
+            np.array([[np.nan, 0.5]]),
+        )
 
     fake_geometry.compute_colliding_cells = lambda mesh, candidates, points: FakeCollidingCells(
         valid=False
     )
-    with pytest.raises(RuntimeError, match="no grid sample points"):
+    with pytest.raises(RuntimeError, match="no sample points"):
         sample_dolfinx_function_on_grid(FakeFunction(), shape=(2, 2), cell_size=1.0)

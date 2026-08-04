@@ -218,10 +218,11 @@ def test_sync_pyproject_text_removes_empty_conda_only_feature_extras() -> None:
         "lbm",
         "thermo",
         "solvers",
+        "fem",
     }
     assert "core" not in optional_dependencies
     assert "docs" not in optional_dependencies
-    assert "fem" not in optional_dependencies
+    assert optional_dependencies["fem"] == ["gmsh"]
     all_optional_requirements = [
         requirement
         for requirements in optional_dependencies.values()

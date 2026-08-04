@@ -241,6 +241,18 @@ The repository includes paired notebooks and `py:percent` scripts under `noteboo
   - DRP-317 Parker same-ROI comparison across pore-network, TPFA, FEniCSx FEM, and XLB/LBM backends
 - `45_mwe_drp317_lbm_sensitivity`
   - DRP-317 direct-image LBM setup-sensitivity study for the recommended Stokes-limit preset
+- `48_mwe_fem_mms_2d`
+  - exact 2-D Brinkman solution, mesh refinement, and automated Taylor-Hood/USFEM rate checks
+- `49_mwe_fem_mms_3d`
+  - exact 3-D Brinkman solution and reference-face stabilized convergence study
+- `50_mwe_fem_centered_vug_benchmark`
+  - Gmsh body-fitted circular/spherical vugs with Taylor-Hood and USFEM flux comparisons
+- `51_mwe_fem_mms_presentation_replication`
+  - live target-versus-computed checks for the supplied MMS rates and centered-vug fluxes
+- `52_mwe_synthetic_3d_matrix_centered_vug_volume_fraction`
+  - deterministic `300^3`, 10 µm matrix/vug sweep with exact voxel fractions and RAW/NetCDF round-trip verification
+- `53_mwe_body_fitted_2d_centered_vug_upscaling`
+  - configurable 7.5 mm body-fitted circular-vug sweep with Darcy-Brinkman and stabilized Darcy-Darcy P2/P1 fields, permeability curves, and ParaView exports
 
 Example data under `examples/data/` includes a deterministic manufactured void image
 and generated artifacts from the extraction, map, and mesh notebooks.

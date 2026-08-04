@@ -77,6 +77,12 @@ In practice:
 | `43_mwe_drp317_bentheimer_block3_same_roi_comparison` | Compare Bentheimer pore-network, TPFA, FEniCSx FEM, and XLB/LBM backends on the same ROI |
 | `44_mwe_drp317_parker_block3_same_roi_comparison` | Compare Parker pore-network, TPFA, FEniCSx FEM, and XLB/LBM backends on the same ROI |
 | `45_mwe_drp317_lbm_sensitivity` | Document direct-image LBM setup sensitivity and the recommended Stokes-limit preset |
+| `48_mwe_fem_mms_2d` | Verify 2D FEM convergence rates with an exact Brinkman solution |
+| `49_mwe_fem_mms_3d` | Verify 3D FEM convergence rates and the reference-face pressure-jump coefficient |
+| `50_mwe_fem_centered_vug_benchmark` | Compare Taylor-Hood and USFEM fluxes on body-fitted 2D/3D vugs |
+| `51_mwe_fem_mms_presentation_replication` | Reproduce supplied 2D/3D MMS rates and 3D vug flux targets with named regression profiles |
+| `52_mwe_synthetic_3d_matrix_centered_vug_volume_fraction` | Generate a common `300^3`, 10 µm porous matrix with exact centered-vug fractions and verified RAW/NetCDF exports |
+| `53_mwe_body_fitted_2d_centered_vug_upscaling` | Build a 7.5 mm body-fitted centered-vug family and compare Darcy-Brinkman with stabilized Darcy-Darcy P2/P1 upscaling |
 
 ---
 
