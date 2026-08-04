@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "voids"
-version = "0.2.1"
+version = "0.2.2"
 description = "Scientific Python package for digital porous media research"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
