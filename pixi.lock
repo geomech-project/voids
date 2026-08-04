@@ -28088,7 +28088,6 @@ packages:
   - jax>=0.8,<0.10 ; extra == 'lbm'
   - coolprop>=6.6 ; extra == 'thermo'
   - thermo>=0.6.0,<0.7 ; extra == 'thermo'
-  - scikit-umfpack ; extra == 'solvers'
   - pyamg>=5.3 ; extra == 'solvers'
   - nvmath-python>=0.9 ; (sys_platform == 'linux' and extra == 'gpu') or (sys_platform == 'win32' and extra == 'gpu')
   - torch-sla[all] ; (sys_platform == 'linux' and extra == 'gpu') or (sys_platform == 'win32' and extra == 'gpu')
@@ -28096,7 +28095,7 @@ packages:
   - mkl>=2023 ; (sys_platform == 'linux' and extra == 'intel') or (sys_platform == 'win32' and extra == 'intel')
   - pypardiso>=0.4 ; (sys_platform == 'linux' and extra == 'intel') or (sys_platform == 'win32' and extra == 'intel')
   - gmsh ; extra == 'fem'
-  requires_python: '>=3.11'
+  requires_python: '>=3.11,<3.13'
 - pypi: https://files.pythonhosted.org/packages/00/d5/15c143c91a6c30291dcece5e36437bdd1ffc08e599f6481fd8a6ceae7679/porespy-3.0.3-py3-none-any.whl
   name: porespy
   version: 3.0.3

@@ -38,7 +38,10 @@ FEATURE_EXCLUDED_PACKAGE_NAMES = {
     "dev": frozenset({"zlib"}),
     "fem": frozenset({"fenics-dolfinx"}),
     "gpu": frozenset({"cuda-version"}),
-    "solvers": frozenset({"suitesparse", "libumfpack"}),
+    # scikit-umfpack is distributed portably through conda-forge, but its PyPI
+    # sdist requires a native SWIG/SuiteSparse toolchain. Keep the PyPI extra
+    # installable and let Pixi's conda feature provide the UMFPACK backend.
+    "solvers": frozenset({"suitesparse", "libumfpack", "scikit-umfpack"}),
 }
 PYPI_NAME_OVERRIDES = {
     "coolprop": "CoolProp",

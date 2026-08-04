@@ -7,7 +7,7 @@ name = "voids"
 version = "0.2.1"
 description = "Scientific Python package for digital porous media research"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 license = { text = "LGPL-2.1-only" }
 authors = [
   { name = "Diego Volpatto", email = "volpatto@lncc.br" },
@@ -87,7 +87,6 @@ thermo = [
   "thermo>=0.6.0, <0.7",
 ]
 solvers = [
-  "scikit-umfpack",
   "pyamg>=5.3",
 ]
 gpu = [

@@ -498,6 +498,7 @@ def test_data_path_fallback_is_repo_relative_when_env_missing(monkeypatch) -> No
     """Test default example-data path resolution without environment overrides."""
 
     monkeypatch.delenv(DATA_PATH_ENV, raising=False)
+    monkeypatch.delenv("PIXI_PROJECT_ROOT", raising=False)
 
     resolved = data_path()
 

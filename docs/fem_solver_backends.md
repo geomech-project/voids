@@ -28,7 +28,14 @@ solver helpers with:
 pip install "voids[solvers]"
 ```
 
-FEM still requires a compatible DOLFINx/FEniCSx installation. On native Windows,
+This extra installs PyAMG but not `scikit-umfpack`: building the latter from its
+PyPI source distribution requires a native SWIG/SuiteSparse toolchain. Use the
+binary conda-forge package when selecting the explicit UMFPACK backend.
+
+FEM still requires a compatible DOLFINx/FEniCSx installation. The repository's
+Pixi package definition records DOLFINx and binary UMFPACK as conda runtime
+dependencies, which allows a published conda `voids` artifact to supply them
+transitively. On native Windows,
 the conda-forge DOLFINx stack used by `voids` does not provide the PETSc-backed
 `dolfinx.fem.petsc` path, so FEM `linear_backend="auto"` falls back to the
 serial SciPy/SuperLU sparse direct backend when PETSc is unavailable.

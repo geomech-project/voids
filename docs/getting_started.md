@@ -45,12 +45,23 @@ python -m pip install -e ".[test]"
 # Optional XLB benchmark stack
 python -m pip install -e ".[lbm]"
 
-# All extras
-python -m pip install -e ".[dev,viz,test,lbm,docs]"
+# Portable Python solver helpers and Gmsh bindings
+python -m pip install -e ".[solvers,fem]"
+
+# Common development and scientific extras
+python -m pip install -e ".[dev,viz,test,lbm,solvers,fem]"
 ```
 
-There is no `fem` PyPI extra at the moment. Plain pip users must install a
-compatible FEniCSx/DOLFINx stack separately before using `voids.fem`.
+The `solvers` PyPI extra installs PyAMG but intentionally does not source-build
+SuiteSparse/UMFPACK. The `fem` PyPI extra installs Gmsh bindings, but PyPI does
+not distribute DOLFINx. Plain pip users must therefore provide a compatible
+FEniCSx/DOLFINx stack separately before using `voids.fem`.
+
+For Pixi/conda distribution, the repository includes a package definition whose
+runtime metadata carries DOLFINx, Gmsh, PyAMG, and binary UMFPACK transitively.
+This is the appropriate artifact for a consuming Pixi project that should
+declare only `voids`; it must be built and published to a conda channel before
+external projects can resolve it from that channel.
 
 Repository development, notebook variables, and documentation build commands are
 covered in [Development](development.md).
